@@ -11,6 +11,7 @@ export const MiniAudioPlayer: React.FC<MiniAudioPlayerProps> = ({ base64Data }) 
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1.0);
   const [audioUrl, setAudioUrl] = useState<string>('');
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -29,6 +30,7 @@ export const MiniAudioPlayer: React.FC<MiniAudioPlayerProps> = ({ base64Data }) 
         // Force reload the audio element
         if (audioRef.current) {
           audioRef.current.load();
+          audioRef.current.playbackRate = playbackRate;
         }
 
         return () => URL.revokeObjectURL(url);
@@ -37,6 +39,12 @@ export const MiniAudioPlayer: React.FC<MiniAudioPlayerProps> = ({ base64Data }) 
       }
     }
   }, [base64Data]);
+
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.playbackRate = playbackRate;
+    }
+  }, [playbackRate]);
 
   const togglePlay = () => {
     if (audioRef.current) {
@@ -72,7 +80,7 @@ export const MiniAudioPlayer: React.FC<MiniAudioPlayerProps> = ({ base64Data }) 
   };
 
   return (
-    <div className="flex items-center gap-4 bg-slate-50 dark:bg-white/5 rounded-2xl px-5 py-3 border border-slate-200 dark:border-white/5 group transition-all hover:bg-slate-100 dark:hover:bg-white/10 transition-colors duration-300">
+    <div className="flex items-center gap-4 bg-slate-50 dark:bg-slate-900 rounded-2xl px-5 py-3 border border-slate-200 dark:border-slate-800 group transition-all hover:bg-slate-100 dark:hover:bg-slate-800/80 transition-colors duration-300">
       <button
         onClick={togglePlay}
         className="w-10 h-10 bg-brand-purple text-white rounded-full flex items-center justify-center hover:scale-105 transition-transform shadow-lg shadow-brand-purple/20"
@@ -100,6 +108,18 @@ export const MiniAudioPlayer: React.FC<MiniAudioPlayerProps> = ({ base64Data }) 
           <span>{formatTime(currentTime)}</span>
           <span>{formatTime(duration)}</span>
         </div>
+      </div>
+
+      <div className="flex items-center gap-1 bg-slate-200/50 dark:bg-slate-700/50 p-0.5 rounded-lg border border-slate-300/50 dark:border-slate-600/50 shrink-0">
+        {[0.5, 1.0, 1.5, 2.0].map((rate) => (
+          <button
+            key={rate}
+            onClick={() => setPlaybackRate(rate)}
+            className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-all ${playbackRate === rate ? 'bg-brand-purple text-white shadow-sm' : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'}`}
+          >
+            {rate}x
+          </button>
+        ))}
       </div>
 
       <button

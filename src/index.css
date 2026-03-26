@@ -1,6 +1,8 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+Myanmar:wght@400;500;700&display=swap');
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --font-sans: "Inter", "Noto Sans Myanmar", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
@@ -12,7 +14,7 @@
 
 @layer base {
   body {
-    @apply font-sans antialiased bg-[#F9FAFB] text-slate-900 transition-colors duration-300 overflow-x-hidden;
+    @apply bg-white text-slate-900 transition-colors duration-300 overflow-x-hidden;
   }
   
   .dark body {

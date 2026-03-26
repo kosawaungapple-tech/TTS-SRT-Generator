@@ -4,9 +4,10 @@ import { Trash2, Clipboard } from 'lucide-react';
 interface ContentInputProps {
   text: string;
   setText: (text: string) => void;
+  isDarkMode: boolean;
 }
 
-export const ContentInput: React.FC<ContentInputProps> = ({ text, setText }) => {
+export const ContentInput: React.FC<ContentInputProps> = ({ text, setText, isDarkMode }) => {
   const handlePaste = async () => {
     try {
       const clipboardText = await navigator.clipboard.readText();
@@ -17,7 +18,7 @@ export const ContentInput: React.FC<ContentInputProps> = ({ text, setText }) => 
   };
 
   return (
-    <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xl transition-colors duration-300">
+    <div className="bg-slate-50 border border-slate-200 dark:bg-slate-900 dark:border-slate-800 rounded-2xl p-6 shadow-xl transition-colors duration-300">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold flex items-center gap-2 text-slate-900 dark:text-white">
           Content Input
@@ -45,7 +46,11 @@ export const ContentInput: React.FC<ContentInputProps> = ({ text, setText }) => 
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder="စာသားများကို ဤနေရာတွင် ရိုက်ထည့်ပါ... (Enter text here...)"
-        className="w-full h-64 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 resize-none custom-scrollbar transition-colors duration-300"
+        style={{ 
+          backgroundColor: isDarkMode ? '#020617' : '#ffffff', 
+          color: isDarkMode ? '#f1f5f9' : '#0f172a' 
+        }}
+        className="w-full h-64 bg-white border border-slate-200 dark:bg-slate-950 dark:border-slate-800 rounded-xl p-4 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 resize-none custom-scrollbar transition-colors duration-300"
       />
 
       <div className="mt-3 flex justify-end">

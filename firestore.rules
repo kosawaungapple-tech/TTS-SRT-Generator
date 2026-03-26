@@ -62,19 +62,24 @@ service cloud.firestore {
     }
 
     function getAccessCode() {
-      return get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode;
+      return exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) 
+        ? get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode 
+        : null;
     }
 
     function isAdmin() {
+      let accessCode = getAccessCode();
       return isAuthenticated() && (
-        (exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/authorized_users/$(getAccessCode())).data.role == 'admin') ||
+        (accessCode != null && 
+         exists(/databases/$(database)/documents/authorized_users/$(accessCode)) &&
+         get(/databases/$(database)/documents/authorized_users/$(accessCode)).data.role == 'admin') ||
         (request.auth.token.email == "hankozinsa@gmail.com" && request.auth.token.email_verified == true)
       );
     }
 
     function isDocOwner() {
-      return isAuthenticated() && resource.data.userId == getAccessCode();
+      let accessCode = getAccessCode();
+      return isAuthenticated() && accessCode != null && resource.data.userId == accessCode;
     }
 
     function isValidAuthorizedUser(data) {

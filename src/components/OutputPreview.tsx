@@ -5,13 +5,14 @@ import { AudioResult } from '../types';
 interface OutputPreviewProps {
   result: AudioResult | null;
   isLoading: boolean;
+  globalVolume?: number;
 }
 
-export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading }) => {
+export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading, globalVolume }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [volume, setVolume] = useState(80);
+  const [playerVolume, setPlayerVolume] = useState(globalVolume !== undefined ? globalVolume / 100 : 0.8);
   const [isMuted, setIsMuted] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -42,10 +43,16 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading 
   }, [result]);
 
   useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = isMuted ? 0 : volume / 100;
+    if (globalVolume !== undefined) {
+      setPlayerVolume(globalVolume / 100);
     }
-  }, [volume, isMuted]);
+  }, [globalVolume]);
+
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.volume = isMuted ? 0 : playerVolume;
+    }
+  }, [playerVolume, isMuted]);
 
   const initAudioContext = () => {
     if (!audioContextRef.current && audioRef.current) {
@@ -154,7 +161,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading 
 
   if (isLoading) {
     return (
-      <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-12 shadow-xl flex flex-col items-center justify-center text-center transition-colors duration-300">
+      <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-12 shadow-xl flex flex-col items-center justify-center text-center transition-colors duration-300">
         <div className="w-16 h-16 border-4 border-brand-purple/20 border-t-brand-purple rounded-full animate-spin mb-4" />
         <p className="text-slate-500 dark:text-slate-400">Generating your voiceover...</p>
       </div>
@@ -163,7 +170,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading 
 
   if (!result) {
     return (
-      <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-12 shadow-xl flex flex-col items-center justify-center text-center transition-colors duration-300">
+      <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-12 shadow-xl flex flex-col items-center justify-center text-center transition-colors duration-300">
         <div className="w-20 h-20 bg-slate-50 dark:bg-slate-900 rounded-full flex items-center justify-center text-slate-400 dark:text-slate-600 mb-6 border border-slate-200 dark:border-slate-800">
           <Headphones size={40} />
         </div>
@@ -176,7 +183,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading 
   }
 
   return (
-    <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-[32px] p-8 sm:p-10 shadow-xl space-y-8 transition-colors duration-300">
+    <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-[32px] p-8 sm:p-10 shadow-xl space-y-8 transition-colors duration-300">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <h2 className="text-2xl font-bold flex items-center gap-3 text-slate-900 dark:text-white">
           <Music className="text-brand-purple" size={24} />
@@ -248,29 +255,32 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading 
             </div>
 
             {/* Volume Control */}
-            <div className="flex items-center justify-end gap-3 w-full shrink-0">
-              <button 
-                onClick={() => setIsMuted(!isMuted)}
-                className="text-slate-400 hover:text-brand-purple transition-colors p-1"
-              >
-                {isMuted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
-              </button>
-              
-              <div className="w-24 flex items-center">
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  value={isMuted ? 0 : volume}
-                  onChange={(e) => {
-                    setVolume(parseInt(e.target.value));
-                    if (isMuted) setIsMuted(false);
-                  }}
-                  className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full appearance-none cursor-pointer accent-brand-purple"
-                  style={{
-                    background: `linear-gradient(to right, #8B5CF6 0%, #8B5CF6 ${isMuted ? 0 : volume}%, transparent ${isMuted ? 0 : volume}%, transparent 100%)`
-                  }}
-                />
+            <div className="flex items-center justify-center w-full shrink-0">
+              <div className="flex items-center gap-4 bg-slate-100/50 dark:bg-slate-800/50 px-6 py-3 rounded-2xl border border-slate-200/50 dark:border-slate-700/50">
+                <button 
+                  onClick={() => setIsMuted(!isMuted)}
+                  className="text-slate-400 hover:text-brand-purple transition-colors p-1"
+                >
+                  {isMuted || playerVolume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}
+                </button>
+                
+                <div className="w-32 sm:w-48 flex items-center">
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={isMuted ? 0 : playerVolume}
+                    onChange={(e) => {
+                      setPlayerVolume(parseFloat(e.target.value));
+                      if (isMuted) setIsMuted(false);
+                    }}
+                    className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full appearance-none cursor-pointer accent-brand-purple"
+                    style={{
+                      background: `linear-gradient(to right, #8B5CF6 0%, #8B5CF6 ${(isMuted ? 0 : playerVolume) * 100}%, transparent ${(isMuted ? 0 : playerVolume) * 100}%, transparent 100%)`
+                    }}
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -284,7 +294,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading 
             <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
               <FileText size={14} /> Subtitle Preview (SRT)
             </h3>
-            <div className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 h-40 overflow-y-auto custom-scrollbar shadow-inner">
+            <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 h-40 overflow-y-auto custom-scrollbar shadow-inner">
               <pre className="text-[11px] sm:text-xs font-mono text-slate-600 dark:text-slate-400 whitespace-pre-wrap leading-relaxed">
                 {result.srtContent}
               </pre>
@@ -294,7 +304,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading 
           {/* Download Buttons */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <button
-              onClick={() => fetch(result.audioUrl).then(r => r.blob()).then(b => downloadFile(b, 'vlogs-by-saw-audio.wav'))}
+              onClick={() => fetch(result.audioUrl).then(r => r.blob()).then(b => downloadFile(b, 'vlogs-by-saw-audio.mp3'))}
               className="flex items-center justify-center gap-3 py-4 bg-brand-purple/10 text-brand-purple rounded-2xl font-bold hover:bg-brand-purple hover:text-white transition-all border border-brand-purple/20 group"
             >
               <Music size={20} className="group-hover:scale-110 transition-transform" />

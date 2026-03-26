@@ -488,7 +488,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
         <motion.div 
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="w-full max-w-md bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-3xl p-8 shadow-2xl transition-colors duration-300"
+          className="w-full max-w-md bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-8 shadow-2xl transition-colors duration-300"
         >
           <div className="flex flex-col items-center mb-8">
             <div className="w-16 h-16 bg-brand-purple/20 text-brand-purple rounded-2xl flex items-center justify-center mb-4 border border-brand-purple/20">
@@ -521,7 +521,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
     <>
       <div className="max-w-6xl mx-auto space-y-8 p-4">
       {/* Header */}
-      <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-8 shadow-2xl transition-colors duration-300">
+      <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-8 shadow-2xl transition-colors duration-300">
         <div className="flex flex-col sm:flex-row items-center justify-between gap-6 text-center sm:text-left">
           <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
             <div className="w-14 h-14 sm:w-16 sm:h-16 bg-brand-purple/20 text-brand-purple rounded-2xl flex items-center justify-center shadow-inner border border-brand-purple/20 shrink-0">
@@ -567,7 +567,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         {/* Create Form */}
         <div className="lg:col-span-4">
-          <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl sticky top-8 transition-colors duration-300">
+          <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl sticky top-8 transition-colors duration-300">
             <div className="flex items-center gap-3 mb-6">
               <UserPlus className="text-brand-purple" size={20} />
               <h3 className="text-lg font-bold text-slate-900 dark:text-white">Create New User ID</h3>
@@ -583,7 +583,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
                     value={newId}
                     onChange={(e) => setNewId(e.target.value)}
                     placeholder="e.g. USER-12345"
-                    className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
                     required
                   />
                 </div>
@@ -598,7 +598,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
                     value={newNote}
                     onChange={(e) => setNewNote(e.target.value)}
                     placeholder="e.g. Saw Yan Aung"
-                    className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
                   />
                 </div>
               </div>
@@ -637,7 +637,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
 
         {/* List Table */}
         <div className="lg:col-span-8">
-          <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl transition-colors duration-300">
+          <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl transition-colors duration-300">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
               <div className="flex items-center gap-3">
                 <Key className="text-brand-purple" size={20} />
@@ -654,7 +654,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
                   placeholder="Search IDs or notes..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg pl-10 pr-4 py-2.5 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg pl-10 pr-4 py-2.5 text-xs text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
                 />
               </div>
             </div>
@@ -749,7 +749,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
           </div>
 
           {/* Registered Users Section */}
-          <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-2xl mt-8 transition-colors duration-300">
+          <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-2xl mt-8 transition-colors duration-300">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
               <div className="flex items-center gap-3">
                 <User className="text-brand-purple" size={20} />

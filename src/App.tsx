@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Wand2, Key, Settings, User, LogIn, LogOut, ShieldCheck, ShieldAlert, Shield, CheckCircle2, XCircle, History, Wrench, Plus, Trash2, Download, Play, Music, FileText, Eye, EyeOff, Cloud, RefreshCw, Zap, X, ExternalLink, Calendar, Clock, Mail, Wifi, Save, Lock, Info, ArrowRight } from 'lucide-react';
+import { AlertCircle, Wand2, Key, Settings, User, LogIn, LogOut, ShieldCheck, ShieldAlert, Shield, CheckCircle2, XCircle, History, Wrench, Plus, Trash2, Download, Play, Music, FileText, Eye, EyeOff, Cloud, RefreshCw, Zap, X, ExternalLink, Calendar, Clock, Mail, Wifi, Save, Lock, Info, ArrowRight, ChevronRight } from 'lucide-react';
 import { Header } from './components/Header';
+import { ApiKeyModal } from './components/ApiKeyModal';
 import { ContentInput } from './components/ContentInput';
 import { PronunciationRules } from './components/PronunciationRules';
 import { VoiceConfig } from './components/VoiceConfig';
@@ -36,7 +37,7 @@ export default function App() {
   // The app will function in bypass mode using localStorage for the API Key.
   
   const [newApiKey, setNewApiKey] = useState('');
-  const [localApiKey, setLocalApiKey] = useState<string | null>(localStorage.getItem('vbs_gemini_api_key'));
+  const [localApiKey, setLocalApiKey] = useState<string | null>(localStorage.getItem('VLOGS_BY_SAW_API_KEY'));
   const [isUpdatingKey, setIsUpdatingKey] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -64,6 +65,7 @@ export default function App() {
   const [isAccessGranted, setIsAccessGranted] = useState(true); // Default to true for preview environment
   const [isVerifyingCode, setIsVerifyingCode] = useState(false);
   const [accessCode, setAccessCode] = useState<string | null>('preview-user');
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
 
   // Handle Anonymous Auth
   useEffect(() => {
@@ -99,6 +101,24 @@ export default function App() {
     document.documentElement.classList.toggle('dark', isDarkMode);
   }, [isDarkMode]);
 
+  // Ensure session document exists for security rules
+  useEffect(() => {
+    if (isAccessGranted && isAuthReady && auth.currentUser && accessCode) {
+      const syncSession = async () => {
+        try {
+          await setDoc(doc(db, 'sessions', auth.currentUser!.uid), {
+            accessCode: accessCode,
+            createdAt: new Date().toISOString()
+          });
+          console.log('Session synced for access code:', accessCode);
+        } catch (e) {
+          console.error('Failed to sync session:', e);
+        }
+      };
+      syncSession();
+    }
+  }, [isAccessGranted, isAuthReady, accessCode]);
+
   // Check for existing session
   useEffect(() => {
     const granted = localStorage.getItem('vbs_access_granted') === 'true';
@@ -113,25 +133,16 @@ export default function App() {
           const data = snapshot.data() as AuthorizedUser;
           setProfile(data);
           
-          // Recreate session document if auth is ready
-          if (auth.currentUser) {
-            try {
-              await setDoc(doc(db, 'sessions', auth.currentUser.uid), {
-                accessCode: code,
-                createdAt: new Date().toISOString()
-              });
-            } catch (e) {
-              console.error('Failed to recreate session:', e);
-            }
-          }
-          
           // Sync API Key from Firestore to LocalStorage if missing locally
-          if (data.api_key_stored && !localStorage.getItem('vbs_gemini_api_key')) {
-            localStorage.setItem('vbs_gemini_api_key', data.api_key_stored);
+          if (data.api_key_stored && !localStorage.getItem('VLOGS_BY_SAW_API_KEY')) {
+            localStorage.setItem('VLOGS_BY_SAW_API_KEY', data.api_key_stored);
             setLocalApiKey(data.api_key_stored);
           }
         } else {
-          handleLogout();
+          // If the code is no longer in authorized_users, log out
+          if (code !== 'preview-user') {
+            handleLogout();
+          }
         }
       }).catch(err => {
         console.error('Failed to restore profile:', err);
@@ -269,19 +280,6 @@ export default function App() {
         return;
       }
 
-      // Create a session document to link the anonymous UID to the access code for secure Firestore rules
-      if (auth.currentUser) {
-        try {
-          await setDoc(doc(db, 'sessions', auth.currentUser.uid), {
-            accessCode: code,
-            createdAt: new Date().toISOString()
-          });
-        } catch (sessionErr) {
-          console.error('Failed to create session document:', sessionErr);
-          // Continue anyway, but rules might block some reads
-        }
-      }
-
       // Success
       setIsAccessGranted(true);
       setAccessCode(code);
@@ -289,7 +287,7 @@ export default function App() {
       
       // Sync API Key from Firestore to LocalStorage if present
       if (codeData.api_key_stored) {
-        localStorage.setItem('vbs_gemini_api_key', codeData.api_key_stored);
+        localStorage.setItem('VLOGS_BY_SAW_API_KEY', codeData.api_key_stored);
         setLocalApiKey(codeData.api_key_stored);
       }
       
@@ -317,78 +315,9 @@ export default function App() {
     setAccessCode(null);
     localStorage.removeItem('vbs_access_granted');
     localStorage.removeItem('vbs_access_code');
-    localStorage.removeItem('vbs_gemini_api_key');
+    // We do NOT remove the API Key on logout as per safety requirements
     setLocalApiKey(null);
     setActiveTab('generate');
-  };
-
-  const handleUpdateApiKey = async () => {
-    if (!accessCode || !newApiKey.trim()) return;
-    const keyToSave = newApiKey.trim();
-    setIsUpdatingKey(true);
-    setConnectionStatus('idle');
-    try {
-      // 1. Save to LocalStorage immediately so the app can function
-      localStorage.setItem('vbs_gemini_api_key', keyToSave);
-      setLocalApiKey(keyToSave);
-      
-      // 2. Try to sync with Firestore
-      try {
-        await setDoc(doc(db, 'authorized_users', accessCode), {
-          api_key_stored: keyToSave
-        }, { merge: true });
-      } catch (firestoreErr) {
-        console.warn('Could not sync API key to Firestore (Silent Fallback):', firestoreErr);
-        // We don't throw here so the user can still use the app with the local key
-      }
-      
-      setNewApiKey('');
-      setToast({ message: 'Key Saved! 🎉', type: 'success' });
-      setTimeout(() => setToast(null), 3000);
-      
-      const ttsService = new GeminiTTSService(keyToSave);
-      const isValid = await ttsService.verifyConnection();
-      setConnectionStatus(isValid ? 'success' : 'error');
-    } catch (err: any) {
-      console.error('Save API Key Error:', err);
-      setToast({ message: 'Failed to update API Key', type: 'error' });
-      setTimeout(() => setToast(null), 3000);
-    } finally {
-      setIsUpdatingKey(false);
-    }
-  };
-
-  const handleRemoveApiKey = async () => {
-    if (!accessCode) return;
-    setIsUpdatingKey(true);
-    setConnectionStatus('idle');
-    try {
-      // 1. Clear local storage immediately
-      localStorage.removeItem('vbs_gemini_api_key');
-      setLocalApiKey(null);
-
-      // 2. Try to update Firestore
-      try {
-        await setDoc(doc(db, 'authorized_users', accessCode), {
-          api_key_stored: ""
-        }, { merge: true });
-      } catch (firestoreErr) {
-        console.warn('Could not remove API key from Firestore (Silent Fallback):', firestoreErr);
-      }
-      
-      // 3. Clear input field
-      setNewApiKey('');
-      
-      // 4. Show notification
-      setToast({ message: 'API Key Removed', type: 'success' });
-      setTimeout(() => setToast(null), 3000);
-    } catch (err: any) {
-      console.error('Remove API Key Error:', err);
-      setToast({ message: 'Failed to remove API Key', type: 'error' });
-      setTimeout(() => setToast(null), 3000);
-    } finally {
-      setIsUpdatingKey(false);
-    }
   };
 
   const filteredHistory = useMemo(() => {
@@ -400,18 +329,13 @@ export default function App() {
     );
   }, [history, historySearch]);
 
-  const handleVerifyConnection = async () => {
-    const effectiveKey = getEffectiveApiKey();
-    if (!effectiveKey) return;
-    
-    setConnectionStatus('testing');
-    try {
-      const ttsService = new GeminiTTSService(effectiveKey);
-      const isValid = await ttsService.verifyConnection();
-      setConnectionStatus(isValid ? 'success' : 'error');
-    } catch (err) {
-      setConnectionStatus('error');
-    }
+  const handleClearApiKey = () => {
+    localStorage.removeItem('VLOGS_BY_SAW_API_KEY');
+    setLocalApiKey(null);
+    setToast({ message: 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ Website ကို ပြန်ဖွင့်ပါမည်။ (Settings saved. Reloading page...)', type: 'success' });
+    setTimeout(() => {
+      window.location.reload();
+    }, 1500);
   };
 
   const maskApiKey = (key: string | undefined) => {
@@ -422,28 +346,59 @@ export default function App() {
 
   const getEffectiveApiKey = useCallback(() => {
     // Priority 0: Local Storage (for immediate sync and persistence as requested)
-    if (localApiKey) return localApiKey;
+    const storedKey = localStorage.getItem('VLOGS_BY_SAW_API_KEY');
+    if (storedKey) {
+      console.log("App: Using API Key from LocalStorage (VLOGS_BY_SAW_API_KEY)");
+      return storedKey.trim();
+    }
 
-    if (!profile) return null;
-    
-    // 1. Personal Key Priority
-    if (profile.api_key_stored) {
-      return profile.api_key_stored;
+    if (profile?.api_key_stored) {
+      console.log("App: Using API Key from Firestore Profile");
+      return profile.api_key_stored.trim();
     }
     
     // 2. Fallback to Global System Key (if enabled)
     if (globalSettings.allow_global_key && globalSettings.global_system_key) {
-      return globalSettings.global_system_key;
+      console.log("App: Using Global System API Key");
+      return globalSettings.global_system_key.trim();
     }
     
+    // 3. Ultimate Fallback to Environment Variable
+    if (typeof process !== 'undefined' && process.env.GEMINI_API_KEY) {
+      console.log("App: Using Environment Variable API Key");
+      return process.env.GEMINI_API_KEY.trim();
+    }
+    
+    console.warn("App: No effective API Key found");
     return null;
-  }, [profile, globalSettings, localApiKey]);
+  }, [profile, globalSettings]);
 
   const handleUpdateGlobalSettings = async (updates: Partial<GlobalSettings>) => {
     try {
       await updateDoc(doc(db, 'settings', 'global'), updates);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, 'settings/global');
+    }
+  };
+
+  const handleSaveApiKeyFromModal = async (key: string) => {
+    const trimmedKey = key.trim();
+    setIsUpdatingKey(true);
+    try {
+      // 1. Save to Local Storage ONLY as per safety requirements
+      localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
+      setLocalApiKey(trimmedKey);
+      
+      setToast({ message: 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ Website ကို ပြန်ဖွင့်ပါမည်။ (Settings saved. Reloading page...)', type: 'success' });
+      setTimeout(() => {
+        window.location.reload();
+      }, 1500);
+    } catch (err: any) {
+      console.error('Save API Key Error:', err);
+      setToast({ message: 'Failed to save API Key', type: 'error' });
+      setTimeout(() => setToast(null), 3000);
+    } finally {
+      setIsUpdatingKey(false);
     }
   };
 
@@ -489,14 +444,24 @@ export default function App() {
       return;
     }
 
-    const effectiveKey = getEffectiveApiKey();
-    // We don't block if key is missing anymore, the service will fallback to mock
+    // Direct Fetching from LocalStorage as requested - Strict Validation
+    const apiKeyFromStorage = localStorage.getItem('VLOGS_BY_SAW_API_KEY')?.trim();
+    
+    if (!apiKeyFromStorage) {
+      console.warn("App: Generation blocked - No API Key found in LocalStorage. Opening settings modal.");
+      window.alert('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)');
+      setIsApiKeyModalOpen(true);
+      setError('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)');
+      return;
+    }
+    
+    const effectiveKey = apiKeyFromStorage;
     
     setIsLoading(true);
     setError(null);
     setResult(null);
 
-    console.log("App: Starting voiceover generation process...");
+    console.log("App: Starting voiceover generation process with key...");
 
     try {
       const isMock = systemConfig?.mock_mode || false;
@@ -618,11 +583,13 @@ export default function App() {
     for (let i = 0; i < binaryString.length; i++) {
       bytes[i] = binaryString.charCodeAt(i);
     }
-    const wavBlob = pcmToWav(bytes, 24000);
-    const url = URL.createObjectURL(wavBlob);
+    
+    // If it's MP3 data, we don't need pcmToWav
+    const audioBlob = new Blob([bytes], { type: 'audio/mp3' });
+    const url = URL.createObjectURL(audioBlob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = filename.replace('.mp3', '.wav');
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -696,7 +663,7 @@ export default function App() {
       <Header 
         isDarkMode={isDarkMode} 
         toggleTheme={() => setIsDarkMode(!isDarkMode)} 
-        onOpenTools={() => setActiveTab('tools')}
+        onOpenTools={() => setIsApiKeyModalOpen(true)}
         isAccessGranted={isAccessGranted}
         onLogout={handleLogout}
       />
@@ -729,7 +696,7 @@ export default function App() {
                     value={accessCodeInput}
                     onChange={(e) => setAccessCodeInput(e.target.value)}
                     placeholder="Enter Access Code..."
-                    className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
                   />
                 </div>
                 
@@ -759,22 +726,22 @@ export default function App() {
         ) : (
           <div className="space-y-8">
             {/* Tab Navigation */}
-            <div className="flex items-center gap-2 sm:gap-4 bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 p-1 rounded-2xl w-fit mx-auto shadow-sm">
+            <div className="flex items-center gap-2 sm:gap-4 bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-1 rounded-2xl w-fit mx-auto shadow-sm">
               <button
                 onClick={() => setActiveTab('generate')}
-                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'generate' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-300'}`}
+                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'generate' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
               >
                 <Wand2 size={18} /> Generate
               </button>
               <button
                 onClick={() => setActiveTab('history')}
-                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'history' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-300'}`}
+                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'history' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
               >
                 <History size={18} /> History
               </button>
               <button
                 onClick={() => setActiveTab('tools')}
-                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 relative ${activeTab === 'tools' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-300'}`}
+                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 relative ${activeTab === 'tools' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
               >
                 <Wrench size={18} /> Tools
               </button>
@@ -791,7 +758,7 @@ export default function App() {
                 >
                     {/* Left Column - Main Flow */}
                   <div className="lg:col-span-7 space-y-8">
-                    <ContentInput text={text} setText={setText} />
+                    <ContentInput text={text} setText={setText} isDarkMode={isDarkMode} />
                     
                     {/* Default Pronunciation Rules Table */}
                     <PronunciationRules
@@ -800,11 +767,15 @@ export default function App() {
                       customRules={customRules}
                       setCustomRules={setCustomRules}
                       isAdmin={profile?.role === 'admin'}
-                      onOpenTools={() => setActiveTab('tools')}
+                      onOpenTools={() => setIsApiKeyModalOpen(true)}
                       showCustomRules={false}
                     />
 
-                    <OutputPreview result={result} isLoading={isLoading} />
+                    <OutputPreview 
+                      result={result} 
+                      isLoading={isLoading} 
+                      globalVolume={config.volume}
+                    />
 
                     {error && (
                       <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-start gap-3 text-red-500">
@@ -870,7 +841,7 @@ export default function App() {
                   exit={{ opacity: 0, y: -20 }}
                   className="max-w-5xl mx-auto space-y-6"
                 >
-                  <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 rounded-2xl p-8 shadow-2xl border border-slate-200 dark:border-slate-800 transition-colors duration-300">
+                  <div className="bg-white/50 backdrop-blur dark:bg-slate-900 rounded-2xl p-8 shadow-2xl border border-slate-200 dark:border-slate-800 transition-colors duration-300">
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
                       <div>
                         <h2 className="text-2xl font-bold flex items-center gap-3 text-slate-900 dark:text-white">
@@ -885,7 +856,7 @@ export default function App() {
                           placeholder="Search history by text..."
                           value={historySearch}
                           onChange={(e) => setHistorySearch(e.target.value)}
-                          className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl px-6 py-3 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all pr-12 placeholder:text-slate-400"
+                          className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl px-6 py-3 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all pr-12 placeholder:text-slate-400"
                         />
                         <Wand2 size={18} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-600" />
                       </div>
@@ -897,7 +868,7 @@ export default function App() {
                         <p className="text-slate-500 dark:text-slate-400 font-medium">Loading history...</p>
                       </div>
                     ) : filteredHistory.length === 0 ? (
-                      <div className="text-center py-24 bg-slate-50 dark:bg-black/20 rounded-3xl border border-dashed border-slate-200 dark:border-white/5">
+                      <div className="text-center py-24 bg-slate-50 dark:bg-slate-950 rounded-3xl border border-dashed border-slate-200 dark:border-slate-800">
                         <div className="w-16 h-16 bg-white dark:bg-white/5 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-400 dark:text-slate-600">
                           <History size={32} />
                         </div>
@@ -907,7 +878,7 @@ export default function App() {
                     ) : (
                       <div className="grid grid-cols-1 gap-4">
                         {filteredHistory.map((item) => (
-                          <div key={item.id} className="group bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 transition-all hover:bg-slate-100 dark:hover:bg-slate-800 hover:border-brand-purple/30">
+                          <div key={item.id} className="group bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 transition-all hover:bg-slate-100 dark:hover:bg-slate-900 hover:border-brand-purple/30">
                             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
                               <div className="flex-1 min-w-0 space-y-3">
                                 <div className="flex items-center gap-3">
@@ -997,76 +968,26 @@ export default function App() {
                   </div>
 
                   {/* Gemini API Key Section */}
-                  <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-8 shadow-2xl transition-colors duration-300">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                  <div 
+                    onClick={() => setIsApiKeyModalOpen(true)}
+                    className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-8 shadow-2xl transition-colors duration-300 cursor-pointer hover:border-brand-purple/30 group"
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div className="flex items-center gap-3">
-                        <Key size={20} className="text-brand-purple" />
-                        <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">Gemini API Key</h3>
-                      </div>
-                      <div className={`flex items-center gap-2 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest ${localApiKey ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                        <div className={`w-2.5 h-2.5 rounded-full ${localApiKey ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
-                        {localApiKey ? 'CONNECTED' : 'DISCONNECTED'}
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      <div className="space-y-2">
-                        <label htmlFor="gemini-api-key" className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest px-1">
-                          Personal API Key Configuration
-                        </label>
-                        <div className="relative group">
-                          <input
-                            id="gemini-api-key"
-                            type={showApiKey ? "text" : "password"}
-                            value={localApiKey || newApiKey}
-                            onChange={(e) => !localApiKey && setNewApiKey(e.target.value)}
-                            readOnly={!!localApiKey}
-                            placeholder={localApiKey ? "••••••••••••••••" : "Enter your Gemini API Key..."}
-                            className={`w-full border rounded-2xl px-4 sm:px-6 py-3.5 sm:py-4 text-base sm:text-lg font-mono transition-all pr-12 sm:pr-14 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 ${
-                              localApiKey 
-                                ? 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 cursor-not-allowed' 
-                                : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white placeholder:text-slate-400'
-                            }`}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowApiKey(!showApiKey)}
-                            aria-label={showApiKey ? "Hide API Key" : "Show API Key"}
-                            title={showApiKey ? "Hide API Key" : "Show API Key"}
-                            className="absolute right-3 sm:right-4 top-1/2 -translate-y-1/2 p-2.5 text-slate-400 hover:text-brand-purple dark:hover:text-brand-purple transition-all focus:outline-none focus:ring-2 focus:ring-brand-purple/50 rounded-xl bg-white/10 backdrop-blur-sm border border-transparent hover:border-brand-purple/20"
-                          >
-                            {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
-                          </button>
+                        <div className="w-10 h-10 bg-brand-purple/10 rounded-xl flex items-center justify-center text-brand-purple group-hover:scale-110 transition-transform">
+                          <Key size={20} />
+                        </div>
+                        <div>
+                          <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">Gemini API Key</h3>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">Configure your personal Google AI Studio key</p>
                         </div>
                       </div>
-
-                      <div className="flex flex-col sm:flex-row gap-3">
-                        {!localApiKey ? (
-                          <button
-                            onClick={handleUpdateApiKey}
-                            disabled={isUpdatingKey || !newApiKey.trim()}
-                            className="w-full sm:flex-1 py-3.5 sm:py-4 bg-brand-purple text-white rounded-2xl font-bold text-sm hover:bg-brand-purple/90 transition-all shadow-xl shadow-brand-purple/20 flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer active:scale-95"
-                          >
-                            {isUpdatingKey ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
-                            Save API Key
-                          </button>
-                        ) : (
-                          <div className="hidden sm:flex sm:flex-1" />
-                        )}
-                        
-                        {localApiKey && (
-                          <button
-                            onClick={() => {
-                              if (confirm('Are you sure you want to remove your API key?')) {
-                                handleRemoveApiKey();
-                              }
-                            }}
-                            disabled={isUpdatingKey}
-                            className="w-full sm:w-auto px-6 py-3.5 sm:py-4 bg-slate-100 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 rounded-2xl flex items-center justify-center hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/20 transition-all disabled:opacity-50"
-                          >
-                            {isUpdatingKey ? <RefreshCw size={20} className="animate-spin" /> : <Trash2 size={20} />}
-                          </button>
-                        )}
+                      <div className="flex items-center gap-3">
+                        <div className={`flex items-center gap-2 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest ${localApiKey ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                          <div className={`w-2.5 h-2.5 rounded-full ${localApiKey ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+                          {localApiKey ? 'CONNECTED' : 'No API Key found'}
+                        </div>
+                        <ChevronRight size={18} className="text-slate-400 group-hover:translate-x-1 transition-transform" />
                       </div>
                     </div>
                   </div>
@@ -1079,6 +1000,13 @@ export default function App() {
 
       {/* Settings Integrated into Tools Tab */}
       {/* Toast Notification */}
+      <ApiKeyModal 
+        isOpen={isApiKeyModalOpen}
+        onClose={() => setIsApiKeyModalOpen(false)}
+        onSave={handleSaveApiKeyFromModal}
+        onClear={handleClearApiKey}
+        initialKey={localApiKey || ''}
+      />
       <AnimatePresence>
         {toast && (
           <motion.div

@@ -22,7 +22,7 @@ export const PronunciationRules: React.FC<PronunciationRulesProps> = ({
   showCustomRules = true,
 }) => {
   return (
-    <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-3xl p-8 shadow-2xl transition-colors duration-300">
+    <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-8 shadow-2xl transition-colors duration-300">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <h2 className="text-xl font-bold text-slate-900 dark:text-white">Default Pronunciation Rules</h2>
@@ -50,7 +50,7 @@ export const PronunciationRules: React.FC<PronunciationRulesProps> = ({
             {rules.map((rule) => (
               <tr key={rule.id} className="hover:bg-slate-50 dark:hover:bg-white/5 transition-colors group">
                 <td className="px-6 py-4">
-                  <span className="text-sm font-medium text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">{rule.original}</span>
+                  <span className="text-sm font-medium text-slate-700 dark:text-slate-100 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">{rule.original}</span>
                 </td>
                 <td className="px-6 py-4">
                   <span className="text-sm font-bold text-brand-purple">{rule.replacement}</span>
@@ -60,7 +60,7 @@ export const PronunciationRules: React.FC<PronunciationRulesProps> = ({
             {globalRules.map((rule) => (
               <tr key={rule.id} className="hover:bg-slate-50 dark:hover:bg-white/5 transition-colors group bg-brand-purple/5">
                 <td className="px-6 py-4 flex items-center gap-3">
-                  <span className="text-sm font-medium text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">{rule.original}</span>
+                  <span className="text-sm font-medium text-slate-700 dark:text-slate-100 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">{rule.original}</span>
                   <span className="px-1.5 py-0.5 bg-brand-purple/20 text-brand-purple rounded text-[8px] font-bold uppercase">Global</span>
                 </td>
                 <td className="px-6 py-4">
@@ -88,7 +88,7 @@ export const PronunciationRules: React.FC<PronunciationRulesProps> = ({
             value={customRules}
             onChange={(e) => setCustomRules(e.target.value)}
             placeholder="Example: 'Vlogs By Saw' -> 'ဗလော့ ဘိုင် စော'"
-            className="w-full h-32 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 text-sm font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 resize-none custom-scrollbar transition-all"
+            className="w-full h-32 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 text-sm font-mono text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 resize-none custom-scrollbar transition-all"
           />
         </div>
       )}
