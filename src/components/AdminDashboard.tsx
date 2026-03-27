@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { 
-  Shield, 
+  ShieldCheck, 
   UserPlus, 
   Trash2, 
   CheckCircle2, 
@@ -14,7 +14,6 @@ import {
   AlertCircle,
   RefreshCw,
   Lock,
-  LogOut,
   Settings,
   Database,
   Send,
@@ -25,15 +24,14 @@ import {
   Edit3
 } from 'lucide-react';
 import { AuthorizedUser, User as RegisteredUser, SystemConfig, PronunciationRule } from '../types';
-import { db, collection, onSnapshot, query, orderBy, setDoc, doc, deleteDoc, updateDoc, handleFirestoreError, OperationType, getDoc, auth } from '../firebase';
+import { db, collection, onSnapshot, query, orderBy, setDoc, doc, deleteDoc, updateDoc, handleFirestoreError, OperationType, getDoc, auth, googleProvider, signInWithPopup } from '../firebase';
 import { Toast, ToastType } from './Toast';
 
 interface AdminDashboardProps {
   isAuthReady: boolean;
-  onLogout: () => void;
 }
 
-export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onLogout }) => {
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) => {
   const [authorizedUsers, setAuthorizedUsers] = useState<AuthorizedUser[]>([]);
   const [registeredUsers, setRegisteredUsers] = useState<RegisteredUser[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -53,6 +51,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onL
     isVisible: false
   });
   
+  // Admin Auth Protection
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'users' | 'system' | 'rules'>('users');
 
   // System Settings State
@@ -78,8 +79,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onL
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
 
   useEffect(() => {
-    // Authentication is now handled by the parent App component
-    // This component is only rendered if the user is authenticated as admin
+    const unsubscribe = auth.onAuthStateChanged(async (user) => {
+      if (user && !user.isAnonymous) {
+        try {
+          let isAdmin = false;
+          try {
+            const userDoc = await getDoc(doc(db, 'users', user.uid));
+            isAdmin = (user.email === 'hankozinsa@gmail.com' && user.emailVerified) || 
+                      (userDoc.exists() && userDoc.data()?.role === 'admin');
+          } catch (e: any) {
+            if (e.message?.includes('permission') || e.code === 'permission-denied') {
+              isAdmin = false;
+            } else {
+              throw e;
+            }
+          }
+          
+          if (isAdmin) {
+            setIsAuthenticated(true);
+          } else {
+            // Not an admin, sign out
+            await auth.signOut();
+          }
+        } catch (err) {
+          console.error("Error checking admin status:", err);
+        }
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
   const formatDate = (date: any) => {
@@ -94,9 +121,55 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onL
     }
   };
 
+  const handleAdminAuth = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setAuthError(null);
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
+      
+      // Check if user is the default admin or has admin role in Firestore
+      let isAdmin = false;
+      let userDocExists = false;
+      
+      try {
+        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        userDocExists = userDoc.exists();
+        isAdmin = (user.email === 'hankozinsa@gmail.com' && user.emailVerified) || 
+                  (userDocExists && userDoc.data()?.role === 'admin');
+      } catch (e: any) {
+        // If permission denied, they are definitely not an admin
+        if (e.message?.includes('permission') || e.code === 'permission-denied') {
+          isAdmin = false;
+        } else {
+          throw e;
+        }
+      }
+                      
+      if (isAdmin) {
+        setIsAuthenticated(true);
+        // Ensure the admin document exists
+        if (!userDocExists) {
+          await setDoc(doc(db, 'users', user.uid), {
+            uid: user.uid,
+            email: user.email,
+            role: 'admin',
+            createdAt: new Date().toISOString()
+          });
+        }
+      } else {
+        setAuthError("Unauthorized email address. You are not an admin.");
+        await auth.signOut();
+      }
+    } catch (err: any) {
+      console.error("Admin Auth Error:", err);
+      setAuthError(err.message || "Authentication failed.");
+      await auth.signOut();
+    }
+  };
 
   useEffect(() => {
-    if (!isAuthReady) return;
+    if (!isAuthenticated || !isAuthReady) return;
 
     const q = query(collection(db, 'authorized_users'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -112,10 +185,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onL
     });
 
     return () => unsubscribe();
-  }, [isAuthReady]);
+  }, [isAuthenticated, isAuthReady]);
 
   useEffect(() => {
-    if (!isAuthReady) return;
+    if (!isAuthenticated || !isAuthReady) return;
 
     const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -131,10 +204,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onL
     });
 
     return () => unsubscribe();
-  }, [isAuthReady]);
+  }, [isAuthenticated, isAuthReady]);
 
   useEffect(() => {
-    if (!isAuthReady) return;
+    if (!isAuthenticated || !isAuthReady) return;
 
     const unsubscribe = onSnapshot(collection(db, 'globalRules'), (snapshot) => {
       const fetchedRules = snapshot.docs.map(doc => ({
@@ -149,7 +222,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onL
     });
 
     return () => unsubscribe();
-  }, [isAuthReady]);
+  }, [isAuthenticated, isAuthReady]);
 
   const handleCreateRule = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -212,7 +285,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onL
   };
 
   useEffect(() => {
-    if (!isAuthReady) return;
+    if (!isAuthenticated || !isAuthReady) return;
 
     const fetchSystemConfig = async () => {
       setIsSystemLoading(true);
@@ -230,7 +303,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onL
     };
 
     fetchSystemConfig();
-  }, [isAuthReady]);
+  }, [isAuthenticated, isAuthReady]);
 
   const handleSaveSystemConfig = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -409,7 +482,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onL
     (u.note || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  if (!isAuthenticated) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 px-4">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="w-full max-w-md bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-8 shadow-2xl transition-colors duration-300"
+        >
+          <div className="flex flex-col items-center mb-8">
+            <div className="w-16 h-16 bg-brand-purple/20 text-brand-purple rounded-2xl flex items-center justify-center mb-4 border border-brand-purple/20">
+              <Lock size={32} />
+            </div>
+            <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Admin Access</h2>
+            <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Sign in with Google to continue</p>
+          </div>
 
+          <div className="space-y-6">
+            {authError && (
+              <p className="text-red-500 text-xs font-bold flex items-center gap-1 px-2">
+                <AlertCircle size={12} /> {authError}
+              </p>
+            )}
+
+            <button
+              onClick={handleAdminAuth}
+              className="w-full py-4 bg-brand-purple text-white rounded-2xl font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20 flex items-center justify-center gap-2"
+            >
+              <ShieldCheck size={20} /> Sign in with Google
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -419,7 +525,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onL
         <div className="flex flex-col sm:flex-row items-center justify-between gap-6 text-center sm:text-left">
           <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
             <div className="w-14 h-14 sm:w-16 sm:h-16 bg-brand-purple/20 text-brand-purple rounded-2xl flex items-center justify-center shadow-inner border border-brand-purple/20 shrink-0">
-              <Shield size={28} className="sm:w-8 sm:h-8" />
+              <ShieldCheck size={28} className="sm:w-8 sm:h-8" />
             </div>
             <div>
               <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">Admin Dashboard</h2>
@@ -448,10 +554,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onL
               </button>
             </div>
             <button 
-              onClick={onLogout}
-              className="px-4 py-2.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-xl text-red-500 text-sm font-bold transition-all flex items-center gap-2"
+              onClick={() => setIsAuthenticated(false)}
+              className="px-4 py-2.5 bg-slate-100 dark:bg-slate-900/50 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-500 dark:text-slate-400 text-sm font-bold transition-all"
             >
-              <LogOut size={16} /> Logout
+              Lock
             </button>
           </div>
         </div>
@@ -608,7 +714,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onL
                               className="p-2 text-slate-500 hover:text-brand-purple hover:bg-brand-purple/10 rounded-lg transition-all"
                               title="Toggle Role"
                             >
-                              <Shield size={16} />
+                              <ShieldCheck size={16} />
                             </button>
                             <button
                               onClick={() => handleToggleStatus(u.id, u.isActive)}
@@ -717,7 +823,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onL
                               className="p-2 text-slate-500 hover:text-brand-purple hover:bg-brand-purple/10 rounded-lg transition-all"
                               title="Toggle Role"
                             >
-                              <Shield size={16} />
+                              <ShieldCheck size={16} />
                             </button>
                             {!user.is_verified && (
                               <button

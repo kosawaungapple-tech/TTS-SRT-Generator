@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Wand2, Key, Settings, User, LogIn, LogOut, ShieldCheck, ShieldAlert, Shield, CheckCircle2, XCircle, History, Wrench, Plus, Trash2, Download, Play, Music, FileText, Eye, EyeOff, Cloud, RefreshCw, Zap, X, ExternalLink, Calendar, Clock, Mail, Wifi, Save, Lock, Info, ArrowRight, ChevronRight, Youtube } from 'lucide-react';
-import { GoogleGenAI } from "@google/genai";
+import { AlertCircle, Wand2, Key, Settings, User, LogIn, LogOut, ShieldCheck, ShieldAlert, Shield, CheckCircle2, XCircle, History, Wrench, Plus, Trash2, Download, Play, Music, FileText, Eye, EyeOff, Cloud, RefreshCw, Zap, X, ExternalLink, Calendar, Clock, Mail, Wifi, Save, Lock, Info, ArrowRight, ChevronRight } from 'lucide-react';
 import { Header } from './components/Header';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { ContentInput } from './components/ContentInput';
@@ -16,7 +15,7 @@ import { DEFAULT_RULES } from './constants';
 import { pcmToWav } from './utils/audioUtils';
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDoc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadString, getDownloadURL } from './firebase';
 
-type Tab = 'generate' | 'history' | 'tools' | 'admin' | 'vbs-admin' | 'youtube-recap' | 'youtube-transcript';
+type Tab = 'generate' | 'history' | 'tools' | 'admin' | 'vbs-admin';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('generate');
@@ -29,12 +28,6 @@ export default function App() {
     speed: 1.0,
     pitch: 0,
     volume: 80,
-    effects: {
-      echo: { enabled: false, delay: 0.3, feedback: 0.4 },
-      reverb: { enabled: false, decay: 1.5, mix: 0.3 },
-      pitchShift: { enabled: false, semitones: 0 },
-      chorus: { enabled: false, rate: 1.5, depth: 0.5 }
-    }
   });
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<AudioResult | null>(null);
@@ -45,7 +38,6 @@ export default function App() {
   
   const [newApiKey, setNewApiKey] = useState('');
   const [localApiKey, setLocalApiKey] = useState<string | null>(localStorage.getItem('VLOGS_BY_SAW_API_KEY'));
-  const [apiSwitch, setApiSwitch] = useState<'admin' | 'personal'>(localStorage.getItem('VBS_API_SWITCH') as 'admin' | 'personal' || 'admin');
   const [isUpdatingKey, setIsUpdatingKey] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -74,19 +66,6 @@ export default function App() {
   const [isVerifyingCode, setIsVerifyingCode] = useState(false);
   const [accessCode, setAccessCode] = useState<string | null>('preview-user');
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(localStorage.getItem('is_admin_auth') === 'true');
-  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
-  const [adminPasswordInput, setAdminPasswordInput] = useState('');
-  const [youtubeUrl, setYoutubeUrl] = useState('');
-  const [isProcessingYoutube, setIsProcessingYoutube] = useState(false);
-  const [youtubeTranscriptUrl, setYoutubeTranscriptUrl] = useState('');
-  const [rawTranscript, setRawTranscript] = useState('');
-  const [isFetchingTranscript, setIsFetchingTranscript] = useState(false);
-  const [retryCount, setRetryCount] = useState(0);
-  const [showManualInput, setShowManualInput] = useState(true); // Default to true now
-  const [manualTranscript, setManualTranscript] = useState('');
-  const [showTranscriptGuide, setShowTranscriptGuide] = useState(false);
-  const [recapManualText, setRecapManualText] = useState('');
 
   // Handle Anonymous Auth
   useEffect(() => {
@@ -334,169 +313,11 @@ export default function App() {
     await signOut(auth);
     setIsAccessGranted(false);
     setAccessCode(null);
-    setIsAdmin(false);
     localStorage.removeItem('vbs_access_granted');
     localStorage.removeItem('vbs_access_code');
-    localStorage.removeItem('is_admin_auth');
     // We do NOT remove the API Key on logout as per safety requirements
     setLocalApiKey(null);
     setActiveTab('generate');
-  };
-
-  const handleAdminLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (adminPasswordInput === 'saw_vlogs_2026') {
-      setIsAdmin(true);
-      localStorage.setItem('is_admin_auth', 'true');
-      setIsAdminModalOpen(false);
-      setAdminPasswordInput('');
-      alert("Welcome, Saw!");
-    } else {
-      alert("စကားဝှက် မှားယွင်းနေပါသည်။");
-    }
-  };
-
-  const handleFetchTranscript = async () => {
-    const url = youtubeTranscriptUrl.trim();
-    if (!url) return;
-    
-    setIsFetchingTranscript(true);
-    setError(null);
-    setRawTranscript('');
-    
-    const extractVideoId = (url: string) => {
-      const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/i;
-      const match = url.match(regex);
-      return match ? match[1] : null;
-    };
-
-    const videoId = extractVideoId(url);
-    if (!videoId) {
-      setError("Invalid YouTube URL. Please check the link.");
-      setIsFetchingTranscript(false);
-      return;
-    }
-
-    const fetchViaServer = async () => {
-      const response = await fetch(`/api/youtube-transcript?url=${encodeURIComponent(url)}`);
-      const data = await response.json();
-      if (!response.ok || !data.transcript) throw new Error(data.error || "Server fetch failed");
-      return data.transcript.map((t: any) => t.text).join(' ');
-    };
-
-    const fetchViaClientProxy = async () => {
-      const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
-      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(watchUrl)}`;
-      const response = await fetch(proxyUrl);
-      if (!response.ok) throw new Error("Proxy fetch failed");
-      
-      const data = await response.json();
-      const html = data.contents;
-      
-      const regex = /ytInitialPlayerResponse\s*=\s*({.+?});/s;
-      const match = html.match(regex);
-      if (!match) throw new Error("Could not find player response in HTML");
-      
-      const playerResponse = JSON.parse(match[1]);
-      const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-      
-      if (!tracks || tracks.length === 0) throw new Error("No caption tracks found");
-      
-      const track = tracks.find((t: any) => t.languageCode === 'en') || 
-                    tracks.find((t: any) => t.languageCode === 'en-US') ||
-                    tracks.find((t: any) => t.languageCode.startsWith('en')) ||
-                    tracks[0];
-      
-      const transcriptRes = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(track.baseUrl)}`);
-      if (!transcriptRes.ok) throw new Error("Failed to fetch transcript XML via proxy");
-      
-      const transcriptData = await transcriptRes.json();
-      const xml = transcriptData.contents;
-      
-      const textRegex = /<text start="([\d.]+)" dur="([\d.]+)".*?>(.*?)<\/text>/g;
-      let fullText = "";
-      let m;
-      while ((m = textRegex.exec(xml)) !== null) {
-        fullText += m[3]
-          .replace(/&amp;/g, '&')
-          .replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>')
-          .replace(/&quot;/g, '"')
-          .replace(/&#39;/g, "'")
-          .replace(/&nbsp;/g, ' ') + " ";
-      }
-      if (!fullText) throw new Error("Transcript is empty");
-      return fullText.trim();
-    };
-
-    try {
-      // Try server first
-      try {
-        const text = await fetchViaServer();
-        setRawTranscript(text);
-        setRetryCount(0);
-        setShowManualInput(false);
-      } catch (serverErr) {
-        console.warn("Server fetch failed, trying client proxy...", serverErr);
-        const text = await fetchViaClientProxy();
-        setRawTranscript(text);
-        setRetryCount(0);
-        setShowManualInput(false);
-      }
-    } catch (err: any) {
-      console.error("YouTube Transcript Error:", err);
-      const newRetryCount = retryCount + 1;
-      setRetryCount(newRetryCount);
-      
-      if (newRetryCount >= 3) {
-        setShowManualInput(true);
-        setError("အလိုအလျောက် ဖတ်၍မရပါ။ ကျေးဇူးပြု၍ youtube-transcript.io ကဲ့သို့ site များမှ စာသားကို Copy ကူးပြီး ဤနေရာတွင် Paste လုပ်ပေးပါ။");
-      } else {
-        setError(`YouTube က Transcript ထုတ်ပေးဖို့ ငြင်းဆိုထားပါသည် (Retry ${newRetryCount}/3).`);
-      }
-    } finally {
-      setIsFetchingTranscript(false);
-    }
-  };
-
-  const handleYoutubeRecap = async (providedText?: string) => {
-    // Priority: 1. providedText (from transcript tab), 2. recapManualText (from recap tab)
-    const textToSummarize = typeof providedText === 'string' ? providedText : recapManualText.trim();
-    
-    if (!textToSummarize) return;
-    
-    setIsProcessingYoutube(true);
-    setError(null);
-    setText('');
-    setResult(null);
-    
-    try {
-      const fullText = textToSummarize;
-      
-      const ai = new GoogleGenAI({ apiKey: getEffectiveApiKey() || '' });
-      const geminiResponse = await ai.models.generateContent({
-        model: "gemini-3.1-pro-preview",
-        contents: fullText,
-        config: {
-          systemInstruction: "Translate and summarize the following English YouTube transcript into a natural, engaging Burmese narrative recap. Use a storytelling style.",
-        }
-      });
-      
-      const summary = geminiResponse.text;
-      if (summary) {
-        setText(summary);
-        setActiveTab('generate');
-        // Small delay to ensure state update before generation
-        setTimeout(() => {
-          handleGenerate();
-        }, 300);
-      }
-    } catch (err: any) {
-      console.error("YouTube Recap Error:", err);
-      setError("Gemini မှ Recap ပြုလုပ်ပေးရန် ငြင်းဆိုထားပါသည် (Check API Key or Content).");
-    } finally {
-      setIsProcessingYoutube(false);
-    }
   };
 
   const filteredHistory = useMemo(() => {
@@ -510,9 +331,7 @@ export default function App() {
 
   const handleClearApiKey = () => {
     localStorage.removeItem('VLOGS_BY_SAW_API_KEY');
-    localStorage.removeItem('VBS_API_SWITCH');
     setLocalApiKey(null);
-    setApiSwitch('admin');
     setToast({ message: 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ Website ကို ပြန်ဖွင့်ပါမည်။ (Settings saved. Reloading page...)', type: 'success' });
     setTimeout(() => {
       window.location.reload();
@@ -526,29 +345,25 @@ export default function App() {
   };
 
   const getEffectiveApiKey = useCallback(() => {
-    // If Admin Key is selected, use the Global System Key
-    if (apiSwitch === 'admin') {
-      if (globalSettings.allow_global_key && globalSettings.global_system_key) {
-        console.log("App: Using Global System API Key (Admin Mode)");
-        return globalSettings.global_system_key.trim();
-      }
-      console.warn("App: Admin Mode selected but no Global System Key available");
-      return null;
-    }
-
-    // If Personal Key is selected, use the key from Local Storage
+    // Priority 0: Local Storage (for immediate sync and persistence as requested)
     const storedKey = localStorage.getItem('VLOGS_BY_SAW_API_KEY');
     if (storedKey) {
-      console.log("App: Using API Key from LocalStorage (Personal Mode)");
+      console.log("App: Using API Key from LocalStorage (VLOGS_BY_SAW_API_KEY)");
       return storedKey.trim();
     }
 
     if (profile?.api_key_stored) {
-      console.log("App: Using API Key from Firestore Profile (Personal Mode Fallback)");
+      console.log("App: Using API Key from Firestore Profile");
       return profile.api_key_stored.trim();
     }
     
-    // Ultimate Fallback to Environment Variable
+    // 2. Fallback to Global System Key (if enabled)
+    if (globalSettings.allow_global_key && globalSettings.global_system_key) {
+      console.log("App: Using Global System API Key");
+      return globalSettings.global_system_key.trim();
+    }
+    
+    // 3. Ultimate Fallback to Environment Variable
     if (typeof process !== 'undefined' && process.env.GEMINI_API_KEY) {
       console.log("App: Using Environment Variable API Key");
       return process.env.GEMINI_API_KEY.trim();
@@ -556,7 +371,7 @@ export default function App() {
     
     console.warn("App: No effective API Key found");
     return null;
-  }, [profile, globalSettings, apiSwitch]);
+  }, [profile, globalSettings]);
 
   const handleUpdateGlobalSettings = async (updates: Partial<GlobalSettings>) => {
     try {
@@ -566,19 +381,13 @@ export default function App() {
     }
   };
 
-  const handleSaveApiKeyFromModal = async (key: string, selectedSwitch: 'admin' | 'personal') => {
+  const handleSaveApiKeyFromModal = async (key: string) => {
     const trimmedKey = key.trim();
     setIsUpdatingKey(true);
     try {
-      // 1. Save switch preference
-      localStorage.setItem('VBS_API_SWITCH', selectedSwitch);
-      setApiSwitch(selectedSwitch);
-
-      // 2. Save personal key if provided
-      if (selectedSwitch === 'personal' && trimmedKey) {
-        localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
-        setLocalApiKey(trimmedKey);
-      }
+      // 1. Save to Local Storage ONLY as per safety requirements
+      localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
+      setLocalApiKey(trimmedKey);
       
       setToast({ message: 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ Website ကို ပြန်ဖွင့်ပါမည်။ (Settings saved. Reloading page...)', type: 'success' });
       setTimeout(() => {
@@ -635,20 +444,18 @@ export default function App() {
       return;
     }
 
-    // Use the effective API key based on the switch setting
-    const effectiveKey = getEffectiveApiKey();
+    // Direct Fetching from LocalStorage as requested - Strict Validation
+    const apiKeyFromStorage = localStorage.getItem('VLOGS_BY_SAW_API_KEY')?.trim();
     
-    if (!effectiveKey) {
-      console.warn("App: Generation blocked - No effective API Key found. Opening settings modal.");
-      if (apiSwitch === 'personal') {
-        window.alert('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)');
-      } else {
-        window.alert('Admin Key မရှိသေးပါ။ ကျေးဇူးပြု၍ ခဏစောင့်ပါ သို့မဟုတ် ကိုယ်ပိုင် Key သုံးပါ။ (Admin Key not available. Please wait or use personal key.)');
-      }
+    if (!apiKeyFromStorage) {
+      console.warn("App: Generation blocked - No API Key found in LocalStorage. Opening settings modal.");
+      window.alert('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)');
       setIsApiKeyModalOpen(true);
       setError('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)');
       return;
     }
+    
+    const effectiveKey = apiKeyFromStorage;
     
     setIsLoading(true);
     setError(null);
@@ -927,18 +734,6 @@ export default function App() {
                 <Wand2 size={18} /> Generate
               </button>
               <button
-                onClick={() => setActiveTab('youtube-transcript')}
-                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 relative ${activeTab === 'youtube-transcript' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
-              >
-                <FileText size={18} /> YouTube Transcript
-              </button>
-              <button
-                onClick={() => setActiveTab('youtube-recap')}
-                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 relative ${activeTab === 'youtube-recap' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
-              >
-                <Youtube size={18} /> YouTube Recap
-              </button>
-              <button
                 onClick={() => setActiveTab('history')}
                 className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'history' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
               >
@@ -950,14 +745,6 @@ export default function App() {
               >
                 <Wrench size={18} /> Tools
               </button>
-              {isAdmin && (
-                <button
-                  onClick={() => setActiveTab('admin')}
-                  className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 relative ${activeTab === 'admin' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
-                >
-                  <Shield size={18} /> Admin
-                </button>
-              )}
             </div>
 
             <AnimatePresence mode="wait">
@@ -1204,155 +991,6 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-
-                  {/* Admin Login Section */}
-                  {!isAdmin && (
-                    <div 
-                      onClick={() => setIsAdminModalOpen(true)}
-                      className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-8 shadow-2xl transition-colors duration-300 cursor-pointer hover:border-brand-purple/30 group"
-                    >
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-brand-purple/10 rounded-xl flex items-center justify-center text-brand-purple group-hover:scale-110 transition-transform">
-                            <Shield size={20} />
-                          </div>
-                          <div>
-                            <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">Admin Login</h3>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Access administrative dashboard and settings</p>
-                          </div>
-                        </div>
-                        <ChevronRight size={18} className="text-slate-400 group-hover:translate-x-1 transition-transform" />
-                      </div>
-                    </div>
-                  )}
-                </motion.div>
-              )}
-              {activeTab === 'admin' && isAdmin && (
-                <motion.div
-                  key="admin"
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                >
-                  <AdminDashboard isAuthReady={isAuthReady} onLogout={handleLogout} />
-                </motion.div>
-              )}
-              {activeTab === 'youtube-transcript' && (
-                <motion.div
-                  key="youtube-transcript"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="max-w-4xl mx-auto space-y-8"
-                >
-                  <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-10 shadow-2xl transition-colors duration-300">
-                    <div className="flex flex-col items-center text-center mb-8">
-                      <div className="w-16 h-16 bg-blue-500/10 text-blue-500 rounded-2xl flex items-center justify-center mb-4 border border-blue-500/20">
-                        <FileText size={32} />
-                      </div>
-                      <h2 className="text-2xl font-bold text-slate-900 dark:text-white">YouTube Transcript</h2>
-                      <p className="text-slate-500 dark:text-slate-400 text-sm mt-2">ဗီဒီယိုမှ မူရင်းစာတန်းထိုးများကို ဤနေရာတွင် ထည့်သွင်းနိုင်သည်</p>
-                    </div>
-
-                    <div className="space-y-6">
-                      <div className="space-y-4">
-                        <div className="space-y-2">
-                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">YouTube မှ ကူးယူလာသော Transcript ကို ဤနေရာတွင် Paste လုပ်ပေးပါ (Paste Transcript Here)</label>
-                          <textarea
-                            value={manualTranscript}
-                            onChange={(e) => setManualTranscript(e.target.value)}
-                            placeholder="Paste the transcript text here..."
-                            className="w-full h-64 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all resize-none leading-relaxed"
-                          />
-                          <p className="text-[10px] text-slate-500 px-1">YouTube ဗီဒီယိုအောက်ရှိ '...More' -&gt; 'Show Transcript' မှ စာသားများကို ကူးယူနိုင်ပါသည်။</p>
-                        </div>
-                      </div>
-
-                      <button
-                        onClick={() => handleYoutubeRecap(manualTranscript)}
-                        disabled={isProcessingYoutube || !manualTranscript.trim()}
-                        className="w-full py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg hover:bg-brand-purple/90 transition-all flex items-center justify-center gap-3 disabled:opacity-50 shadow-lg shadow-brand-purple/20"
-                      >
-                        {isProcessingYoutube ? (
-                          <>
-                            <RefreshCw size={20} className="animate-spin" />
-                            <span>Recap ပြုလုပ်နေသည်...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Wand2 size={20} />
-                            <span>Summarize & Generate Burmese Voice</span>
-                          </>
-                        )}
-                      </button>
-
-                      {error && (
-                        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-start gap-3 text-red-500">
-                          <AlertCircle size={20} className="shrink-0 mt-0.5" />
-                          <p className="text-sm font-medium">{error}</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-              {activeTab === 'youtube-recap' && (
-                <motion.div
-                  key="youtube-recap"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="max-w-2xl mx-auto space-y-8"
-                >
-                  <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-10 shadow-2xl transition-colors duration-300">
-                    <div className="flex flex-col items-center text-center mb-8">
-                      <div className="w-16 h-16 bg-red-500/10 text-red-500 rounded-2xl flex items-center justify-center mb-4 border border-red-500/20">
-                        <Youtube size={32} />
-                      </div>
-                      <h2 className="text-2xl font-bold text-slate-900 dark:text-white">YouTube Recap</h2>
-                      <p className="text-slate-500 dark:text-slate-400 text-sm mt-2">ဗီဒီယိုကို အကျဉ်းချုပ်ပြီး အသံဖလှယ်ပေးမည်</p>
-                    </div>
-
-                    <div className="space-y-6">
-                      <div className="space-y-4">
-                        <div className="space-y-2">
-                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">YouTube မှ ကူးယူလာသော Transcript ကို ဤနေရာတွင် Paste လုပ်ပေးပါ (Paste Transcript Here)</label>
-                          <textarea
-                            value={recapManualText}
-                            onChange={(e) => setRecapManualText(e.target.value)}
-                            placeholder="Paste English transcript here for instant recap..."
-                            className="w-full h-48 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-4 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all resize-none"
-                          />
-                          <p className="text-[10px] text-slate-500 px-1">YouTube ဗီဒီယိုအောက်ရှိ '...More' -&gt; 'Show Transcript' မှ စာသားများကို ကူးယူနိုင်ပါသည်။</p>
-                        </div>
-                      </div>
-
-                      {error && (
-                        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-start gap-3 text-red-500">
-                          <AlertCircle size={20} className="shrink-0 mt-0.5" />
-                          <p className="text-sm font-medium">{error}</p>
-                        </div>
-                      )}
-
-                      <button
-                        onClick={() => handleYoutubeRecap()}
-                        disabled={isProcessingYoutube || !recapManualText.trim()}
-                        className="w-full py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg hover:bg-brand-purple/90 transition-all flex items-center justify-center gap-3 disabled:opacity-50 shadow-lg shadow-brand-purple/20"
-                      >
-                        {isProcessingYoutube ? (
-                          <>
-                            <RefreshCw size={20} className="animate-spin" />
-                            <span>Recap ပြုလုပ်နေသည်...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Wand2 size={20} />
-                            <span>Summarize & Generate Burmese Voice</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -1368,70 +1006,7 @@ export default function App() {
         onSave={handleSaveApiKeyFromModal}
         onClear={handleClearApiKey}
         initialKey={localApiKey || ''}
-        initialSwitch={apiSwitch}
       />
-
-      {/* Admin Login Modal */}
-      <AnimatePresence>
-        {isAdminModalOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsAdminModalOpen(false)}
-              className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
-            />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden"
-            >
-              <div className="p-6 sm:p-8">
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-brand-purple/10 text-brand-purple rounded-xl flex items-center justify-center">
-                      <Shield size={20} />
-                    </div>
-                    <h3 className="text-xl font-bold text-slate-900 dark:text-white">Admin Access</h3>
-                  </div>
-                  <button 
-                    onClick={() => setIsAdminModalOpen(false)}
-                    className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
-                  >
-                    <X size={20} />
-                  </button>
-                </div>
-
-                <form onSubmit={handleAdminLogin} className="space-y-6">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Admin Password</label>
-                    <div className="relative">
-                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                      <input
-                        type="password"
-                        value={adminPasswordInput}
-                        onChange={(e) => setAdminPasswordInput(e.target.value)}
-                        placeholder="Enter admin password..."
-                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
-                        autoFocus
-                      />
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="w-full py-4 bg-brand-purple text-white rounded-2xl font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20 flex items-center justify-center gap-2"
-                  >
-                    <LogIn size={20} /> Login as Admin
-                  </button>
-                </form>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
       <AnimatePresence>
         {toast && (
           <motion.div

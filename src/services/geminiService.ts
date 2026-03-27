@@ -1,7 +1,7 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 import { TTSConfig, AudioResult, SRTSubtitle } from "../types";
 import { GEMINI_MODELS, VOICE_OPTIONS } from "../constants";
-import { pcmToWav, formatTime, applyAudioEffects } from "../utils/audioUtils";
+import { pcmToWav, formatTime } from "../utils/audioUtils";
 
 export class GeminiTTSService {
   private ai: GoogleGenAI;
@@ -124,39 +124,16 @@ export class GeminiTTSService {
       }
 
       // Gemini TTS returns raw PCM (24000Hz, 16-bit, mono)
-      let processedBytes = bytes;
-      if (config.effects) {
-        console.log("TTS Service: Applying post-processing effects...");
-        processedBytes = await applyAudioEffects(bytes, config.effects, 24000);
-      }
-
-      const wavBlob = pcmToWav(processedBytes, 24000);
+      const wavBlob = pcmToWav(bytes, 24000);
       const audioUrl = URL.createObjectURL(wavBlob);
-      
-      // Calculate actual duration for accurate timing sync
-      const totalDuration = processedBytes.length / (24000 * 2); // 2 bytes per sample (16-bit)
-      
-      console.log(`TTS Service: Audio generated. Duration: ${totalDuration.toFixed(2)}s. Generating SRT...`);
-      
-      const subtitles = await this.generateSRTWithGemini(text, totalDuration);
+      const subtitles = this.generateMockSRT(text);
       const srtContent = subtitles.map(s => 
         `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}\n`
       ).join('\n');
 
-      // Convert processed bytes back to base64 for history/download
-      let processedBase64 = base64Audio;
-      if (config.effects) {
-        let binary = '';
-        const chunkSize = 8192;
-        for (let i = 0; i < processedBytes.length; i += chunkSize) {
-          binary += String.fromCharCode.apply(null, Array.from(processedBytes.subarray(i, i + chunkSize)));
-        }
-        processedBase64 = window.btoa(binary);
-      }
-
       return {
         audioUrl,
-        audioData: processedBase64,
+        audioData: base64Audio,
         srtContent,
         subtitles
       };
@@ -187,66 +164,24 @@ export class GeminiTTSService {
     }).filter((s): s is SRTSubtitle => s !== null);
   }
 
-  private async generateSRTWithGemini(text: string, totalDuration: number): Promise<SRTSubtitle[]> {
-    try {
-      console.log("TTS Service: Requesting Gemini to generate optimized SRT...");
-      const prompt = `Generate a standard SRT subtitle content for the following text. 
-      The total duration of the audio is exactly ${totalDuration.toFixed(2)} seconds.
-      
-      STRICT INSTRUCTIONS:
-      1. Each subtitle segment (SRT block) must not exceed 7-10 words per line.
-      2. Break longer sentences into multiple smaller segments while maintaining natural pauses.
-      3. Keep the SRT format clean. Avoid having more than 2 lines of text per timestamp.
-      4. For Myanmar language, ensure the word-breaking (syllable breaking) is natural and doesn't cut words in the middle of a meaning.
-      5. Distribute the timestamps (start and end) accurately across the total duration of ${totalDuration.toFixed(2)} seconds based on the text length and natural speaking pace.
-      6. Output ONLY the raw SRT content, no extra text, no markdown code blocks, no preamble.
-      
-      Text to process:
-      ${text}`;
-
-      const response = await this.ai.models.generateContent({
-        model: GEMINI_MODELS.VERIFY,
-        contents: [{ parts: [{ text: prompt }] }]
-      });
-
-      const srtText = response.text || '';
-      const parsed = GeminiTTSService.parseSRT(srtText);
-      
-      if (parsed.length === 0) {
-        throw new Error("Gemini returned empty or invalid SRT format");
-      }
-      
-      return parsed;
-    } catch (error) {
-      console.error("TTS Service: Failed to generate SRT with Gemini, falling back to mock:", error);
-      return this.generateMockSRT(text, totalDuration);
-    }
-  }
-
-  private generateMockSRT(text: string, totalDuration: number = 0): SRTSubtitle[] {
-    // Improved mock splitting for Myanmar (simple space split is bad, but we try to be better)
+  private generateMockSRT(text: string): SRTSubtitle[] {
     const words = text.split(/\s+/);
     const subtitles: SRTSubtitle[] = [];
-    
-    // If we have totalDuration, we can distribute it better
-    const estimatedTotalDuration = totalDuration > 0 ? totalDuration : text.length * 0.1;
-    const wordsPerSubtitle = 5;
-    const totalChunks = Math.ceil(words.length / wordsPerSubtitle);
-    const durationPerChunk = estimatedTotalDuration / totalChunks;
-
     let currentTime = 0;
+    const wordsPerSubtitle = 5;
 
     for (let i = 0; i < words.length; i += wordsPerSubtitle) {
       const chunk = words.slice(i, i + wordsPerSubtitle).join(' ');
+      const duration = chunk.length * 0.1; // Rough estimate
       
       subtitles.push({
         index: Math.floor(i / wordsPerSubtitle) + 1,
         startTime: formatTime(currentTime),
-        endTime: formatTime(currentTime + durationPerChunk),
+        endTime: formatTime(currentTime + duration),
         text: chunk
       });
       
-      currentTime += durationPerChunk;
+      currentTime += duration + 0.5;
     }
 
     return subtitles;

@@ -42,8 +42,6 @@ const app = initializeApp(firebaseConfig);
 // Use initializeFirestore with long polling to bypass potential WebSocket blocks in the preview environment
 export const db = initializeFirestore(app, {
   experimentalForceLongPolling: true,
-  host: "firestore.googleapis.com",
-  ssl: true,
 }, firebaseConfig.firestoreDatabaseId);
 
 export const auth = getAuth(app);

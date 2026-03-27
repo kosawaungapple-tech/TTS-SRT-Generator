@@ -73,9 +73,7 @@ service cloud.firestore {
         (accessCode != null && 
          exists(/databases/$(database)/documents/authorized_users/$(accessCode)) &&
          get(/databases/$(database)/documents/authorized_users/$(accessCode)).data.role == 'admin') ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
-        (request.auth.token.email == "kosawaung.apple@gmail.com" && request.auth.token.email_verified == true)
+        (request.auth.token.email == "hankozinsa@gmail.com" && request.auth.token.email_verified == true)
       );
     }
 

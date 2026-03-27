@@ -6,22 +6,13 @@ import { GeminiTTSService } from '../services/geminiService';
 interface ApiKeyModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (key: string, apiSwitch: 'admin' | 'personal') => void;
+  onSave: (key: string) => void;
   onClear?: () => void;
   initialKey?: string;
-  initialSwitch?: 'admin' | 'personal';
 }
 
-export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ 
-  isOpen, 
-  onClose, 
-  onSave, 
-  onClear, 
-  initialKey = '',
-  initialSwitch = 'admin'
-}) => {
+export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSave, onClear, initialKey = '' }) => {
   const [apiKey, setApiKey] = useState(initialKey);
-  const [apiSwitch, setApiSwitch] = useState<'admin' | 'personal'>(initialSwitch);
   const [showKey, setShowKey] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [validationStatus, setValidationStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -30,11 +21,10 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setApiKey(initialKey);
-      setApiSwitch(initialSwitch);
       setValidationStatus('idle');
       setErrorMessage('');
     }
-  }, [isOpen, initialKey, initialSwitch]);
+  }, [isOpen, initialKey]);
 
   const handleClear = () => {
     if (onClear) {
@@ -45,20 +35,12 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
   };
 
   const handleSaveAndTest = async () => {
-    // If Admin Key is selected, we don't need to validate the input key here 
-    // as it uses the system key. We just save the preference.
-    if (apiSwitch === 'admin') {
+    if (!apiKey.trim()) {
       setValidationStatus('success');
-      onSave(apiKey.trim(), 'admin');
+      onSave('');
       setTimeout(() => {
         onClose();
       }, 1500);
-      return;
-    }
-
-    if (!apiKey.trim()) {
-      setValidationStatus('error');
-      setErrorMessage('ကျေးဇူးပြု၍ API Key ထည့်သွင်းပါ။ (Please enter an API Key).');
       return;
     }
 
@@ -71,7 +53,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
       
       if (result.isValid) {
         setValidationStatus('success');
-        onSave(apiKey.trim(), 'personal');
+        onSave(apiKey.trim());
         setTimeout(() => {
           onClose();
         }, 1500);
@@ -126,84 +108,41 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
 
             {/* Content */}
             <div className="p-8 space-y-6">
-              {/* API Switch */}
               <div className="space-y-3">
                 <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 px-1">
-                  API Key အမျိုးအစား ရွေးချယ်ပါ (Select API Type)
+                  သင်၏ API Key ကို ဤနေရာတွင် ထည့်ပါ (Google AI Studio API Key)
                 </label>
-                <div className="grid grid-cols-2 gap-3 p-1 bg-slate-100 dark:bg-slate-950 rounded-2xl border border-slate-200 dark:border-slate-800">
-                  <button
-                    onClick={() => setApiSwitch('admin')}
-                    className={`py-3 rounded-xl text-sm font-bold transition-all ${
-                      apiSwitch === 'admin' 
-                        ? 'bg-brand-purple text-white shadow-lg' 
-                        : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                <div className="relative group">
+                  <input
+                    type={showKey ? "text" : "password"}
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="Paste your API Key here (starts with AIza...)"
+                    className={`w-full bg-slate-50 dark:bg-slate-950 border rounded-2xl px-6 py-4 text-lg font-mono transition-all pr-14 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 text-slate-900 dark:text-white placeholder:text-slate-400 ${
+                      !apiKey.trim() 
+                        ? 'border-red-500/50' 
+                        : 'border-slate-200 dark:border-slate-800'
                     }`}
-                  >
-                    Admin Key (Free)
-                  </button>
+                  />
                   <button
-                    onClick={() => setApiSwitch('personal')}
-                    className={`py-3 rounded-xl text-sm font-bold transition-all ${
-                      apiSwitch === 'personal' 
-                        ? 'bg-brand-purple text-white shadow-lg' 
-                        : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
-                    }`}
+                    type="button"
+                    onClick={() => setShowKey(!showKey)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-brand-purple transition-colors"
                   >
-                    Personal API Key
+                    {showKey ? <EyeOff size={20} /> : <Eye size={20} />}
                   </button>
                 </div>
-              </div>
-
-              {apiSwitch === 'personal' && (
-                <motion.div 
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  className="space-y-3 overflow-hidden"
+                
+                <a 
+                  href="https://aistudio.google.com/app/apikey" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 text-xs font-bold text-brand-purple hover:underline px-1 w-fit group"
                 >
-                  <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 px-1">
-                    သင်၏ API Key ကို ဤနေရာတွင် ထည့်ပါ (Google AI Studio API Key)
-                  </label>
-                  <div className="relative group">
-                    <input
-                      type={showKey ? "text" : "password"}
-                      value={apiKey}
-                      onChange={(e) => setApiKey(e.target.value)}
-                      placeholder="Paste your API Key here (starts with AIza...)"
-                      className={`w-full bg-slate-50 dark:bg-slate-950 border rounded-2xl px-6 py-4 text-lg font-mono transition-all pr-14 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 text-slate-900 dark:text-white placeholder:text-slate-400 ${
-                        !apiKey.trim() 
-                          ? 'border-red-500/50' 
-                          : 'border-slate-200 dark:border-slate-800'
-                      }`}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowKey(!showKey)}
-                      className="absolute right-4 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-brand-purple transition-colors"
-                    >
-                      {showKey ? <EyeOff size={20} /> : <Eye size={20} />}
-                    </button>
-                  </div>
-                  
-                  <a 
-                    href="https://aistudio.google.com/app/apikey" 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2 text-xs font-bold text-brand-purple hover:underline px-1 w-fit group"
-                  >
-                    How to get a free API Key?
-                    <ExternalLink size={12} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-                  </a>
-                </motion.div>
-              )}
-
-              {apiSwitch === 'admin' && (
-                <div className="p-4 bg-brand-purple/5 border border-brand-purple/10 rounded-2xl">
-                  <p className="text-xs text-brand-purple font-medium leading-relaxed">
-                    Admin Key ကို အသုံးပြုပါက အခမဲ့ အသုံးပြုနိုင်ပါသည်။ (Using Admin Key allows free usage of the narration engine.)
-                  </p>
-                </div>
-              )}
+                  How to get a free API Key?
+                  <ExternalLink size={12} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                </a>
+              </div>
 
               {validationStatus !== 'idle' && (
                 <motion.div

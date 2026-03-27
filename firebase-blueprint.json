@@ -64,7 +64,7 @@
       "description": "System-wide settings for API keys and monitoring.",
       "type": "object",
       "properties": {
-        "admin_global_api_key": { "type": "string" },
+        "global_system_key": { "type": "string" },
         "allow_global_key": { "type": "boolean" },
         "total_generations": { "type": "number" }
       }
@@ -82,26 +82,12 @@
         "telegram_chat_id": { "type": "string" },
         "updatedAt": { "type": "string", "format": "date-time" }
       }
-    },
-    "Session": {
-      "title": "User Session",
-      "description": "Maps a Firebase Auth UID to an Access Code.",
-      "type": "object",
-      "properties": {
-        "accessCode": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["accessCode", "createdAt"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": "User",
       "description": "User profile document."
-    },
-    "/sessions/{uid}": {
-      "schema": "Session",
-      "description": "User session mapping."
     },
     "/settings/global": {
       "schema": "GlobalSettings",
