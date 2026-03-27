@@ -161,9 +161,9 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading,
 
   if (isLoading) {
     return (
-      <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-12 shadow-xl flex flex-col items-center justify-center text-center transition-colors duration-300 neon-border-purple">
+      <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-12 shadow-xl flex flex-col items-center justify-center text-center transition-colors duration-300">
         <div className="w-16 h-16 border-4 border-brand-purple/20 border-t-brand-purple rounded-full animate-spin mb-4" />
-        <p className="text-slate-500 dark:text-slate-400 font-mono uppercase tracking-widest">အသံဖိုင် ထုတ်ယူနေပါသည်...</p>
+        <p className="text-slate-500 dark:text-slate-400">Generating your voiceover...</p>
       </div>
     );
   }
@@ -174,21 +174,24 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading,
         <div className="w-20 h-20 bg-slate-50 dark:bg-slate-900 rounded-full flex items-center justify-center text-slate-400 dark:text-slate-600 mb-6 border border-slate-200 dark:border-slate-800">
           <Headphones size={40} />
         </div>
-        <h3 className="text-lg font-semibold mb-2 text-slate-900 dark:text-white font-mono uppercase tracking-tighter">ရလဒ်များကို ကြည့်ရှုရန်</h3>
+        <h3 className="text-lg font-semibold mb-2 text-slate-900 dark:text-white">Output Preview</h3>
         <p className="text-slate-500 dark:text-slate-400 text-sm max-w-xs">
-          အသံဖိုင်နှင့် စာတန်းထိုးများကို ဤနေရာတွင် ကြည့်ရှုနိုင်ပါမည်။
+          Generated audio and subtitles will appear here after you click generate.
         </p>
       </div>
     );
   }
 
   return (
-    <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800/50 rounded-[32px] p-8 sm:p-10 shadow-xl space-y-8 transition-colors duration-300">
-      <div className="flex flex-col items-center text-center mb-4 border-b border-slate-200/50 dark:border-slate-800/50 pb-6">
-        <div className="w-12 h-12 bg-brand-purple/10 text-brand-purple rounded-xl flex items-center justify-center mb-2 border border-brand-purple/20 shadow-[0_0_15px_rgba(168,85,247,0.3)]">
-          <Music size={24} />
+    <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-[32px] p-8 sm:p-10 shadow-xl space-y-8 transition-colors duration-300">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <h2 className="text-2xl font-bold flex items-center gap-3 text-slate-900 dark:text-white">
+          <Music className="text-brand-purple" size={24} />
+          Output Preview
+        </h2>
+        <div className="px-4 py-1.5 bg-brand-purple/10 text-brand-purple rounded-full text-xs font-bold uppercase tracking-wider w-fit">
+          Ready to Download
         </div>
-        <h2 className="text-xl font-bold text-slate-900 dark:text-white font-mono tracking-tighter uppercase">ရလဒ်များကို ကြည့်ရှုရန်</h2>
       </div>
 
       <div className="space-y-8">
@@ -241,7 +244,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading,
               </div>
               
               {/* Timestamps */}
-              <div className="flex items-center justify-between w-full px-1 font-mono">
+              <div className="flex items-center justify-between w-full px-1">
                 <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
                   {formatDisplayTime(currentTime)}
                 </span>
@@ -288,8 +291,8 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading,
         <div className="space-y-6">
           {/* Subtitle Preview Box */}
           <div className="space-y-3">
-            <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2 font-mono">
-              <FileText size={14} /> စာတန်းထိုး အချက်အလက်များ (SRT)
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+              <FileText size={14} /> Subtitle Preview (SRT)
             </h3>
             <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 h-40 overflow-y-auto custom-scrollbar shadow-inner">
               <pre className="text-[11px] sm:text-xs font-mono text-slate-600 dark:text-slate-400 whitespace-pre-wrap leading-relaxed">
@@ -302,17 +305,17 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading,
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <button
               onClick={() => fetch(result.audioUrl).then(r => r.blob()).then(b => downloadFile(b, 'vlogs-by-saw-audio.mp3'))}
-              className="flex items-center justify-center gap-3 py-4 bg-brand-purple/10 text-brand-purple rounded-2xl font-bold hover:bg-brand-purple hover:text-white transition-all border border-brand-purple/20 group font-mono uppercase tracking-widest hover:shadow-[0_0_20px_rgba(168,85,247,0.4)] btn-pulse"
+              className="flex items-center justify-center gap-3 py-4 bg-brand-purple/10 text-brand-purple rounded-2xl font-bold hover:bg-brand-purple hover:text-white transition-all border border-brand-purple/20 group"
             >
               <Music size={20} className="group-hover:scale-110 transition-transform" />
-              MP3 ဒေါင်းလုဒ်လုပ်ရန်
+              Download MP3
             </button>
             <button
               onClick={() => downloadFile(result.srtContent, 'vlogs-by-saw-subs.srt')}
-              className="flex items-center justify-center gap-3 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all border border-slate-200 dark:border-slate-700 group font-mono uppercase tracking-widest hover:shadow-[0_0_20px_rgba(100,116,139,0.2)] btn-pulse"
+              className="flex items-center justify-center gap-3 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all border border-slate-200 dark:border-slate-700 group"
             >
               <FileText size={20} className="group-hover:scale-110 transition-transform" />
-              SRT ဒေါင်းလုဒ်လုပ်ရန်
+              Download SRT
             </button>
           </div>
         </div>

@@ -112,8 +112,8 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
                   <Key size={20} />
                 </div>
                 <div>
-                  <h2 className="text-xl font-bold text-slate-900 dark:text-white font-mono uppercase tracking-tighter">ဆက်တင်များ</h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 font-medium uppercase tracking-wider font-mono">API CONFIGURATION</p>
+                  <h2 className="text-xl font-bold text-slate-900 dark:text-white">ဆက်တင်များ (Settings)</h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 font-medium uppercase tracking-wider">API Configuration</p>
                 </div>
               </div>
               <button 
@@ -128,29 +128,29 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
             <div className="p-8 space-y-6">
               {/* API Switch */}
               <div className="space-y-3">
-                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 px-1 font-mono uppercase tracking-widest">
-                  API Key အမျိုးအစား ရွေးချယ်ပါ
+                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 px-1">
+                  API Key အမျိုးအစား ရွေးချယ်ပါ (Select API Type)
                 </label>
                 <div className="grid grid-cols-2 gap-3 p-1 bg-slate-100 dark:bg-slate-950 rounded-2xl border border-slate-200 dark:border-slate-800">
                   <button
                     onClick={() => setApiSwitch('admin')}
-                    className={`py-3 rounded-xl text-sm font-bold transition-all font-mono uppercase tracking-widest ${
+                    className={`py-3 rounded-xl text-sm font-bold transition-all ${
                       apiSwitch === 'admin' 
-                        ? 'bg-brand-purple text-white shadow-lg shadow-brand-purple/20' 
+                        ? 'bg-brand-purple text-white shadow-lg' 
                         : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
                     }`}
                   >
-                    စနစ်သုံး (Free)
+                    Admin Key (Free)
                   </button>
                   <button
                     onClick={() => setApiSwitch('personal')}
-                    className={`py-3 rounded-xl text-sm font-bold transition-all font-mono uppercase tracking-widest ${
+                    className={`py-3 rounded-xl text-sm font-bold transition-all ${
                       apiSwitch === 'personal' 
-                        ? 'bg-brand-purple text-white shadow-lg shadow-brand-purple/20' 
+                        ? 'bg-brand-purple text-white shadow-lg' 
                         : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
                     }`}
                   >
-                    ကိုယ်ပိုင် Key
+                    Personal API Key
                   </button>
                 </div>
               </div>
@@ -161,15 +161,15 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
                   animate={{ opacity: 1, height: 'auto' }}
                   className="space-y-3 overflow-hidden"
                 >
-                  <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 px-1 font-mono uppercase tracking-widest">
-                    သင်၏ API Key ကို ဤနေရာတွင် ထည့်ပါ
+                  <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 px-1">
+                    သင်၏ API Key ကို ဤနေရာတွင် ထည့်ပါ (Google AI Studio API Key)
                   </label>
                   <div className="relative group">
                     <input
                       type={showKey ? "text" : "password"}
                       value={apiKey}
                       onChange={(e) => setApiKey(e.target.value)}
-                      placeholder="AIza... ဖြင့် စသော Key ကို ထည့်ပါ"
+                      placeholder="Paste your API Key here (starts with AIza...)"
                       className={`w-full bg-slate-50 dark:bg-slate-950 border rounded-2xl px-6 py-4 text-lg font-mono transition-all pr-14 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 text-slate-900 dark:text-white placeholder:text-slate-400 ${
                         !apiKey.trim() 
                           ? 'border-red-500/50' 
@@ -189,9 +189,9 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
                     href="https://aistudio.google.com/app/apikey" 
                     target="_blank" 
                     rel="noopener noreferrer"
-                    className="flex items-center gap-2 text-xs font-bold text-brand-purple hover:underline px-1 w-fit group font-mono uppercase tracking-widest"
+                    className="flex items-center gap-2 text-xs font-bold text-brand-purple hover:underline px-1 w-fit group"
                   >
-                    API Key မရှိသေးပါက ဤနေရာတွင် ရယူပါ
+                    How to get a free API Key?
                     <ExternalLink size={12} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
                   </a>
                 </motion.div>
@@ -199,8 +199,8 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
 
               {apiSwitch === 'admin' && (
                 <div className="p-4 bg-brand-purple/5 border border-brand-purple/10 rounded-2xl">
-                  <p className="text-xs text-brand-purple font-medium leading-relaxed font-mono uppercase tracking-tight">
-                    စနစ်သုံး Key ကို အသုံးပြုပါက အခမဲ့ အသုံးပြုနိုင်ပါသည်။
+                  <p className="text-xs text-brand-purple font-medium leading-relaxed">
+                    Admin Key ကို အသုံးပြုပါက အခမဲ့ အသုံးပြုနိုင်ပါသည်။ (Using Admin Key allows free usage of the narration engine.)
                   </p>
                 </div>
               )}
@@ -216,9 +216,9 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
                   }`}
                 >
                   {validationStatus === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-                  <span className="text-sm font-bold font-mono uppercase tracking-tight">
+                  <span className="text-sm font-bold">
                     {validationStatus === 'success' 
-                      ? 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။' 
+                      ? 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ Website ကို ပြန်ဖွင့်ပါမည်။ (Settings saved. Reloading page...)' 
                       : errorMessage}
                   </span>
                 </motion.div>
@@ -228,22 +228,22 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
                 {onClear && initialKey && (
                   <button
                     onClick={handleClear}
-                    className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold text-lg transition-all hover:bg-red-500/10 hover:text-red-500 active:scale-[0.98] font-mono uppercase tracking-widest"
+                    className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold text-lg transition-all hover:bg-red-500/10 hover:text-red-500 active:scale-[0.98]"
                   >
-                    ဖျက်မည်
+                    ဖျက်မည် (Clear Key)
                   </button>
                 )}
                 <button
                   onClick={handleSaveAndTest}
                   disabled={isValidating}
-                  className={`${onClear && initialKey ? 'flex-[2]' : 'w-full'} py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg shadow-xl shadow-brand-purple/20 flex items-center justify-center gap-3 transition-all hover:bg-brand-purple/90 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed font-mono uppercase tracking-widest btn-pulse`}
+                  className={`${onClear && initialKey ? 'flex-[2]' : 'w-full'} py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg shadow-xl shadow-brand-purple/20 flex items-center justify-center gap-3 transition-all hover:bg-brand-purple/90 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
                   {isValidating ? (
                     <RefreshCw size={22} className="animate-spin" />
                   ) : (
                     <Save size={22} />
                   )}
-                  သိမ်းဆည်းမည်
+                  သိမ်းဆည်းမည် (Save & Test)
                 </button>
               </div>
             </div>

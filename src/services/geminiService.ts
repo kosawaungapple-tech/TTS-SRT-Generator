@@ -251,45 +251,4 @@ export class GeminiTTSService {
 
     return subtitles;
   }
-
-  async generateRecap(transcript: string): Promise<{ title: string; content: string }> {
-    if (!this.apiKey) {
-      console.warn("Gemini Service: API Key missing, returning mock recap");
-      return {
-        title: "Movie Recap",
-        content: "ဒီဗီဒီယိုဟာ ရုပ်ရှင်ဇာတ်လမ်းတစ်ပုဒ်ရဲ့ အကျဉ်းချုပ်ဖြစ်ပါတယ်။ ဇာတ်လမ်းအစမှာ မင်းသားဟာ သူ့ရဲ့ ရည်မှန်းချက်တွေကို အကောင်အထည်ဖော်ဖို့ ကြိုးစားခဲ့ပါတယ်။ ဒါပေမယ့် အခက်အခဲတွေ အများကြီးနဲ့ ရင်ဆိုင်ခဲ့ရပါတယ်။ နောက်ဆုံးမှာတော့ သူဟာ အောင်မြင်မှု ရရှိသွားခဲ့ပါတယ်။"
-      };
-    }
-
-    try {
-      console.log("Gemini Service: Generating recap...");
-      const prompt = `You are a professional cinematic movie recap narrator. 
-      Summarize the following English transcript into a high-fidelity, engaging, and dramatic Burmese narrative script.
-      The output should be suitable for a movie recap video.
-      
-      Transcript:
-      ${transcript}
-      
-      Output Format:
-      Title: [Cinematic Title]
-      Content: [Burmese Recap Content]`;
-
-      const response = await this.ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [{ parts: [{ text: prompt }] }]
-      });
-
-      const text = response.text || "";
-      const titleMatch = text.match(/Title:\s*(.+)/i);
-      const contentMatch = text.match(/Content:\s*([\s\S]+)/i);
-
-      return {
-        title: titleMatch ? titleMatch[1].trim() : "Movie Recap (Burmese)",
-        content: contentMatch ? contentMatch[1].trim() : text
-      };
-    } catch (error) {
-      console.error("Gemini Service: Recap generation failed:", error);
-      throw error;
-    }
-  }
 }

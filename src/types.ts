@@ -15,7 +15,6 @@ export interface AuthorizedUser {
   createdAt: any; // Firestore Timestamp
   isActive: boolean;
   role: 'admin' | 'user';
-  expiryDate?: string; // ISO Date String
   note?: string; // Optional name/label
   label?: string; // Alias for note
   api_key_stored?: string;
@@ -36,10 +35,6 @@ export interface SystemConfig {
   firebase_app_id: string;
   telegram_bot_token: string;
   telegram_chat_id: string;
-  rapidapi_key?: string;
-  gemini_api_key?: string;
-  openai_api_key?: string;
-  system_live?: boolean;
   mock_mode?: boolean;
   updatedAt?: any;
 }

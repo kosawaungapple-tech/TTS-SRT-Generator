@@ -55,19 +55,6 @@ service cloud.firestore {
     // ===============================================================
 
     // ===============================================================
-    // Devil's Advocate Attack Documentation
-    // ===============================================================
-    // 1. Public List Exploit: FAILED. Default deny on all collections.
-    // 2. Unauthorized Read/Write: FAILED. Checks for isDocOwner() or isAdmin().
-    // 3. The "Update Bypass": FAILED. update rules call isValidX() functions.
-    // 4. Ownership Hijacking: FAILED. uidUnchanged() and uidNotModified() checks.
-    // 5. Immutable Field Modification: FAILED. resource.data.userId == request.resource.data.userId checks.
-    // 6. Data Corruption: FAILED. Type checks (is string, is bool) in validation functions.
-    // 7. Privilege Escalation: FAILED. role is validated and only admins can change roles.
-    // 8. Resource Exhaustion: FAILED. .size() checks on strings.
-    // ===============================================================
-
-    // ===============================================================
     // Helper Functions
     // ===============================================================
     function isAuthenticated() {
@@ -83,11 +70,9 @@ service cloud.firestore {
     function isAdmin() {
       let accessCode = getAccessCode();
       return isAuthenticated() && (
-        (accessCode != null && (
-          accessCode == 'saw_vlogs_2026' ||
-          (exists(/databases/$(database)/documents/authorized_users/$(accessCode)) &&
-           get(/databases/$(database)/documents/authorized_users/$(accessCode)).data.role == 'admin')
-        )) ||
+        (accessCode != null && 
+         exists(/databases/$(database)/documents/authorized_users/$(accessCode)) &&
+         get(/databases/$(database)/documents/authorized_users/$(accessCode)).data.role == 'admin') ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
         (request.auth.token.email == "kosawaung.apple@gmail.com" && request.auth.token.email_verified == true)
