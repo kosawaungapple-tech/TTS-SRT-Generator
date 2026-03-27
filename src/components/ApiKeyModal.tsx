@@ -6,13 +6,22 @@ import { GeminiTTSService } from '../services/geminiService';
 interface ApiKeyModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (key: string) => void;
+  onSave: (key: string, apiSwitch: 'admin' | 'personal') => void;
   onClear?: () => void;
   initialKey?: string;
+  initialSwitch?: 'admin' | 'personal';
 }
 
-export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSave, onClear, initialKey = '' }) => {
+export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ 
+  isOpen, 
+  onClose, 
+  onSave, 
+  onClear, 
+  initialKey = '',
+  initialSwitch = 'admin'
+}) => {
   const [apiKey, setApiKey] = useState(initialKey);
+  const [apiSwitch, setApiSwitch] = useState<'admin' | 'personal'>(initialSwitch);
   const [showKey, setShowKey] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [validationStatus, setValidationStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -21,10 +30,11 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
   useEffect(() => {
     if (isOpen) {
       setApiKey(initialKey);
+      setApiSwitch(initialSwitch);
       setValidationStatus('idle');
       setErrorMessage('');
     }
-  }, [isOpen, initialKey]);
+  }, [isOpen, initialKey, initialSwitch]);
 
   const handleClear = () => {
     if (onClear) {
@@ -35,12 +45,20 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
   };
 
   const handleSaveAndTest = async () => {
-    if (!apiKey.trim()) {
+    // If Admin Key is selected, we don't need to validate the input key here 
+    // as it uses the system key. We just save the preference.
+    if (apiSwitch === 'admin') {
       setValidationStatus('success');
-      onSave('');
+      onSave(apiKey.trim(), 'admin');
       setTimeout(() => {
         onClose();
       }, 1500);
+      return;
+    }
+
+    if (!apiKey.trim()) {
+      setValidationStatus('error');
+      setErrorMessage('ကျေးဇူးပြု၍ API Key ထည့်သွင်းပါ။ (Please enter an API Key).');
       return;
     }
 
@@ -53,7 +71,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
       
       if (result.isValid) {
         setValidationStatus('success');
-        onSave(apiKey.trim());
+        onSave(apiKey.trim(), 'personal');
         setTimeout(() => {
           onClose();
         }, 1500);
@@ -94,8 +112,8 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
                   <Key size={20} />
                 </div>
                 <div>
-                  <h2 className="text-xl font-bold text-slate-900 dark:text-white">ဆက်တင်များ (Settings)</h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 font-medium uppercase tracking-wider">API Configuration</p>
+                  <h2 className="text-xl font-bold text-slate-900 dark:text-white font-mono uppercase tracking-tighter">ဆက်တင်များ</h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 font-medium uppercase tracking-wider font-mono">API CONFIGURATION</p>
                 </div>
               </div>
               <button 
@@ -108,41 +126,84 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
 
             {/* Content */}
             <div className="p-8 space-y-6">
+              {/* API Switch */}
               <div className="space-y-3">
-                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 px-1">
-                  သင်၏ API Key ကို ဤနေရာတွင် ထည့်ပါ (Google AI Studio API Key)
+                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 px-1 font-mono uppercase tracking-widest">
+                  API Key အမျိုးအစား ရွေးချယ်ပါ
                 </label>
-                <div className="relative group">
-                  <input
-                    type={showKey ? "text" : "password"}
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="Paste your API Key here (starts with AIza...)"
-                    className={`w-full bg-slate-50 dark:bg-slate-950 border rounded-2xl px-6 py-4 text-lg font-mono transition-all pr-14 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 text-slate-900 dark:text-white placeholder:text-slate-400 ${
-                      !apiKey.trim() 
-                        ? 'border-red-500/50' 
-                        : 'border-slate-200 dark:border-slate-800'
-                    }`}
-                  />
+                <div className="grid grid-cols-2 gap-3 p-1 bg-slate-100 dark:bg-slate-950 rounded-2xl border border-slate-200 dark:border-slate-800">
                   <button
-                    type="button"
-                    onClick={() => setShowKey(!showKey)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-brand-purple transition-colors"
+                    onClick={() => setApiSwitch('admin')}
+                    className={`py-3 rounded-xl text-sm font-bold transition-all font-mono uppercase tracking-widest ${
+                      apiSwitch === 'admin' 
+                        ? 'bg-brand-purple text-white shadow-lg shadow-brand-purple/20' 
+                        : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                    }`}
                   >
-                    {showKey ? <EyeOff size={20} /> : <Eye size={20} />}
+                    စနစ်သုံး (Free)
+                  </button>
+                  <button
+                    onClick={() => setApiSwitch('personal')}
+                    className={`py-3 rounded-xl text-sm font-bold transition-all font-mono uppercase tracking-widest ${
+                      apiSwitch === 'personal' 
+                        ? 'bg-brand-purple text-white shadow-lg shadow-brand-purple/20' 
+                        : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    ကိုယ်ပိုင် Key
                   </button>
                 </div>
-                
-                <a 
-                  href="https://aistudio.google.com/app/apikey" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2 text-xs font-bold text-brand-purple hover:underline px-1 w-fit group"
-                >
-                  How to get a free API Key?
-                  <ExternalLink size={12} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-                </a>
               </div>
+
+              {apiSwitch === 'personal' && (
+                <motion.div 
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  className="space-y-3 overflow-hidden"
+                >
+                  <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 px-1 font-mono uppercase tracking-widest">
+                    သင်၏ API Key ကို ဤနေရာတွင် ထည့်ပါ
+                  </label>
+                  <div className="relative group">
+                    <input
+                      type={showKey ? "text" : "password"}
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      placeholder="AIza... ဖြင့် စသော Key ကို ထည့်ပါ"
+                      className={`w-full bg-slate-50 dark:bg-slate-950 border rounded-2xl px-6 py-4 text-lg font-mono transition-all pr-14 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 text-slate-900 dark:text-white placeholder:text-slate-400 ${
+                        !apiKey.trim() 
+                          ? 'border-red-500/50' 
+                          : 'border-slate-200 dark:border-slate-800'
+                      }`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowKey(!showKey)}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-brand-purple transition-colors"
+                    >
+                      {showKey ? <EyeOff size={20} /> : <Eye size={20} />}
+                    </button>
+                  </div>
+                  
+                  <a 
+                    href="https://aistudio.google.com/app/apikey" 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-xs font-bold text-brand-purple hover:underline px-1 w-fit group font-mono uppercase tracking-widest"
+                  >
+                    API Key မရှိသေးပါက ဤနေရာတွင် ရယူပါ
+                    <ExternalLink size={12} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                  </a>
+                </motion.div>
+              )}
+
+              {apiSwitch === 'admin' && (
+                <div className="p-4 bg-brand-purple/5 border border-brand-purple/10 rounded-2xl">
+                  <p className="text-xs text-brand-purple font-medium leading-relaxed font-mono uppercase tracking-tight">
+                    စနစ်သုံး Key ကို အသုံးပြုပါက အခမဲ့ အသုံးပြုနိုင်ပါသည်။
+                  </p>
+                </div>
+              )}
 
               {validationStatus !== 'idle' && (
                 <motion.div
@@ -155,9 +216,9 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
                   }`}
                 >
                   {validationStatus === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-                  <span className="text-sm font-bold">
+                  <span className="text-sm font-bold font-mono uppercase tracking-tight">
                     {validationStatus === 'success' 
-                      ? 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ Website ကို ပြန်ဖွင့်ပါမည်။ (Settings saved. Reloading page...)' 
+                      ? 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။' 
                       : errorMessage}
                   </span>
                 </motion.div>
@@ -167,22 +228,22 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
                 {onClear && initialKey && (
                   <button
                     onClick={handleClear}
-                    className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold text-lg transition-all hover:bg-red-500/10 hover:text-red-500 active:scale-[0.98]"
+                    className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold text-lg transition-all hover:bg-red-500/10 hover:text-red-500 active:scale-[0.98] font-mono uppercase tracking-widest"
                   >
-                    ဖျက်မည် (Clear Key)
+                    ဖျက်မည်
                   </button>
                 )}
                 <button
                   onClick={handleSaveAndTest}
                   disabled={isValidating}
-                  className={`${onClear && initialKey ? 'flex-[2]' : 'w-full'} py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg shadow-xl shadow-brand-purple/20 flex items-center justify-center gap-3 transition-all hover:bg-brand-purple/90 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed`}
+                  className={`${onClear && initialKey ? 'flex-[2]' : 'w-full'} py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg shadow-xl shadow-brand-purple/20 flex items-center justify-center gap-3 transition-all hover:bg-brand-purple/90 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed font-mono uppercase tracking-widest btn-pulse`}
                 >
                   {isValidating ? (
                     <RefreshCw size={22} className="animate-spin" />
                   ) : (
                     <Save size={22} />
                   )}
-                  သိမ်းဆည်းမည် (Save & Test)
+                  သိမ်းဆည်းမည်
                 </button>
               </div>
             </div>

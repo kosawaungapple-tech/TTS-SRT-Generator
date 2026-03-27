@@ -46,51 +46,169 @@ async function startServer() {
     res.json({ status: "ok", message: "Server is healthy" });
   });
 
-  // Telegram Notification Endpoint
-  app.post("/api/notify-activation", authenticate, async (req, res) => {
-    const { email, displayName } = req.body;
-    
-    let botToken = process.env.TELEGRAM_BOT_TOKEN;
-    let chatId = process.env.TELEGRAM_CHAT_ID;
-
-    // Try to get from Firestore if not in env
-    try {
-      const systemConfigDoc = await db.collection('system_config').doc('main').get();
-      if (systemConfigDoc.exists) {
-        const data = systemConfigDoc.data();
-        if (data?.telegram_bot_token) botToken = data.telegram_bot_token;
-        if (data?.telegram_chat_id) chatId = data.telegram_chat_id;
-      }
-    } catch (err) {
-      console.error("Error fetching system config from Firestore:", err);
+  // YouTube Transcript Endpoint
+  app.get("/api/youtube-transcript", async (req, res) => {
+    const videoUrl = req.query.url as string;
+    if (!videoUrl) {
+      return res.status(400).json({ error: "Missing video URL" });
     }
 
-    if (!botToken || !chatId) {
-      console.warn("Telegram configuration missing. Skipping notification.");
-      return res.status(200).json({ success: true, message: "Notification skipped (config missing)" });
+    const extractVideoId = (url: string) => {
+      const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/i;
+      const match = url.match(regex);
+      return match ? match[1] : null;
+    };
+
+    const videoId = extractVideoId(videoUrl);
+    if (!videoId) {
+      return res.status(400).json({ error: "Invalid YouTube URL" });
     }
 
-    const message = `🔔 *New Activation Request*\n\nUser: ${email}\nName: ${displayName}\nTime: ${new Date().toLocaleString()}`;
-    
     try {
-      const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: message,
-          parse_mode: 'Markdown'
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`Telegram API error: ${response.statusText}`);
+      console.log("YouTube Transcript: Fetching real data for", videoId);
+      
+      let transcript;
+      
+      // Method 1: Try youtube-transcript library
+      try {
+        const pkg = await import('youtube-transcript');
+        const YoutubeTranscript = pkg.YoutubeTranscript || (pkg as any).default;
+        
+        if (YoutubeTranscript && typeof YoutubeTranscript.fetchTranscript === 'function') {
+          transcript = await YoutubeTranscript.fetchTranscript(videoId, { lang: 'en' });
+        }
+      } catch (e) {
+        console.warn("YouTube Transcript: Library method failed, trying scraping fallback...");
       }
 
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error sending Telegram notification:", error);
-      res.status(500).json({ error: "Failed to send notification" });
+      // Method 2: Scraping Fallback (Manual fetch and parse)
+      if (!transcript || transcript.length === 0) {
+        try {
+          const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+          const userAgents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36'
+          ];
+          const randomUA = userAgents[Math.floor(Math.random() * userAgents.length)];
+          
+          // Try direct fetch first
+          let response = await fetch(watchUrl, {
+            headers: {
+              'User-Agent': randomUA,
+              'Accept-Language': 'en-US,en;q=0.9'
+            }
+          });
+
+          let html = '';
+          let usedProxy = false;
+
+          // If direct fetch is blocked (403/429), try proxies
+          if (!response.ok) {
+            console.warn(`YouTube Transcript: Direct fetch failed (${response.status}), trying AllOrigins proxy...`);
+            const proxies = [
+              `https://api.allorigins.win/get?url=${encodeURIComponent(watchUrl)}`,
+              `https://corsproxy.io/?${encodeURIComponent(watchUrl)}`
+            ];
+
+            for (const proxyUrl of proxies) {
+              try {
+                const proxyRes = await fetch(proxyUrl);
+                if (proxyRes.ok) {
+                  if (proxyUrl.includes('allorigins')) {
+                    const proxyData = await proxyRes.json();
+                    html = proxyData.contents;
+                  } else {
+                    html = await proxyRes.text();
+                  }
+                  if (html) {
+                    usedProxy = true;
+                    break;
+                  }
+                }
+              } catch (pErr) {
+                console.warn(`Proxy ${proxyUrl} failed:`, pErr);
+              }
+            }
+          } else {
+            html = await response.text();
+          }
+
+          if (html) {
+            transcript = await parseTranscriptFromHtml(html, usedProxy);
+          }
+        } catch (scrapeError) {
+          console.error("YouTube Transcript: Scraping fallback failed:", scrapeError);
+        }
+      }
+
+      async function parseTranscriptFromHtml(html: string, useProxy: boolean) {
+        const regex = /ytInitialPlayerResponse\s*=\s*({.+?});/s;
+        const match = html.match(regex);
+        if (match) {
+          const playerResponse = JSON.parse(match[1]);
+          const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+          
+          if (tracks && tracks.length > 0) {
+            const track = tracks.find((t: any) => t.languageCode === 'en') || 
+                          tracks.find((t: any) => t.languageCode === 'en-US') ||
+                          tracks.find((t: any) => t.languageCode.startsWith('en')) ||
+                          tracks[0];
+            
+            let transcriptUrl = track.baseUrl;
+            let xmlResponse;
+
+            if (useProxy) {
+              const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(transcriptUrl)}`;
+              const pRes = await fetch(proxyUrl);
+              if (pRes.ok) {
+                const pData = await pRes.json();
+                xmlResponse = pData.contents;
+              }
+            }
+
+            if (!xmlResponse) {
+              const res = await fetch(transcriptUrl);
+              xmlResponse = await res.text();
+            }
+            
+            if (xmlResponse) {
+              const textRegex = /<text start="([\d.]+)" dur="([\d.]+)".*?>(.*?)<\/text>/g;
+              const results = [];
+              let m;
+              while ((m = textRegex.exec(xmlResponse)) !== null) {
+                results.push({
+                  text: m[3]
+                    .replace(/&amp;/g, '&')
+                    .replace(/&lt;/g, '<')
+                    .replace(/&gt;/g, '>')
+                    .replace(/&quot;/g, '"')
+                    .replace(/&#39;/g, "'")
+                    .replace(/&nbsp;/g, ' '),
+                  offset: parseFloat(m[1]) * 1000,
+                  duration: parseFloat(m[2]) * 1000
+                });
+              }
+              return results;
+            }
+          }
+        }
+        return null;
+      }
+
+      // Wait for the promise if parseTranscriptFromHtml returned one
+      if (transcript instanceof Promise) {
+        transcript = await transcript;
+      }
+
+      if (!transcript || transcript.length === 0) {
+        return res.status(404).json({ error: "No transcript found for this video. Please ensure the video has English captions enabled." });
+      }
+
+      res.json({ transcript });
+    } catch (error: any) {
+      console.error("YouTube Transcript Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch transcript" });
     }
   });
 

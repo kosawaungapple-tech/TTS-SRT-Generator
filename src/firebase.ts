@@ -4,37 +4,7 @@ import { initializeFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, getDoc
 import { getStorage, ref, uploadBytes, getDownloadURL, uploadString } from 'firebase/storage';
 
 // Import the Firebase configuration
-import defaultFirebaseConfig from '../firebase-applet-config.json';
-
-// Dynamic configuration logic
-const getFirebaseConfig = () => {
-  const savedConfig = localStorage.getItem('vbs_system_config');
-  if (savedConfig) {
-    try {
-      const parsed = JSON.parse(savedConfig);
-      // Only use saved config if it doesn't contain placeholder "remixed" values
-      const isPlaceholder = (val: string) => !val || val.includes('remixed-') || val.includes('TODO_');
-      
-      if (!isPlaceholder(parsed.firebase_project_id) && !isPlaceholder(parsed.firebase_api_key)) {
-        return {
-          apiKey: parsed.firebase_api_key,
-          authDomain: parsed.firebase_auth_domain,
-          projectId: parsed.firebase_project_id,
-          appId: parsed.firebase_app_id,
-          firestoreDatabaseId: defaultFirebaseConfig.firestoreDatabaseId
-        };
-      } else {
-        console.warn('Saved Firebase config contains placeholders, falling back to default.');
-        localStorage.removeItem('vbs_system_config');
-      }
-    } catch (e) {
-      console.error('Failed to parse saved firebase config', e);
-    }
-  }
-  return defaultFirebaseConfig;
-};
-
-const firebaseConfig = getFirebaseConfig();
+import firebaseConfig from '../firebase-applet-config.json';
 
 // Initialize Firebase SDK
 const app = initializeApp(firebaseConfig);
@@ -42,6 +12,8 @@ const app = initializeApp(firebaseConfig);
 // Use initializeFirestore with long polling to bypass potential WebSocket blocks in the preview environment
 export const db = initializeFirestore(app, {
   experimentalForceLongPolling: true,
+  host: "firestore.googleapis.com",
+  ssl: true,
 }, firebaseConfig.firestoreDatabaseId);
 
 export const auth = getAuth(app);

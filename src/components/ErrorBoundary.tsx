@@ -1,67 +1,86 @@
-import * as React from 'react';
+import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 
-export class ErrorBoundary extends React.Component<any, any> {
-  constructor(props: any) {
+interface Props {
+  children: ReactNode;
+}
+
+interface State {
+  hasError: boolean;
+  error: Error | null;
+}
+
+export class ErrorBoundary extends React.Component<Props, State> {
+  constructor(props: Props) {
     super(props);
-    (this as any).state = { hasError: false, error: null };
+    this.state = {
+      hasError: false,
+      error: null,
+    };
   }
 
-  static getDerivedStateFromError(error: any) {
+  public static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: any, errorInfo: any) {
+  public componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error('Uncaught error:', error, errorInfo);
   }
 
-  handleReset = () => {
-    (this as any).setState({ hasError: false, error: null });
+  private handleReset = () => {
+    this.setState({ hasError: false, error: null });
     window.location.reload();
   };
 
-  render() {
-    const { hasError, error } = (this as any).state;
-    if (hasError) {
-      let errorMessage = 'An unexpected error occurred.';
+  public render() {
+    if (this.state.hasError) {
+      let errorMessage = 'စနစ်တွင် အမှားတစ်ခု ဖြစ်ပေါ်နေပါသည်။';
       let errorDetail = '';
 
       try {
-        if (error?.message) {
-          const parsed = JSON.parse(error.message);
-          if (parsed.error) {
-            errorMessage = 'Firestore Permission Error';
-            errorDetail = `Operation: ${parsed.operationType} on path: ${parsed.path}. Error: ${parsed.error}`;
+        if (this.state.error?.message) {
+          const parsedError = JSON.parse(this.state.error.message);
+          if (parsedError.error === 'Missing or insufficient permissions.') {
+            errorMessage = 'ခွင့်ပြုချက် မရှိပါ။ ကျေးဇူးပြု၍ ပြန်လည်ဝင်ရောက်ကြည့်ပါ။';
+            errorDetail = `Operation: ${parsedError.operationType} on ${parsedError.path}`;
+          } else {
+            errorDetail = parsedError.error || this.state.error.message;
           }
         }
       } catch (e) {
-        errorMessage = error?.message || errorMessage;
+        errorDetail = this.state.error?.message || 'Unknown error';
       }
 
       return (
-        <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-slate-50 dark:bg-[#020617] text-slate-900 dark:text-white transition-colors duration-300">
-          <div className="w-full max-w-md bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-3xl p-8 shadow-2xl text-center">
-            <div className="w-16 h-16 bg-red-500/10 text-red-500 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-red-500/20">
-              <AlertCircle size={32} />
+        <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-4 font-sans">
+          <div className="max-w-md w-full bg-white dark:bg-slate-900 rounded-3xl p-8 shadow-2xl border border-slate-200 dark:border-slate-800 text-center space-y-6">
+            <div className="w-20 h-20 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center mx-auto border border-red-500/20 shadow-[0_0_20px_rgba(239,68,68,0.2)]">
+              <AlertCircle size={40} strokeWidth={1.5} />
             </div>
             
-            <h2 className="text-2xl font-bold mb-2">{errorMessage}</h2>
-            <p className="text-slate-500 dark:text-slate-400 text-sm mb-8">
-              {errorDetail || 'Something went wrong while loading the application. Please try refreshing the page.'}
-            </p>
+            <div className="space-y-2">
+              <h1 className="text-2xl font-bold text-slate-900 dark:text-white">{errorMessage}</h1>
+              <p className="text-slate-500 dark:text-slate-400 text-sm font-mono break-all">{errorDetail}</p>
+            </div>
 
             <button
               onClick={this.handleReset}
-              className="w-full py-4 bg-brand-purple text-white rounded-2xl font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20 flex items-center justify-center gap-2"
+              className="w-full py-4 bg-brand-purple hover:bg-brand-purple/90 text-white rounded-2xl font-bold flex items-center justify-center gap-3 transition-all active:scale-95 shadow-lg shadow-brand-purple/30"
             >
               <RefreshCw size={20} />
-              Refresh Application
+              ပြန်လည်စတင်မည်
             </button>
+            
+            <p className="text-[10px] text-slate-400 dark:text-slate-500 font-mono uppercase tracking-widest">
+              System Error Recovery Protocol
+            </p>
           </div>
         </div>
       );
     }
 
-    return (this as any).props.children;
+    return this.props.children;
   }
 }
+
+export default ErrorBoundary;
