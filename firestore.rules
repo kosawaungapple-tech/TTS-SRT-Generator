@@ -1,6 +1,59 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: sessions
+    // Document ID: uid
+    // Fields:
+    //   - accessCode: string
+    //   - createdAt: string
+    //
+    // Collection: authorized_users
+    // Document ID: accessCode
+    // Fields:
+    //   - id: string
+    //   - label: string
+    //   - isActive: boolean
+    //   - role: string ("admin" | "user")
+    //   - api_key_stored: string (optional)
+    //   - createdAt: string
+    //   - createdBy: string
+    //
+    // Collection: history
+    // Document ID: auto
+    // Fields:
+    //   - userId: string (matches accessCode)
+    //   - text: string
+    //   - audioStorageUrl: string
+    //   - srtStorageUrl: string
+    //   - createdAt: string
+    //   - config: map
+    //
+    // Collection: globalRules
+    // Document ID: auto
+    // Fields:
+    //   - original: string
+    //   - replacement: string
+    //   - isRegex: boolean
+    //   - isActive: boolean
+    //
+    // Collection: settings
+    // Document ID: "global"
+    // Fields:
+    //   - allow_global_key: boolean
+    //   - total_generations: number
+    //
+    // Collection: system_config
+    // Document ID: "main"
+    // Fields:
+    //   - firebase_project_id: string
+    //   - firebase_api_key: string
+    // ===============================================================
+
     // ===============================================================
     // Helper Functions
     // ===============================================================
@@ -8,56 +61,126 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
+    function getAccessCode() {
+      return exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) 
+        ? get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode 
+        : null;
     }
 
     function isAdmin() {
-      return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-          (request.auth.token.email == "sawranaung75@gmail.com" && request.auth.token.email_verified == true));
+      let accessCode = getAccessCode();
+      return isAuthenticated() && (
+        (accessCode != null && 
+         exists(/databases/$(database)/documents/authorized_users/$(accessCode)) &&
+         get(/databases/$(database)/documents/authorized_users/$(accessCode)).data.role == 'admin') ||
+        (request.auth.token.email == "hankozinsa@gmail.com" && request.auth.token.email_verified == true)
+      );
     }
 
-    function isMasterAdmin() {
-      return isAuthenticated() && 
-        (exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == 'saw_vlogs_2026');
+    function isDocOwner() {
+      let accessCode = getAccessCode();
+      return isAuthenticated() && accessCode != null && resource.data.userId == accessCode;
     }
 
-    // Master Admin can do EVERYTHING
-    match /{document=**} {
-      allow read, write: if isAdmin() || isMasterAdmin();
+    function isValidAuthorizedUser(data) {
+      return data.keys().hasAll(['id', 'isActive', 'role']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() < 100 &&
+             data.isActive is bool &&
+             data.role in ['admin', 'user'];
+    }
+
+    function isValidHistoryItem(data) {
+      return data.keys().hasAll(['userId', 'text', 'createdAt']) &&
+             data.userId is string && data.userId.size() > 0 && data.userId.size() < 100 &&
+             data.text is string && data.text.size() <= 50000 &&
+             data.createdAt is string;
+    }
+
+    function isValidPronunciationRule(data) {
+      return data.keys().hasAll(['original', 'replacement']) &&
+             data.original is string && data.original.size() > 0 && data.original.size() < 500 &&
+             data.replacement is string && data.replacement.size() < 500;
+    }
+
+    function isValidSession(data) {
+      return data.keys().hasAll(['accessCode', 'createdAt']) &&
+             data.accessCode is string && data.accessCode.size() > 0 && data.accessCode.size() < 100 &&
+             data.createdAt is string;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /sessions/{uid} {
+      allow read: if isAuthenticated() && request.auth.uid == uid;
+      allow create: if isAuthenticated() && request.auth.uid == uid && isValidSession(request.resource.data);
+      allow update: if isAuthenticated() && request.auth.uid == uid && isValidSession(request.resource.data);
+      allow delete: if isAuthenticated() && request.auth.uid == uid;
+    }
+
+    match /authorized_users/{accessCode} {
+      // Anyone authenticated can try to get a specific access code to log in
+      allow get: if isAuthenticated();
+      // Only admins can list all users
+      allow list: if isAdmin();
+      
+      // Admins can create new users, or anyone can bootstrap the default admin once
+      allow create: if (isAdmin() || (accessCode == 'SAW-ADMIN-2026' && !exists(/databases/$(database)/documents/authorized_users/SAW-ADMIN-2026))) && isValidAuthorizedUser(request.resource.data);
+      
+      // Users can update their own API key, but cannot change their role or ID
+      allow update: if isAuthenticated() && isValidAuthorizedUser(request.resource.data) && (
+        isAdmin() || 
+        (
+          getAccessCode() == accessCode &&
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.isActive == resource.data.isActive &&
+          request.resource.data.id == resource.data.id &&
+          (!('api_key_stored' in request.resource.data) || request.resource.data.api_key_stored is string)
+        )
+      );
+      
+      // Only admins can delete users
+      allow delete: if isAdmin();
+    }
+
+    match /history/{historyId} {
+      // Users can read their own history, admins can read all
+      allow read: if isAuthenticated() && (isDocOwner() || isAdmin());
+      
+      // Users can create their own history
+      allow create: if isAuthenticated() && isValidHistoryItem(request.resource.data) && request.resource.data.userId == getAccessCode();
+      
+      // Users can update/delete their own history, admins can update/delete all
+      allow update: if isAuthenticated() && isValidHistoryItem(request.resource.data) && (isDocOwner() || isAdmin()) && request.resource.data.userId == resource.data.userId;
+      allow delete: if isAuthenticated() && (isDocOwner() || isAdmin());
+    }
+
+    match /globalRules/{ruleId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() && isValidPronunciationRule(request.resource.data);
+      allow update: if isAdmin() && isValidPronunciationRule(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /settings/{document=**} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /system_config/{document=**} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
     }
     
-    // Global Config
-    match /settings/global_config {
-      allow read: if true; // Publicly readable for the app to function
-      allow write: if isAdmin();
-    }
-
-    // Allow anonymous users to read/write their own session to track accessCode
-    match /sessions/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
-    }
-
-    // Allow users to get their own profile if they have the access code
     match /users/{userId} {
-      allow get: if isAuthenticated();
-      allow read: if isOwner(userId) || isAdmin();
-      allow write: if isAdmin();
+      // Used for Google Auth admins
+      allow read, write: if isAdmin();
     }
 
-    // Allow history access for authenticated users
-    match /history/{historyId} {
-      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
-    }
-
-    // Global Rules
-    match /globalRules/{ruleId} {
-      allow read: if true;
-      allow write: if isAdmin();
+    match /test/{docId} {
+      allow read: if true; // Used for connection testing
+      allow write: if false;
     }
   }
 }

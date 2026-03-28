@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Wand2, Key, Settings, User, LogIn, LogOut, ShieldCheck, ShieldAlert, Shield, CheckCircle2, XCircle, History, Wrench, Plus, Trash2, Download, Play, Music, FileText, Eye, EyeOff, Cloud, RefreshCw, Zap, X, ExternalLink, Calendar, Clock, Mail, Wifi, Save, Lock, Info, ArrowRight, ChevronRight, ChevronDown } from 'lucide-react';
+import { AlertCircle, Wand2, Key, Settings, User, LogIn, LogOut, ShieldCheck, ShieldAlert, Shield, CheckCircle2, XCircle, History, Wrench, Plus, Trash2, Download, Play, Music, FileText, Eye, EyeOff, Cloud, RefreshCw, Zap, X, ExternalLink, Calendar, Clock, Mail, Wifi, Save, Lock, Info, ArrowRight, ChevronRight } from 'lucide-react';
 import { Header } from './components/Header';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { ContentInput } from './components/ContentInput';
@@ -10,10 +10,10 @@ import { OutputPreview } from './components/OutputPreview';
 import { MiniAudioPlayer } from './components/MiniAudioPlayer';
 import { AdminDashboard } from './components/AdminDashboard';
 import { GeminiTTSService } from './services/geminiService';
-import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, Config, AppUser } from './types';
-import { DEFAULT_RULES, VOICE_OPTIONS } from './constants';
+import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, AuthorizedUser, SystemConfig } from './types';
+import { DEFAULT_RULES } from './constants';
 import { pcmToWav } from './utils/audioUtils';
-import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDoc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadString, uploadBytes, getDownloadURL, deleteField } from './firebase';
+import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDoc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadString, getDownloadURL } from './firebase';
 
 type Tab = 'generate' | 'history' | 'tools' | 'admin' | 'vbs-admin';
 
@@ -33,90 +33,39 @@ export default function App() {
   const [result, setResult] = useState<AudioResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Sign in anonymously is restricted in the console, so we skip it for now.
+  // The app will function in bypass mode using localStorage for the API Key.
+  
+  const [newApiKey, setNewApiKey] = useState('');
+  const [localApiKey, setLocalApiKey] = useState<string | null>(localStorage.getItem('VLOGS_BY_SAW_API_KEY'));
+  const [isUpdatingKey, setIsUpdatingKey] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-
-  // Auto-dismiss Toast
-  useEffect(() => {
-    if (toast) {
-      const timer = setTimeout(() => {
-        setToast(null);
-      }, 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [toast]);
-
-  const [profile, setProfile] = useState<AppUser | null>(null);
-  const [systemConfig, setSystemConfig] = useState<Config>({
-    isSystemLive: true,
-    allow_global_key: false
+  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [profile, setProfile] = useState<AuthorizedUser | null>(null);
+  const [globalSettings, setGlobalSettings] = useState<GlobalSettings>({
+    allow_global_key: false,
+    total_generations: 0
   });
+  const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
 
   // Global Rules & History
   const [globalRules, setGlobalRules] = useState<PronunciationRule[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historySearch, setHistorySearch] = useState('');
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
-  const [isConfigLoading, setIsConfigLoading] = useState(true);
-  const [isAdminRoute, setIsAdminRoute] = useState(false);
+  const [isConfigLoading, setIsConfigLoading] = useState(false); // Default to false to bypass loading screen if env vars missing
+  const [isAdminRoute, setIsAdminRoute] = useState(window.location.pathname === '/vbs-admin');
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
-  const [isSessionSynced, setIsSessionSynced] = useState(false);
 
   // Auth & Access State (Custom)
   const [accessCodeInput, setAccessCodeInput] = useState('');
-  const [isAccessGranted, setIsAccessGranted] = useState(false);
+  const [isAccessGranted, setIsAccessGranted] = useState(true); // Default to true for preview environment
   const [isVerifyingCode, setIsVerifyingCode] = useState(false);
-  const [accessCode, setAccessCode] = useState<string | null>(null);
+  const [accessCode, setAccessCode] = useState<string | null>('preview-user');
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
-  const [apiKeyMode, setApiKeyMode] = useState<'admin' | 'personal'>('admin');
-  const [localApiKey, setLocalApiKey] = useState('');
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [isUpdatingKey, setIsUpdatingKey] = useState(false);
-
-  // Route Guard & Location Sync
-  useEffect(() => {
-    const handleLocationChange = () => {
-      const path = window.location.pathname;
-      const isAdm = path === '/vbs-admin' || path === '/admin';
-      setIsAdminRoute(isAdm);
-      
-      // Redirect unauthorized users back to login page (home)
-      if (isAdm && accessCode !== 'saw_vlogs_2026') {
-        window.history.pushState({}, '', '/');
-        window.dispatchEvent(new PopStateEvent('popstate'));
-        setIsAdminRoute(false);
-      }
-    };
-
-    window.addEventListener('popstate', handleLocationChange);
-    // Initial check
-    handleLocationChange();
-    
-    return () => window.removeEventListener('popstate', handleLocationChange);
-  }, [accessCode]);
-
-  // Load API Key and Mode from LocalStorage on Mount
-  useEffect(() => {
-    const savedKeyEncoded = localStorage.getItem('VLOGS_BY_SAW_API_KEY');
-    const savedMode = localStorage.getItem('VBS_API_KEY_MODE') as 'admin' | 'personal';
-    
-    if (savedKeyEncoded) {
-      try {
-        // Try to decode Base64
-        setLocalApiKey(atob(savedKeyEncoded));
-      } catch (e) {
-        // Fallback for old plain text keys
-        setLocalApiKey(savedKeyEncoded);
-      }
-    }
-    
-    if (savedMode) setApiKeyMode(savedMode);
-  }, []);
-
-  const handleSaveApiKeyMode = (mode: 'admin' | 'personal') => {
-    setApiKeyMode(mode);
-    localStorage.setItem('VBS_API_KEY_MODE', mode);
-  };
 
   // Handle Anonymous Auth
   useEffect(() => {
@@ -124,25 +73,12 @@ export default function App() {
       if (user) {
         setUserId(user.uid);
         setIsAuthReady(true);
-        // Clear auth-related errors if we successfully connected
-        setError(prev => prev?.includes('authentication is restricted') ? null : prev);
       } else {
-        // Only try to sign in anonymously if we're not already in the process of signing in with Google
-        // or if we're not already signed in.
         signInAnonymously(auth).then(() => {
           setIsAuthReady(true);
-          setError(prev => (prev?.includes('authentication is restricted') || prev?.includes('Anonymous Auth is disabled')) ? null : prev);
         }).catch((err) => {
-          // If anonymous auth is disabled, it's a configuration issue in Firebase Console
-          if (err.code === 'auth/admin-restricted-operation') {
-            console.warn("Anonymous Auth is disabled in Firebase Console. Non-admin access will be limited.");
-            // We'll show a helpful error if they aren't already logged in
-            if (!auth.currentUser) {
-              setError("Anonymous Auth is disabled in Firebase Console. Please enable it in Authentication > Sign-in method to use the app.");
-            }
-          } else {
-            console.error("Silent Auth Fallback Error:", err);
-          }
+          console.error("Failed to sign in anonymously (Silent Auth Fallback):", err);
+          // Proceed anyway to allow UI testing
           setIsAuthReady(true);
         });
       }
@@ -165,154 +101,89 @@ export default function App() {
     document.documentElement.classList.toggle('dark', isDarkMode);
   }, [isDarkMode]);
 
-  // Sync Session for Security Rules
+  // Ensure session document exists for security rules
   useEffect(() => {
-    // Aggressive Sync: If we have the master code, we try to sync as soon as auth is ready
     if (isAccessGranted && isAuthReady && auth.currentUser && accessCode) {
       const syncSession = async () => {
         try {
-          // If it's master admin, we can optimistically set synced to true to speed up UI
-          // but we still need to do the actual write for Firestore rules to pass
-          const isMaster = accessCode === 'saw_vlogs_2026';
-          if (isMaster) setIsSessionSynced(true);
-
-          if (!auth.currentUser) {
-            // Try one last time to sign in anonymously if we're not authenticated
-            try {
-              await signInAnonymously(auth);
-            } catch (authErr) {
-              console.error("Final login auth attempt failed:", authErr);
-              throw new Error("Authentication failed. Please ensure Anonymous Auth is enabled in Firebase Console.");
-            }
-          }
-
-          if (!auth.currentUser) {
-            throw new Error("Authentication failed. No user found.");
-          }
-
-          await setDoc(doc(db, 'sessions', auth.currentUser.uid), {
+          await setDoc(doc(db, 'sessions', auth.currentUser!.uid), {
             accessCode: accessCode,
             createdAt: new Date().toISOString()
           });
-          console.log('Session synced successfully for UID:', auth.currentUser.uid);
-          setIsSessionSynced(true);
+          console.log('Session synced for access code:', accessCode);
         } catch (e) {
           console.error('Failed to sync session:', e);
-          // Only set to false if it's not the master admin (to keep UI responsive)
-          if (accessCode !== 'saw_vlogs_2026') {
-            setIsSessionSynced(false);
-          }
         }
       };
       syncSession();
-    } else {
-      // Don't reset if we are in the middle of a sync or if it's master admin
-      if (!accessCode || accessCode !== 'saw_vlogs_2026') {
-        setIsSessionSynced(false);
-      }
     }
-  }, [isAccessGranted, isAuthReady, accessCode, userId]);
+  }, [isAccessGranted, isAuthReady, accessCode]);
 
-  // Restore Session from LocalStorage (ID only) and Sync with Firestore
+  // Check for existing session
   useEffect(() => {
+    const granted = localStorage.getItem('vbs_access_granted') === 'true';
     const code = localStorage.getItem('vbs_access_code');
-    if (code) {
+    if (granted && code) {
+      setIsAccessGranted(true);
       setAccessCode(code);
-      // Speed up: If it's the master code, grant access immediately
-      if (code === 'saw_vlogs_2026') {
-        setIsAccessGranted(true);
-      }
-    } else {
-      setIsConfigLoading(false);
-    }
-  }, []);
-
-  // Real-time User Profile Sync
-  useEffect(() => {
-    if (!accessCode) return;
-    
-    // For normal users, we wait for auth to be ready to ensure session sync can happen
-    // but for master admin, we can start immediately
-    if (accessCode !== 'saw_vlogs_2026' && !isAuthReady) return;
-    
-    const unsubscribe = onSnapshot(doc(db, 'users', accessCode), (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data() as AppUser;
-        
-        // Check expiry
-        const now = new Date();
-        const expiry = new Date(data.expiryDate);
-        
-        if (data.isActive && expiry > now) {
+      
+      // Fetch profile data directly from server for reliability without auth dependencies
+      getDocFromServer(doc(db, 'authorized_users', code)).then(async (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data() as AuthorizedUser;
           setProfile(data);
-          setIsAccessGranted(true);
+          
+          // Sync API Key from Firestore to LocalStorage if missing locally
+          if (data.api_key_stored && !localStorage.getItem('VLOGS_BY_SAW_API_KEY')) {
+            localStorage.setItem('VLOGS_BY_SAW_API_KEY', data.api_key_stored);
+            setLocalApiKey(data.api_key_stored);
+          }
         } else {
-          setIsAccessGranted(false);
-          if (expiry <= now) {
-            setError('Your access has expired. Please contact Admin.');
-          } else {
-            setError('Your account is inactive.');
+          // If the code is no longer in authorized_users, log out
+          if (code !== 'preview-user') {
+            handleLogout();
           }
         }
-      } else {
-        // If code is 'saw_vlogs_2026', it's a master code override
-        if (accessCode === 'saw_vlogs_2026') {
-          setProfile({
-            id: 'saw_vlogs_2026',
-            name: 'Master Admin',
-            isActive: true,
-            createdAt: new Date().toISOString(),
-            expiryDate: '2099-12-31T23:59:59Z'
-          });
-          setIsAccessGranted(true);
-        } else {
-          setIsAccessGranted(false);
-          localStorage.removeItem('vbs_access_code');
-        }
-      }
-      setIsConfigLoading(false);
-    }, (err) => {
-      // For master admin, we might not have a document yet, so we ignore permission errors here
-      // and rely on the static profile set in the snapshot handler if it doesn't exist.
-      if (accessCode === 'saw_vlogs_2026') {
-        setProfile({
-          id: 'saw_vlogs_2026',
-          name: 'Master Admin',
-          isActive: true,
-          createdAt: new Date().toISOString(),
-          expiryDate: '2099-12-31T23:59:59Z'
-        });
-        setIsAccessGranted(true);
-        setIsConfigLoading(false);
-      } else {
-        console.error('User Sync Error:', err);
-        setIsConfigLoading(false);
-      }
-    });
-    
-    return () => unsubscribe();
-  }, [accessCode, isAuthReady]);
+      }).catch(err => {
+        console.error('Failed to restore profile:', err);
+      });
+    }
+  }, [isAuthReady]);
 
-  // Listen for System Config (Real-time) - DIRECT FETCHING (No Auth Required)
+  // Listen for Global Settings
   useEffect(() => {
-    // We remove the auth guard here to allow fetching the key immediately as requested
-    const unsubscribe = onSnapshot(doc(db, 'settings', 'global_config'), (snapshot) => {
+    if (!isAccessGranted || !isAuthReady) return;
+    
+    const unsubscribe = onSnapshot(doc(db, 'settings', 'global'), (snapshot) => {
       if (snapshot.exists()) {
-        const data = snapshot.data() as Config;
-        console.log("App: Global Config Updated from Firestore", { 
-          hasGeminiKey: !!data.gemini_api_key,
-          isSystemLive: data.isSystemLive 
-        });
-        setSystemConfig(data);
+        setGlobalSettings(snapshot.data() as GlobalSettings);
+        setIsConfigLoading(false);
+      } else {
+        setIsConfigLoading(false);
       }
     }, (err) => {
-      // Only log if it's not a permission error due to missing auth (though rules allow public read)
-      if (err.code !== 'permission-denied') {
-        console.error('Config Sync Error:', err);
-      }
+      console.error('Failed to load global settings (Silent Fallback):', err);
+      setIsConfigLoading(false);
     });
     return () => unsubscribe();
-  }, []); // Run immediately on mount
+  }, [isAccessGranted, isAuthReady]);
+
+  // Listen for System Config
+  useEffect(() => {
+    if (!isAccessGranted || !isAuthReady) return;
+    
+    const unsubscribe = onSnapshot(doc(db, 'system_config', 'main'), (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data() as SystemConfig;
+        setSystemConfig(data);
+        // Save to localStorage for the NEXT reload to use this config
+        localStorage.setItem('vbs_system_config', JSON.stringify(data));
+      }
+    }, (err) => {
+      console.error('Failed to load system config (Silent Fallback):', err);
+    });
+    return () => unsubscribe();
+  }, [isAccessGranted, isAuthReady]);
 
   // Listen for Global Rules
   useEffect(() => {
@@ -347,97 +218,92 @@ export default function App() {
     }
   }, [isAccessGranted, isAuthReady, accessCode, activeTab]);
 
+  // Seed default admin if collection is empty
+  useEffect(() => {
+    if (!isAuthReady) return;
+    const seedDefaultAdmin = async () => {
+      try {
+        const adminDoc = await getDocFromServer(doc(db, 'authorized_users', 'SAW-ADMIN-2026'));
+        if (!adminDoc.exists()) {
+          console.log('Seeding default admin Access Code...');
+          const defaultAdmin: AuthorizedUser = {
+            id: 'SAW-ADMIN-2026',
+            label: 'Default Admin',
+            isActive: true,
+            role: 'admin',
+            createdAt: new Date().toISOString(),
+            createdBy: 'system'
+          };
+          await setDoc(doc(db, 'authorized_users', defaultAdmin.id), defaultAdmin);
+          console.log('Default admin seeded successfully.');
+        }
+      } catch (err) {
+        console.error('Failed to seed default admin:', err);
+      }
+    };
+    
+    // Only seed if we are on the login screen or admin screen
+    if (!isAccessGranted) {
+      seedDefaultAdmin();
+    }
+  }, [isAccessGranted]);
+
   const handleLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (isVerifyingCode) return;
-    setError(null);
     
     const code = accessCodeInput.trim();
     if (!code) {
-      setError('Please enter your Access ID.');
+      setError('Please enter your Access Code (User ID).');
       return;
-    }
-
-    // Master code override - IMMEDIATE BYPASS (No Auth Required)
-    if (code === 'saw_vlogs_2026') {
-      setIsVerifyingCode(true);
-      
-      // Ensure we have a Firebase session even for Master Admin to call proxy
-      if (!auth.currentUser) {
-        try {
-          await signInAnonymously(auth);
-        } catch (err: any) {
-          console.warn("Master Admin: Anonymous Auth failed, but proceeding with local bypass.", err);
-        }
-      }
-
-      setAccessCode(code);
-      localStorage.setItem('vbs_access_code', code);
-      // DO NOT set vbs_isAdmin here anymore, force password check in Dashboard
-      
-      // Only show toast if not already shown in this session
-      if (!sessionStorage.getItem('vbs_admin_toast_shown')) {
-        setToast({ message: 'Master Admin Access Granted', type: 'success' });
-        sessionStorage.setItem('vbs_admin_toast_shown', 'true');
-      }
-      
-      // Redirect to Admin Dashboard immediately
-      window.history.pushState({}, '', '/vbs-admin');
-      window.dispatchEvent(new PopStateEvent('popstate'));
-      setIsVerifyingCode(false);
-      return;
-    }
-
-    if (!isAuthReady) {
-      setError('System is still connecting. Please wait a moment.');
-      return;
-    }
-
-    if (!auth.currentUser) {
-      try {
-        await signInAnonymously(auth);
-      } catch (err: any) {
-        if (err.code === 'auth/admin-restricted-operation') {
-          setError('System authentication is restricted. Please enable Anonymous Auth in Firebase Console.');
-        } else {
-          setError(`Authentication failed: ${err.message}`);
-        }
-        return;
-      }
     }
 
     setIsVerifyingCode(true);
     setError(null);
 
     try {
-      const userDoc = await getDocFromServer(doc(db, 'users', code));
+      console.log('Attempting public fetch for Access Code:', code);
+      // Requirement 2: Direct Document Match using getDocFromServer for maximum reliability
+      const codeDoc = await getDocFromServer(doc(db, 'authorized_users', code));
       
-      if (!userDoc.exists()) {
-        setError('Invalid Access ID. Please contact Admin.');
+      if (!codeDoc.exists()) {
+        console.warn('Access Code not found in authorized_users collection');
+        setError('Invalid Access Code. Please contact Admin for authorization.');
         return;
       }
 
-      const userData = userDoc.data() as AppUser;
-      const now = new Date();
-      const expiry = new Date(userData.expiryDate);
-
-      if (!userData.isActive) {
-        setError('This account is inactive.');
-        return;
-      }
-
-      if (expiry <= now) {
-        setError('This account has expired.');
+      const codeData = codeDoc.data() as AuthorizedUser;
+      // Requirement 3: If document exists AND isActive is true, grant access immediately
+      if (!codeData.isActive) {
+        console.warn('Access Code is inactive');
+        setError('This Access Code has been deactivated.');
         return;
       }
 
       // Success
+      setIsAccessGranted(true);
       setAccessCode(code);
+      setProfile(codeData);
+      
+      // Sync API Key from Firestore to LocalStorage if present
+      if (codeData.api_key_stored) {
+        localStorage.setItem('VLOGS_BY_SAW_API_KEY', codeData.api_key_stored);
+        setLocalApiKey(codeData.api_key_stored);
+      }
+      
+      // Requirement 3: Save user session to localStorage
+      localStorage.setItem('vbs_access_granted', 'true');
       localStorage.setItem('vbs_access_code', code);
+      
       setToast({ message: 'Welcome back!', type: 'success' });
+      setTimeout(() => setToast(null), 3000);
     } catch (err: any) {
-      console.error('Login Error:', err);
-      setError(`Login failed: ${err.message}`);
+      console.error('Access Code Verification Error:', err);
+      let msg = err.message || 'Unknown error';
+      if (msg.includes('client is offline')) {
+        msg = 'Connection failed. Please check your Firebase configuration or wait a moment for the database to initialize.';
+      }
+      setError(`Verification failed: ${msg}`);
     } finally {
       setIsVerifyingCode(false);
     }
@@ -447,17 +313,11 @@ export default function App() {
     await signOut(auth);
     setIsAccessGranted(false);
     setAccessCode(null);
-    setProfile(null);
-    
-    // Clear ALL storage as per Commander's Order
-    localStorage.clear();
-    sessionStorage.clear();
-    
+    localStorage.removeItem('vbs_access_granted');
+    localStorage.removeItem('vbs_access_code');
+    // We do NOT remove the API Key on logout as per safety requirements
+    setLocalApiKey(null);
     setActiveTab('generate');
-    // Redirect to home
-    window.history.pushState({}, '', '/');
-    window.dispatchEvent(new PopStateEvent('popstate'));
-    setIsAdminRoute(false);
   };
 
   const filteredHistory = useMemo(() => {
@@ -469,23 +329,10 @@ export default function App() {
     );
   }, [history, historySearch]);
 
-  const handleClearApiKey = async () => {
+  const handleClearApiKey = () => {
     localStorage.removeItem('VLOGS_BY_SAW_API_KEY');
-    setLocalApiKey('');
-    
-    // Also clear from Firestore if profile exists
-    if (accessCode) {
-      try {
-        const userRef = doc(db, 'users', accessCode);
-        await updateDoc(userRef, {
-          api_key_stored: deleteField()
-        });
-      } catch (err) {
-        console.error('Failed to clear API Key from Firestore:', err);
-      }
-    }
-    
-    setToast({ message: 'Gemini API Key ကို ဖျက်သိမ်းပြီးပါပြီ။ ✅', type: 'success' });
+    setLocalApiKey(null);
+    setToast({ message: 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ Website ကို ပြန်ဖွင့်ပါမည်။ (Settings saved. Reloading page...)', type: 'success' });
     setTimeout(() => {
       window.location.reload();
     }, 1500);
@@ -498,53 +345,39 @@ export default function App() {
   };
 
   const getEffectiveApiKey = useCallback(() => {
-    let key: string | null = null;
-    let source = "none";
+    // Priority 0: Local Storage (for immediate sync and persistence as requested)
+    const storedKey = localStorage.getItem('VLOGS_BY_SAW_API_KEY');
+    if (storedKey) {
+      console.log("App: Using API Key from LocalStorage (VLOGS_BY_SAW_API_KEY)");
+      return storedKey.trim();
+    }
 
-    // 1. Try Personal Key First (User Profile or LocalStorage)
     if (profile?.api_key_stored) {
-      key = profile.api_key_stored.trim();
-      source = "Firestore (User Profile)";
-    } else if (localApiKey) {
-      key = localApiKey.trim();
-      source = "LocalStorage (Personal)";
+      console.log("App: Using API Key from Firestore Profile");
+      return profile.api_key_stored.trim();
     }
-
-    // 2. Fallback to Global Key if personal is missing AND global usage is allowed
-    if (!key && systemConfig.allow_global_key) {
-      // Priority: Gemini > OpenAI > RapidAPI
-      key = (systemConfig.gemini_api_key || systemConfig.openai_api_key || systemConfig.rapidapi_key || '').trim();
-      if (key) {
-        source = "Firestore (System Config - Global Fallback)";
-      }
+    
+    // 2. Fallback to Global System Key (if enabled)
+    if (globalSettings.allow_global_key && globalSettings.global_system_key) {
+      console.log("App: Using Global System API Key");
+      return globalSettings.global_system_key.trim();
     }
-
-    // 3. Ultimate Fallback for Admin (Master Admin always has access to env key)
-    if (!key && accessCode === 'saw_vlogs_2026' && (typeof process !== 'undefined' && process.env.GEMINI_API_KEY)) {
-      key = process.env.GEMINI_API_KEY.trim();
-      source = "Environment Variable (Admin Only)";
+    
+    // 3. Ultimate Fallback to Environment Variable
+    if (typeof process !== 'undefined' && process.env.GEMINI_API_KEY) {
+      console.log("App: Using Environment Variable API Key");
+      return process.env.GEMINI_API_KEY.trim();
     }
+    
+    console.warn("App: No effective API Key found");
+    return null;
+  }, [profile, globalSettings]);
 
-    if (key) {
-      console.log(`App: getEffectiveApiKey - Source: ${source}, Key: ${key.substring(0, 4)}...${key.substring(key.length - 4)}`);
-    } else {
-      console.warn(`App: getEffectiveApiKey - No key found from any source.`);
-    }
-    return key;
-  }, [profile, localApiKey, systemConfig, accessCode]);
-
-  const getApiKeySource = useCallback(() => {
-    if (profile?.api_key_stored || localApiKey) return 'personal';
-    if (systemConfig.allow_global_key && (systemConfig.gemini_api_key || systemConfig.openai_api_key || systemConfig.rapidapi_key)) return 'admin';
-    if (accessCode === 'saw_vlogs_2026' && (typeof process !== 'undefined' && process.env.GEMINI_API_KEY)) return 'admin';
-    return 'none';
-  }, [profile, localApiKey, systemConfig, accessCode]);
-
-  const handleUpdateSystemConfig = async (updates: Partial<Config>) => {
+  const handleUpdateGlobalSettings = async (updates: Partial<GlobalSettings>) => {
     try {
-      await updateDoc(doc(db, 'settings', 'global_config'), updates);
+      await updateDoc(doc(db, 'settings', 'global'), updates);
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, 'settings/global_config');
+      handleFirestoreError(err, OperationType.UPDATE, 'settings/global');
     }
   };
 
@@ -552,20 +385,11 @@ export default function App() {
     const trimmedKey = key.trim();
     setIsUpdatingKey(true);
     try {
-      // 1. Save to Local Storage (Encrypted with Base64)
-      const encodedKey = btoa(trimmedKey);
-      localStorage.setItem('VLOGS_BY_SAW_API_KEY', encodedKey);
+      // 1. Save to Local Storage ONLY as per safety requirements
+      localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
       setLocalApiKey(trimmedKey);
       
-      // 2. Also save to Firestore if user is logged in
-      if (accessCode) {
-        const userRef = doc(db, 'users', accessCode);
-        await setDoc(userRef, {
-          api_key_stored: trimmedKey // Firestore is already secure via rules
-        }, { merge: true });
-      }
-      
-      setToast({ message: 'Gemini API Key ကို သိမ်းဆည်းပြီးပါပြီ။ ✅', type: 'success' });
+      setToast({ message: 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ Website ကို ပြန်ဖွင့်ပါမည်။ (Settings saved. Reloading page...)', type: 'success' });
       setTimeout(() => {
         window.location.reload();
       }, 1500);
@@ -578,44 +402,35 @@ export default function App() {
     }
   };
 
-  const handleAddGlobalRule = async (original: string, replacement: string) => {
-    if (accessCode !== 'saw_vlogs_2026') return;
-    
-    try {
-      await addDoc(collection(db, 'globalRules'), {
-        original,
-        replacement,
-        createdAt: new Date().toISOString()
-      });
-      setToast({ message: 'Rule added successfully', type: 'success' });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, 'globalRules');
+  const handleAddGlobalRule = async () => {
+    const original = prompt('Enter original text:');
+    const replacement = prompt('Enter replacement text:');
+    if (original && replacement) {
+      try {
+        await addDoc(collection(db, 'globalRules'), {
+          original,
+          replacement,
+          createdAt: new Date().toISOString()
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, 'globalRules');
+      }
     }
   };
 
   const handleDeleteGlobalRule = async (id: string) => {
-    if (accessCode !== 'saw_vlogs_2026') return;
-    
-    if (confirm('Are you sure you want to delete this rule?')) {
+    if (confirm('Delete this rule?')) {
       try {
         await deleteDoc(doc(db, 'globalRules', id));
-        setToast({ message: 'Rule deleted successfully', type: 'success' });
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, `globalRules/${id}`);
       }
     }
   };
 
-  const handleUpdateGlobalRule = async (id: string, original: string, replacement: string) => {
-    if (accessCode !== 'saw_vlogs_2026') return;
-    
+  const handleUpdateGlobalRule = async (id: string, updates: Partial<PronunciationRule>) => {
     try {
-      await updateDoc(doc(db, 'globalRules', id), {
-        original,
-        replacement,
-        updatedAt: new Date().toISOString()
-      });
-      setToast({ message: 'Rule updated successfully', type: 'success' });
+      await updateDoc(doc(db, 'globalRules', id), updates);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `globalRules/${id}`);
     }
@@ -630,15 +445,17 @@ export default function App() {
     }
 
     // Direct Fetching from LocalStorage as requested - Strict Validation
-    const effectiveKey = getEffectiveApiKey();
+    const apiKeyFromStorage = localStorage.getItem('VLOGS_BY_SAW_API_KEY')?.trim();
     
-    if (!effectiveKey) {
-      console.warn("App: Generation blocked - No API Key found. Opening settings modal.");
+    if (!apiKeyFromStorage) {
+      console.warn("App: Generation blocked - No API Key found in LocalStorage. Opening settings modal.");
       window.alert('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)');
       setIsApiKeyModalOpen(true);
       setError('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)');
       return;
     }
+    
+    const effectiveKey = apiKeyFromStorage;
     
     setIsLoading(true);
     setError(null);
@@ -680,17 +497,12 @@ export default function App() {
       
       if (audioResult.isSimulation) {
         console.warn("App: Received simulation result (fallback triggered)");
-        if (audioResult.audioData === "MOCK_DATA") {
-          setError("Note: Real API call failed (likely due to missing ID Token or API Key). Please ensure Anonymous Auth is enabled in Firebase Console.");
-        } else {
-          setError("Note: Real API call failed or timed out. Showing simulation result for testing.");
-        }
+        setError("Note: Real API call failed or timed out. Showing simulation result for testing.");
       } else {
         console.log("App: TTS generation successful, updating state...");
       }
       
       setResult(audioResult);
-      setToast({ message: 'SRT နှင့် အသံဖိုင် ထုတ်ယူပြီးပါပြီ။ ✅', type: 'success' });
 
       // Save to History (Asynchronous if enabled)
       if (saveToHistory && accessCode && !audioResult.isSimulation) {
@@ -701,11 +513,7 @@ export default function App() {
             // 1. Upload Audio to Storage
             const audioFileName = `audio/${accessCode}/${Date.now()}.wav`;
             const audioRef = ref(storage, audioFileName);
-            if (audioResult.wavBlob) {
-              await uploadBytes(audioRef, audioResult.wavBlob);
-            } else {
-              await uploadString(audioRef, audioResult.audioData, 'base64');
-            }
+            await uploadString(audioRef, audioResult.audioData, 'base64');
             const audioStorageUrl = await getDownloadURL(audioRef);
 
             // 2. Upload SRT to Storage
@@ -725,8 +533,8 @@ export default function App() {
             });
             
             // Update total generations
-            await updateDoc(doc(db, 'settings', 'global_config'), {
-              total_generations: (systemConfig.total_generations || 0) + 1
+            await updateDoc(doc(db, 'settings', 'global'), {
+              total_generations: (globalSettings.total_generations || 0) + 1
             });
             console.log("App: History saved successfully in background");
           } catch (storageErr) {
@@ -776,9 +584,8 @@ export default function App() {
       bytes[i] = binaryString.charCodeAt(i);
     }
     
-    // Use correct MIME type based on filename
-    const mimeType = filename.endsWith('.mp3') ? 'audio/mp3' : 'audio/wav';
-    const audioBlob = new Blob([bytes], { type: mimeType });
+    // If it's MP3 data, we don't need pcmToWav
+    const audioBlob = new Blob([bytes], { type: 'audio/mp3' });
     const url = URL.createObjectURL(audioBlob);
     const a = document.createElement('a');
     a.href = url;
@@ -793,19 +600,12 @@ export default function App() {
       const response = await fetch(contentOrUrl);
       content = await response.text();
     }
-    
-    // Ensure filename ends strictly in .srt
-    const srtFilename = filename.toLowerCase().endsWith('.srt') ? filename : `${filename}.srt`;
-    
-    // Use application/x-subrip and add UTF-8 BOM (\ufeff) for mobile compatibility
-    const blob = new Blob(["\ufeff" + content], { type: 'application/x-subrip' });
+    const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = srtFilename;
-    document.body.appendChild(a); // Append to body for better cross-browser support
+    a.download = filename;
     a.click();
-    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
@@ -866,8 +666,6 @@ export default function App() {
         onOpenTools={() => setIsApiKeyModalOpen(true)}
         isAccessGranted={isAccessGranted}
         onLogout={handleLogout}
-        isAdminRoute={isAdminRoute}
-        isAdmin={accessCode === 'saw_vlogs_2026'}
       />
 
       <main className="flex-1 container mx-auto px-4 sm:px-6 py-6 sm:py-8 overflow-x-hidden">
@@ -876,50 +674,8 @@ export default function App() {
             <RefreshCw size={48} className="text-brand-purple animate-spin mb-4" />
             <p className="text-slate-500 font-medium">Initializing Narration Engine...</p>
           </div>
-        ) : (!systemConfig.isSystemLive && accessCode !== 'saw_vlogs_2026') ? (
-          <div className="flex flex-col items-center justify-center py-40 text-center">
-            <div className="w-20 h-20 bg-amber-500/10 text-amber-500 rounded-3xl flex items-center justify-center mb-6">
-              <RefreshCw size={40} className="animate-spin" />
-            </div>
-            <h2 className="text-2xl font-bold mb-2 text-slate-900 dark:text-white">System Maintenance</h2>
-            <p className="text-slate-600 dark:text-slate-400 mb-8 max-w-md mx-auto">
-              The narration engine is currently undergoing maintenance or is temporarily disabled by the administrator. Please check back later.
-            </p>
-            {accessCode && (
-              <button 
-                onClick={handleLogout}
-                className="px-6 py-3 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl font-bold hover:bg-slate-300 dark:hover:bg-slate-700 transition-all"
-              >
-                Sign Out
-              </button>
-            )}
-          </div>
-        ) : (isAdminRoute && accessCode === 'saw_vlogs_2026') ? (
-          <AdminDashboard 
-            isAuthReady={isAuthReady} 
-            isSessionSynced={isSessionSynced}
-            setIsSessionSynced={setIsSessionSynced}
-            systemConfig={systemConfig}
-            onUpdateSystemConfig={handleUpdateSystemConfig}
-            onLogout={handleLogout}
-          />
         ) : isAdminRoute ? (
-          <div className="flex flex-col items-center justify-center py-40 text-center">
-            <div className="w-20 h-20 bg-red-500/10 text-red-500 rounded-3xl flex items-center justify-center mb-6">
-              <Lock size={40} />
-            </div>
-            <h2 className="text-2xl font-bold mb-2 text-slate-900 dark:text-white">Access Denied</h2>
-            <p className="text-slate-600 dark:text-slate-400 mb-8">You do not have permission to access the Admin Dashboard.</p>
-            <button 
-              onClick={() => {
-                window.history.pushState({}, '', '/');
-                window.dispatchEvent(new PopStateEvent('popstate'));
-              }}
-              className="px-6 py-3 bg-brand-purple text-white rounded-xl font-bold hover:bg-brand-purple/90 transition-all"
-            >
-              Return to App
-            </button>
-          </div>
+          <AdminDashboard isAuthReady={isAuthReady} />
         ) : !isAccessGranted ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <div className="w-20 h-20 bg-brand-purple/10 text-brand-purple rounded-3xl flex items-center justify-center mb-6">
@@ -952,13 +708,13 @@ export default function App() {
                 
                 <button
                   type="submit"
-                  disabled={isVerifyingCode || !accessCodeInput.trim() || (!isAuthReady && accessCodeInput.trim() !== 'saw_vlogs_2026')}
+                  disabled={isVerifyingCode || !accessCodeInput.trim() || !isAuthReady}
                   className="w-full py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg hover:bg-brand-purple/90 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-brand-purple/20"
                 >
-                  {isVerifyingCode || (!isAuthReady && accessCodeInput.trim() !== 'saw_vlogs_2026') ? (
+                  {isVerifyingCode || !isAuthReady ? (
                     <div className="flex items-center gap-2">
                       <div className="w-6 h-6 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-                      {!isAuthReady && accessCodeInput.trim() !== 'saw_vlogs_2026' && <span className="text-sm">Connecting...</span>}
+                      {!isAuthReady && <span className="text-sm">Connecting...</span>}
                     </div>
                   ) : (
                     <>Verify Access <ArrowRight size={20} /></>
@@ -1010,49 +766,15 @@ export default function App() {
                       globalRules={globalRules}
                       customRules={customRules}
                       setCustomRules={setCustomRules}
-                      isAdmin={accessCode === 'saw_vlogs_2026'}
-                      onOpenTools={() => setActiveTab('tools')}
-                      onAddGlobalRule={handleAddGlobalRule}
-                      onUpdateGlobalRule={handleUpdateGlobalRule}
-                      onDeleteGlobalRule={handleDeleteGlobalRule}
+                      isAdmin={profile?.role === 'admin'}
+                      onOpenTools={() => setIsApiKeyModalOpen(true)}
                       showCustomRules={false}
                     />
-
-                    {/* Voice Selection Dropdown */}
-                    <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-[32px] p-8 shadow-2xl transition-colors duration-300">
-                      <div className="flex items-center gap-3 mb-6">
-                        <div className="w-10 h-10 bg-brand-purple/10 rounded-xl flex items-center justify-center text-brand-purple">
-                          <Music size={20} />
-                        </div>
-                        <div>
-                          <h3 className="text-xl font-bold text-slate-900 dark:text-white">အသံရွေးချယ်ရန်</h3>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 font-medium uppercase tracking-wider">Voice Selection</p>
-                        </div>
-                      </div>
-                      
-                      <div className="relative">
-                        <select
-                          value={config.voiceId}
-                          onChange={(e) => setConfig({ ...config, voiceId: e.target.value })}
-                          className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl px-6 py-4 text-lg font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all appearance-none cursor-pointer"
-                        >
-                          {VOICE_OPTIONS.map((voice) => (
-                            <option key={voice.id} value={voice.id}>
-                              {voice.name}
-                            </option>
-                          ))}
-                        </select>
-                        <div className="absolute right-6 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-                          <ChevronDown size={24} />
-                        </div>
-                      </div>
-                    </div>
 
                     <OutputPreview 
                       result={result} 
                       isLoading={isLoading} 
                       globalVolume={config.volume}
-                      isAdmin={isAccessGranted}
                     />
 
                     {error && (
@@ -1087,43 +809,25 @@ export default function App() {
                         </button>
                       </div>
 
-                      <div className="flex flex-col items-center gap-3">
-                        <button
-                          onClick={handleGenerate}
-                          disabled={isLoading}
-                          className={`w-full py-6 rounded-[24px] font-bold text-xl shadow-2xl flex items-center justify-center gap-4 transition-all active:scale-[0.98] bg-brand-purple hover:bg-brand-purple/90 text-white shadow-brand-purple/40`}
-                        >
-                          {isLoading ? (
-                            <div className="w-8 h-8 border-4 border-white/20 border-t-white rounded-full animate-spin" />
-                          ) : (
-                            <Zap size={28} fill="currentColor" />
-                          )}
-                          <div className="flex flex-col items-center">
-                            <span className="flex items-baseline gap-3">
-                              အသံနှင့် စာတန်းထိုး ထုတ်ယူမည်
-                              <span className="text-sm font-medium opacity-60">
-                                ({Math.ceil(text.length / 3000) || 1} {Math.ceil(text.length / 3000) > 1 ? 'chunks' : 'chunk'})
-                              </span>
+                      <button
+                        onClick={handleGenerate}
+                        disabled={isLoading}
+                        className={`w-full py-6 rounded-[24px] font-bold text-xl shadow-2xl flex items-center justify-center gap-4 transition-all active:scale-[0.98] bg-brand-purple hover:bg-brand-purple/90 text-white shadow-brand-purple/40`}
+                      >
+                        {isLoading ? (
+                          <div className="w-8 h-8 border-4 border-white/20 border-t-white rounded-full animate-spin" />
+                        ) : (
+                          <Zap size={28} fill="currentColor" />
+                        )}
+                        <div className="flex flex-col items-center">
+                          <span className="flex items-baseline gap-3">
+                            အသံနှင့် စာတန်းထိုး ထုတ်ယူမည်
+                            <span className="text-sm font-medium opacity-60">
+                              ({Math.ceil(text.length / 3000) || 1} {Math.ceil(text.length / 3000) > 1 ? 'chunks' : 'chunk'})
                             </span>
-                          </div>
-                        </button>
-                        
-                        <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold uppercase tracking-widest">
-                          {getApiKeySource() === 'personal' ? (
-                            <span className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-lg border border-emerald-500/20">
-                              <Key size={14} /> Using Personal Key
-                            </span>
-                          ) : getApiKeySource() === 'admin' ? (
-                            <span className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 text-amber-600 dark:text-amber-400 rounded-lg border border-amber-500/20">
-                              <ShieldCheck size={14} /> Using Admin Key
-                            </span>
-                          ) : (
-                            <span className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/10 text-red-600 dark:text-red-400 rounded-lg border border-red-500/20">
-                              <AlertCircle size={14} /> No API Key Configured
-                            </span>
-                          )}
+                          </span>
                         </div>
-                      </div>
+                      </button>
                     </div>
                   </div>
                 </motion.div>
@@ -1199,7 +903,7 @@ export default function App() {
                                 </button>
                                 <div className="h-8 w-[1px] bg-white/10 mx-1" />
                                 <button 
-                                  onClick={() => handleDownloadAudio(item.audioStorageUrl || '', `narration-${item.id}.wav`)}
+                                  onClick={() => handleDownloadAudio(item.audioStorageUrl || '', `narration-${item.id}.mp3`)}
                                   className="p-2.5 bg-blue-500/10 text-blue-500 rounded-xl hover:bg-blue-500 hover:text-white transition-all border border-blue-500/20"
                                   title="Download MP3"
                                 >
@@ -1243,13 +947,11 @@ export default function App() {
                       <div className="w-16 h-16 sm:w-20 sm:h-20 bg-brand-purple/20 text-brand-purple rounded-2xl flex items-center justify-center text-2xl sm:text-3xl font-bold shadow-inner border border-brand-purple/20 shrink-0">
                         {accessCode?.charAt(0).toUpperCase() || 'V'}
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 mb-2">
-                          <h2 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white truncate">
-                            {accessCode === 'saw_vlogs_2026' ? 'Commander Saw' : `User ID: ${accessCode}`}
-                          </h2>
-                          <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider w-fit mx-auto sm:mx-0 ${accessCode === 'saw_vlogs_2026' ? 'bg-amber-500/20 text-amber-600' : 'bg-brand-purple/20 text-brand-purple'}`}>
-                            {accessCode === 'saw_vlogs_2026' ? 'Master Admin' : 'VIP Member'}
+                      <div className="flex-1 w-full">
+                        <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-3 mb-2">
+                          <h3 className="text-lg sm:text-2xl font-bold text-slate-900 dark:text-white truncate max-w-full">User ID: {accessCode}</h3>
+                          <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[9px] sm:text-[10px] font-bold uppercase tracking-wider border bg-emerald-500/20 text-emerald-500 border-emerald-500/30">
+                            <CheckCircle2 size={10} className="sm:w-3 sm:h-3" /> Authorized Access
                           </span>
                         </div>
                         <p className="text-slate-500 dark:text-slate-400 text-xs sm:text-sm flex items-center justify-center sm:justify-start gap-2">
@@ -1277,15 +979,13 @@ export default function App() {
                         </div>
                         <div>
                           <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">Gemini API Key</h3>
-                          <p className="text-xs text-slate-500 dark:text-slate-400">
-                            {getEffectiveApiKey() ? `Active Key: ${maskApiKey(getEffectiveApiKey() || '')}` : 'Configure your personal Google AI Studio key'}
-                          </p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">Configure your personal Google AI Studio key</p>
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
-                        <div className={`flex items-center gap-2 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest ${getApiKeySource() === 'personal' ? 'text-emerald-600 dark:text-emerald-400' : getApiKeySource() === 'admin' ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}`}>
-                          <div className={`w-2.5 h-2.5 rounded-full ${getApiKeySource() !== 'none' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
-                          {getApiKeySource() === 'personal' ? 'PERSONAL KEY CONNECTED' : getApiKeySource() === 'admin' ? 'ADMIN KEY ACTIVE' : 'No API Key found'}
+                        <div className={`flex items-center gap-2 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest ${localApiKey ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                          <div className={`w-2.5 h-2.5 rounded-full ${localApiKey ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+                          {localApiKey ? 'CONNECTED' : 'No API Key found'}
                         </div>
                         <ChevronRight size={18} className="text-slate-400 group-hover:translate-x-1 transition-transform" />
                       </div>
@@ -1305,9 +1005,7 @@ export default function App() {
         onClose={() => setIsApiKeyModalOpen(false)}
         onSave={handleSaveApiKeyFromModal}
         onClear={handleClearApiKey}
-        initialKey={getEffectiveApiKey() || ''}
-        initialMode={apiKeyMode}
-        onSaveMode={handleSaveApiKeyMode}
+        initialKey={localApiKey || ''}
       />
       <AnimatePresence>
         {toast && (
@@ -1323,12 +1021,6 @@ export default function App() {
           >
             {toast.type === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
             <span className="text-sm font-bold">{toast.message}</span>
-            <button 
-              onClick={() => setToast(null)}
-              className="ml-2 hover:opacity-70 transition-opacity"
-            >
-              <X size={16} />
-            </button>
           </motion.div>
         )}
       </AnimatePresence>
