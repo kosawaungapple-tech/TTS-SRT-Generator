@@ -6,10 +6,9 @@ interface OutputPreviewProps {
   result: AudioResult | null;
   isLoading: boolean;
   globalVolume?: number;
-  isAdmin?: boolean;
 }
 
-export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading, globalVolume, isAdmin = false }) => {
+export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading, globalVolume }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -150,26 +149,13 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading,
   };
 
   const downloadFile = (content: string | Blob, fileName: string) => {
-    const isSrt = fileName.toLowerCase().endsWith('.srt');
-    let finalContent = content;
-    let mimeType = isSrt ? 'application/x-subrip' : 'text/plain';
-
-    if (isSrt && typeof content === 'string') {
-      // Add UTF-8 BOM (\ufeff) for mobile compatibility
-      finalContent = "\ufeff" + content;
-    }
-
-    const blob = typeof finalContent === 'string' 
-      ? new Blob([finalContent], { type: mimeType })
-      : finalContent;
-      
-    const url = URL.createObjectURL(blob);
+    const url = typeof content === 'string' 
+      ? URL.createObjectURL(new Blob([content], { type: 'text/plain' }))
+      : URL.createObjectURL(content);
     const a = document.createElement('a');
     a.href = url;
     a.download = fileName;
-    document.body.appendChild(a); // Append to body for better cross-browser support
     a.click();
-    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
@@ -304,37 +290,33 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading,
 
         <div className="space-y-6">
           {/* Subtitle Preview Box */}
-          {isAdmin && (
-            <div className="space-y-3">
-              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                <FileText size={14} /> Subtitle Preview (SRT)
-              </h3>
-              <div className="bg-white/30 backdrop-blur-sm dark:bg-slate-950/30 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 h-56 overflow-y-auto custom-scrollbar shadow-inner max-w-full">
-                <pre className="text-[11px] sm:text-xs font-mono text-slate-700 dark:text-slate-300 whitespace-pre-wrap leading-[1.8]">
-                  {result.srtContent}
-                </pre>
-              </div>
+          <div className="space-y-3">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+              <FileText size={14} /> Subtitle Preview (SRT)
+            </h3>
+            <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 h-40 overflow-y-auto custom-scrollbar shadow-inner">
+              <pre className="text-[11px] sm:text-xs font-mono text-slate-600 dark:text-slate-400 whitespace-pre-wrap leading-relaxed">
+                {result.srtContent}
+              </pre>
             </div>
-          )}
+          </div>
 
           {/* Download Buttons */}
-          <div className={`grid ${isAdmin ? 'grid-cols-2' : 'grid-cols-1'} gap-4`}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <button
               onClick={() => fetch(result.audioUrl).then(r => r.blob()).then(b => downloadFile(b, 'vlogs-by-saw-audio.mp3'))}
-              className="flex items-center justify-center gap-3 py-4 bg-brand-purple/10 text-brand-purple rounded-2xl font-bold hover:bg-brand-purple hover:text-white transition-all border border-brand-purple/20 group text-sm"
+              className="flex items-center justify-center gap-3 py-4 bg-brand-purple/10 text-brand-purple rounded-2xl font-bold hover:bg-brand-purple hover:text-white transition-all border border-brand-purple/20 group"
             >
-              <Music size={18} className="group-hover:scale-110 transition-transform" />
+              <Music size={20} className="group-hover:scale-110 transition-transform" />
               Download MP3
             </button>
-            {isAdmin && (
-              <button
-                onClick={() => downloadFile(result.srtContent, 'vlogs-by-saw-subs.srt')}
-                className="flex items-center justify-center gap-3 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all border border-slate-200 dark:border-slate-700 group text-sm"
-              >
-                <FileText size={18} className="group-hover:scale-110 transition-transform" />
-                Download SRT
-              </button>
-            )}
+            <button
+              onClick={() => downloadFile(result.srtContent, 'vlogs-by-saw-subs.srt')}
+              className="flex items-center justify-center gap-3 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all border border-slate-200 dark:border-slate-700 group"
+            >
+              <FileText size={20} className="group-hover:scale-110 transition-transform" />
+              Download SRT
+            </button>
           </div>
         </div>
       </div>

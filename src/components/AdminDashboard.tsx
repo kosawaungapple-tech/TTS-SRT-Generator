@@ -21,30 +21,27 @@ import {
   EyeOff,
   Save,
   Languages,
-  Edit3,
-  Zap
+  Edit3
 } from 'lucide-react';
-import { AppUser, Config, PronunciationRule } from '../types';
-import { db, collection, onSnapshot, query, orderBy, setDoc, doc, deleteDoc, updateDoc, handleFirestoreError, OperationType, getDoc, auth } from '../firebase';
+import { AuthorizedUser, User as RegisteredUser, SystemConfig, PronunciationRule } from '../types';
+import { db, collection, onSnapshot, query, orderBy, setDoc, doc, deleteDoc, updateDoc, handleFirestoreError, OperationType, getDoc, auth, googleProvider, signInWithPopup } from '../firebase';
 import { Toast, ToastType } from './Toast';
 
 interface AdminDashboardProps {
   isAuthReady: boolean;
-  isSessionSynced: boolean;
-  setIsSessionSynced: (synced: boolean) => void;
-  systemConfig: Config;
-  onUpdateSystemConfig?: (updates: Partial<Config>) => Promise<void>;
-  onLogout?: () => void;
 }
 
-export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isSessionSynced, setIsSessionSynced, systemConfig: globalConfig, onUpdateSystemConfig, onLogout }) => {
-  const [users, setUsers] = useState<AppUser[]>([]);
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) => {
+  const [authorizedUsers, setAuthorizedUsers] = useState<AuthorizedUser[]>([]);
+  const [registeredUsers, setRegisteredUsers] = useState<RegisteredUser[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isUsersLoading, setIsUsersLoading] = useState(true);
   const [newId, setNewId] = useState('');
-  const [newName, setNewName] = useState('');
-  const [newExpiryDays, setNewExpiryDays] = useState('30');
+  const [newNote, setNewNote] = useState('');
+  const [newRole, setNewRole] = useState<'admin' | 'user'>('user');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeletingUser, setIsDeletingUser] = useState<string | null>(null);
+  const [isVerifyingUser, setIsVerifyingUser] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   
   // Toast State
@@ -57,12 +54,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
   // Admin Auth Protection
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [adminPassword, setAdminPassword] = useState('');
   const [activeTab, setActiveTab] = useState<'users' | 'system' | 'rules'>('users');
 
   // System Settings State
-  const [localConfig, setLocalConfig] = useState<Config>(globalConfig);
+  const [systemConfig, setSystemConfig] = useState<SystemConfig>({
+    firebase_project_id: '',
+    firebase_api_key: '',
+    firebase_auth_domain: '',
+    firebase_app_id: '',
+    telegram_bot_token: '',
+    telegram_chat_id: ''
+  });
   const [isSavingSystem, setIsSavingSystem] = useState(false);
+  const [isSystemLoading, setIsSystemLoading] = useState(true);
   const [showSecrets, setShowSecrets] = useState(false);
 
   // Pronunciation Rules State
@@ -73,37 +77,44 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
   const [isDeletingRule, setIsDeletingRule] = useState<string | null>(null);
   const [isRulesLoading, setIsRulesLoading] = useState(true);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
-  const [syncTimeoutReached, setSyncTimeoutReached] = useState(false);
 
   useEffect(() => {
-    if (isAuthenticated && !isSessionSynced) {
-      const timer = setTimeout(() => {
-        setSyncTimeoutReached(true);
-      }, 2000);
-      return () => clearTimeout(timer);
-    } else if (isSessionSynced) {
-      setSyncTimeoutReached(true);
-    }
-  }, [isAuthenticated, isSessionSynced]);
-
-  useEffect(() => {
-    const isAdmin = localStorage.getItem('vbs_isAdmin') === 'true';
-    const accessCode = localStorage.getItem('vbs_access_code');
-    
-    if (isAdmin || accessCode === 'saw_vlogs_2026') {
-      setIsAuthenticated(true);
-      if (accessCode === 'saw_vlogs_2026') {
-        localStorage.setItem('vbs_isAdmin', 'true');
+    const unsubscribe = auth.onAuthStateChanged(async (user) => {
+      if (user && !user.isAnonymous) {
+        try {
+          let isAdmin = false;
+          try {
+            const userDoc = await getDoc(doc(db, 'users', user.uid));
+            isAdmin = (user.email === 'hankozinsa@gmail.com' && user.emailVerified) || 
+                      (userDoc.exists() && userDoc.data()?.role === 'admin');
+          } catch (e: any) {
+            if (e.message?.includes('permission') || e.code === 'permission-denied') {
+              isAdmin = false;
+            } else {
+              throw e;
+            }
+          }
+          
+          if (isAdmin) {
+            setIsAuthenticated(true);
+          } else {
+            // Not an admin, sign out
+            await auth.signOut();
+          }
+        } catch (err) {
+          console.error("Error checking admin status:", err);
+        }
       }
-    } else if (isAuthReady && auth.currentUser?.email === "specialmyanmar95@gmail.com" && auth.currentUser?.emailVerified) {
-      setIsAuthenticated(true);
-      localStorage.setItem('vbs_isAdmin', 'true');
-    }
-  }, [isAuthReady]);
+    });
+    return () => unsubscribe();
+  }, []);
 
   const formatDate = (date: any) => {
     if (!date) return 'N/A';
     try {
+      if (date && typeof date === 'object' && 'toDate' in date) {
+        return date.toDate().toLocaleString();
+      }
       return new Date(date).toLocaleString();
     } catch (e) {
       return 'Invalid Date';
@@ -113,53 +124,90 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
   const handleAdminAuth = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setAuthError(null);
-    if (adminPassword === "saw_vlogs_2026") {
-      setIsAuthenticated(true);
-      localStorage.setItem('vbs_isAdmin', 'true');
-    } else {
-      setAuthError("စကားဝှက် မှားယွင်းနေပါသည်။ (Incorrect Password).");
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
+      
+      // Check if user is the default admin or has admin role in Firestore
+      let isAdmin = false;
+      let userDocExists = false;
+      
+      try {
+        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        userDocExists = userDoc.exists();
+        isAdmin = (user.email === 'hankozinsa@gmail.com' && user.emailVerified) || 
+                  (userDocExists && userDoc.data()?.role === 'admin');
+      } catch (e: any) {
+        // If permission denied, they are definitely not an admin
+        if (e.message?.includes('permission') || e.code === 'permission-denied') {
+          isAdmin = false;
+        } else {
+          throw e;
+        }
+      }
+                      
+      if (isAdmin) {
+        setIsAuthenticated(true);
+        // Ensure the admin document exists
+        if (!userDocExists) {
+          await setDoc(doc(db, 'users', user.uid), {
+            uid: user.uid,
+            email: user.email,
+            role: 'admin',
+            createdAt: new Date().toISOString()
+          });
+        }
+      } else {
+        setAuthError("Unauthorized email address. You are not an admin.");
+        await auth.signOut();
+      }
+    } catch (err: any) {
+      console.error("Admin Auth Error:", err);
+      setAuthError(err.message || "Authentication failed.");
+      await auth.signOut();
     }
   };
 
   useEffect(() => {
-    const isMasterAdmin = localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
-    if (!isAuthenticated) return;
-    
-    // If not ready, and not master admin, wait.
-    // If master admin, we try anyway to be fast.
-    if (!isAuthReady && !isMasterAdmin) return;
-    
-    // If not synced, and not master admin, and timeout not reached, wait.
-    if (!isSessionSynced && !isMasterAdmin && !syncTimeoutReached) return;
+    if (!isAuthenticated || !isAuthReady) return;
 
-    const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+    const q = query(collection(db, 'authorized_users'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const fetchedUsers = snapshot.docs.map(doc => ({
+      const users = snapshot.docs.map(doc => ({
+        id: doc.id,
         ...doc.data()
-      } as AppUser));
-      setUsers(fetchedUsers);
+      } as AuthorizedUser));
+      setAuthorizedUsers(users);
       setIsLoading(false);
     }, (err) => {
-      // Only show error if we are actually ready and synced
-      if (isAuthReady && (isSessionSynced || isMasterAdmin)) {
-        handleFirestoreError(err, OperationType.LIST, 'users');
-      }
+      handleFirestoreError(err, OperationType.LIST, 'authorized_users');
       setIsLoading(false);
     });
 
     return () => unsubscribe();
-  }, [isAuthenticated, isAuthReady, isSessionSynced, syncTimeoutReached]);
+  }, [isAuthenticated, isAuthReady]);
 
   useEffect(() => {
-    const isMasterAdmin = localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
-    if (!isAuthenticated) return;
-    
-    // If not ready, and not master admin, wait.
-    // If master admin, we try anyway to be fast.
-    if (!isAuthReady && !isMasterAdmin) return;
-    
-    // Force fetch if master admin OR if timeout reached
-    if (!isSessionSynced && !isMasterAdmin && !syncTimeoutReached) return;
+    if (!isAuthenticated || !isAuthReady) return;
+
+    const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const users = snapshot.docs.map(doc => ({
+        uid: doc.id,
+        ...doc.data()
+      } as RegisteredUser));
+      setRegisteredUsers(users);
+      setIsUsersLoading(false);
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, 'users');
+      setIsUsersLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [isAuthenticated, isAuthReady]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !isAuthReady) return;
 
     const unsubscribe = onSnapshot(collection(db, 'globalRules'), (snapshot) => {
       const fetchedRules = snapshot.docs.map(doc => ({
@@ -169,15 +217,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
       setRules(fetchedRules);
       setIsRulesLoading(false);
     }, (err) => {
-      // Only show error if we are actually ready and synced
-      if (isAuthReady && (isSessionSynced || isMasterAdmin)) {
-        handleFirestoreError(err, OperationType.LIST, 'globalRules');
-      }
+      handleFirestoreError(err, OperationType.LIST, 'globalRules');
       setIsRulesLoading(false);
     });
 
     return () => unsubscribe();
-  }, [isAuthenticated, isAuthReady, isSessionSynced, syncTimeoutReached]);
+  }, [isAuthenticated, isAuthReady]);
 
   const handleCreateRule = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -215,6 +260,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
     setNewRuleOriginal(rule.original);
     setNewRuleReplacement(rule.replacement);
     setEditingRuleId(rule.id);
+    // Scroll to form
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -229,7 +275,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
     setIsDeletingRule(id);
     try {
       await deleteDoc(doc(db, 'globalRules', id));
-      setToast({ message: 'စည်းမျဉ်းကို ဖျက်သိမ်းပြီးပါပြီ။ ✅', type: 'success', isVisible: true });
+      setToast({ message: 'Rule deleted', type: 'success', isVisible: true });
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `globalRules/${id}`);
       setToast({ message: 'Failed to delete rule', type: 'error', isVisible: true });
@@ -239,27 +285,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
   };
 
   useEffect(() => {
-    if (globalConfig) {
-      setLocalConfig(globalConfig);
-    }
-  }, [globalConfig]);
+    if (!isAuthenticated || !isAuthReady) return;
+
+    const fetchSystemConfig = async () => {
+      setIsSystemLoading(true);
+      try {
+        const docRef = doc(db, 'system_config', 'main');
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          setSystemConfig(docSnap.data() as SystemConfig);
+        }
+      } catch (err) {
+        console.error('Failed to fetch system config:', err);
+      } finally {
+        setIsSystemLoading(false);
+      }
+    };
+
+    fetchSystemConfig();
+  }, [isAuthenticated, isAuthReady]);
 
   const handleSaveSystemConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSavingSystem(true);
     try {
-      await setDoc(doc(db, 'config', 'main'), {
-        ...localConfig,
+      await setDoc(doc(db, 'system_config', 'main'), {
+        ...systemConfig,
         updatedAt: new Date().toISOString()
       });
       
+      // Save to localStorage for immediate effect on next reload
+      localStorage.setItem('vbs_system_config', JSON.stringify(systemConfig));
+      
       setToast({
-        message: 'Gemini API Key ကို သိမ်းဆည်းပြီးပါပြီ။ ✅',
+        message: 'System Settings Saved Successfully! 🚀',
         type: 'success',
         isVisible: true
       });
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'config/main');
+      handleFirestoreError(err, OperationType.WRITE, 'system_config/main');
       setToast({
         message: 'Failed to save system settings.',
         type: 'error',
@@ -270,126 +334,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
     }
   };
 
-  const ensureAdminSession = async () => {
-    const isMasterAdmin = localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
-    if (isMasterAdmin && !isSessionSynced && auth.currentUser) {
-      try {
-        await setDoc(doc(db, 'sessions', auth.currentUser.uid), {
-          accessCode: 'saw_vlogs_2026',
-          createdAt: new Date().toISOString()
-        });
-        setIsSessionSynced(true);
-        return true;
-      } catch (e) {
-        console.error('Failed to ensure admin session:', e);
-        return false;
-      }
-    }
-    return isSessionSynced || isMasterAdmin;
-  };
-
-  const handleCreateUser = async (e: React.FormEvent) => {
+  const handleCreateId = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newId.trim() || isSubmitting) return;
-
-    const isMasterAdmin = localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
-    
-    // FORCE USER CREATION (BYPASS SYNC CHECK FOR MASTER ADMIN)
-    if (!isSessionSynced && !isMasterAdmin) {
-      setToast({
-        message: 'Error: Session not synced. Please wait or refresh.',
-        type: 'error',
-        isVisible: true
-      });
-      return;
-    }
 
     setIsSubmitting(true);
 
     try {
-      // Background session sync for master admin if not already synced
-      if (isMasterAdmin && !isSessionSynced && auth.currentUser) {
-        setDoc(doc(db, 'sessions', auth.currentUser.uid), {
-          accessCode: 'saw_vlogs_2026',
-          createdAt: new Date().toISOString()
-        }).then(() => {
-          setIsSessionSynced(true);
-          console.log('Background session sync successful');
-        }).catch(err => {
-          console.error('Background session sync failed:', err);
-        });
-      }
-
-      const id = newId.trim();
-      const expiryDate = new Date();
-      expiryDate.setDate(expiryDate.getDate() + parseInt(newExpiryDays));
-
-      const newUser: AppUser = {
-        id,
-        name: newName.trim() || id,
+      const accessCode = newId.trim();
+      const newAuthorizedUser = {
         isActive: true,
         createdAt: new Date().toISOString(),
-        expiryDate: expiryDate.toISOString()
+        note: newNote.trim(),
+        role: newRole
       };
 
-      console.log(`Attempting to create user: ${id} (Master Admin: ${isMasterAdmin})`);
-      await setDoc(doc(db, 'users', id), newUser);
+      await setDoc(doc(db, 'authorized_users', accessCode), newAuthorizedUser);
       
       setNewId('');
-      setNewName('');
-      setNewExpiryDays('30');
+      setNewNote('');
+      setNewRole('user');
       setToast({
         message: 'User ID Created Successfully! 🎉',
         type: 'success',
         isVisible: true
       });
     } catch (err: any) {
-      // LOG EXACT FIREBASE ERROR MESSAGE
-      console.error("CRITICAL FIRESTORE ERROR (User Creation):", err);
-      console.error("Error Code:", err.code);
-      console.error("Error Message:", err.message);
-      
-      // If it's a permission error and we are master admin, it might be because the background sync hasn't finished.
-      // We try one more time with AWAIT if it failed initially.
-      if (err.code === 'permission-denied' && isMasterAdmin && auth.currentUser) {
-        try {
-          console.log('Permission denied. Retrying with explicit session sync wait...');
-          await setDoc(doc(db, 'sessions', auth.currentUser.uid), {
-            accessCode: 'saw_vlogs_2026',
-            createdAt: new Date().toISOString()
-          });
-          setIsSessionSynced(true);
-          
-          // Retry user creation
-          const id = newId.trim();
-          const expiryDate = new Date();
-          expiryDate.setDate(expiryDate.getDate() + parseInt(newExpiryDays));
-          const newUser: AppUser = {
-            id,
-            name: newName.trim() || id,
-            isActive: true,
-            createdAt: new Date().toISOString(),
-            expiryDate: expiryDate.toISOString()
-          };
-          await setDoc(doc(db, 'users', id), newUser);
-          
-          setNewId('');
-          setNewName('');
-          setNewExpiryDays('30');
-          setToast({
-            message: 'User ID Created Successfully (after retry)! 🎉',
-            type: 'success',
-            isVisible: true
-          });
-          return;
-        } catch (retryErr: any) {
-          console.error('Retry failed:', retryErr);
-        }
-      }
-
-      handleFirestoreError(err, OperationType.WRITE, `users/${newId.trim()}`);
       setToast({
-        message: `Error: ${err.message || 'Could not create ID.'}`,
+        message: 'Error: Could not create ID. Please try again.',
         type: 'error',
         isVisible: true
       });
@@ -398,58 +370,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
     }
   };
 
-  const handleExtendExpiry = async (id: string, currentExpiry: string, days: number) => {
-    try {
-      await ensureAdminSession();
-      const newDate = new Date(currentExpiry);
-      const baseDate = newDate < new Date() ? new Date() : newDate;
-      baseDate.setDate(baseDate.getDate() + days);
-      
-      await updateDoc(doc(db, 'users', id), {
-        expiryDate: baseDate.toISOString()
-      });
-      
-      setToast({
-        message: 'သက်တမ်းတိုးခြင်း အောင်မြင်ပါသည်။ ✅',
-        type: 'success',
-        isVisible: true
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `users/${id}`);
-      setToast({
-        message: 'Failed to extend expiry.',
-        type: 'error',
-        isVisible: true
-      });
-    }
-  };
-
-  const handleUpdateExpiryDate = async (id: string, newDateStr: string) => {
-    if (!newDateStr) return;
-    try {
-      await ensureAdminSession();
-      const newDate = new Date(newDateStr);
-      // Set to end of day to be generous
-      newDate.setHours(23, 59, 59, 999);
-      
-      await updateDoc(doc(db, 'users', id), {
-        expiryDate: newDate.toISOString()
-      });
-      
-      setToast({
-        message: 'Expiry date updated! 📅',
-        type: 'success',
-        isVisible: true
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `users/${id}`);
-    }
-  };
-
   const handleToggleStatus = async (id: string, currentStatus: boolean) => {
     try {
-      await ensureAdminSession();
-      await updateDoc(doc(db, 'users', id), {
+      await updateDoc(doc(db, 'authorized_users', id), {
         isActive: !currentStatus
       });
       setToast({
@@ -458,7 +381,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
         isVisible: true
       });
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `users/${id}`);
+      handleFirestoreError(err, OperationType.UPDATE, `authorized_users/${id}`);
       setToast({
         message: 'Failed to update user status.',
         type: 'error',
@@ -467,20 +390,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
     }
   };
 
-  const handleDeleteUser = async (id: string) => {
-    if (!window.confirm(`Are you sure you want to delete User ID: ${id}?`)) return;
+  const handleToggleRole = async (id: string, currentRole: 'admin' | 'user') => {
+    try {
+      await updateDoc(doc(db, 'authorized_users', id), {
+        role: currentRole === 'admin' ? 'user' : 'admin'
+      });
+      setToast({
+        message: 'User Role Updated!',
+        type: 'success',
+        isVisible: true
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `authorized_users/${id}`);
+      setToast({
+        message: 'Failed to update user role.',
+        type: 'error',
+        isVisible: true
+      });
+    }
+  };
+
+  const handleDeleteId = async (id: string) => {
+    if (!window.confirm(`Are you sure you want to delete Access Code: ${id}?`)) return;
 
     setIsDeletingUser(id);
     try {
-      await ensureAdminSession();
-      await deleteDoc(doc(db, 'users', id));
+      await deleteDoc(doc(db, 'authorized_users', id));
       setToast({
         message: 'User ID Deleted Successfully!',
         type: 'success',
         isVisible: true
       });
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `users/${id}`);
+      handleFirestoreError(err, OperationType.DELETE, `authorized_users/${id}`);
       setToast({
         message: 'Failed to delete User ID.',
         type: 'error',
@@ -491,9 +433,53 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
     }
   };
 
-  const filteredUsers = users.filter(u => 
+  const handleVerifyUser = async (uid: string) => {
+    setIsVerifyingUser(uid);
+    try {
+      await updateDoc(doc(db, 'users', uid), {
+        is_verified: true,
+        pending_verification: false
+      });
+      setToast({
+        message: 'User Verified Successfully! 🎉',
+        type: 'success',
+        isVisible: true
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `users/${uid}`);
+      setToast({
+        message: 'Failed to verify user.',
+        type: 'error',
+        isVisible: true
+      });
+    } finally {
+      setIsVerifyingUser(null);
+    }
+  };
+
+  const handleToggleRegisteredUserRole = async (uid: string, currentRole: 'admin' | 'user') => {
+    try {
+      await updateDoc(doc(db, 'users', uid), {
+        role: currentRole === 'admin' ? 'user' : 'admin'
+      });
+      setToast({
+        message: `User role updated to ${currentRole === 'admin' ? 'user' : 'admin'}! 🎉`,
+        type: 'success',
+        isVisible: true
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `users/${uid}`);
+      setToast({
+        message: 'Failed to update user role.',
+        type: 'error',
+        isVisible: true
+      });
+    }
+  };
+
+  const filteredUsers = authorizedUsers.filter(u => 
     u.id.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    u.name.toLowerCase().includes(searchQuery.toLowerCase())
+    (u.note || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   if (!isAuthenticated) {
@@ -509,24 +495,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
               <Lock size={32} />
             </div>
             <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Admin Access</h2>
-            <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Enter admin password to continue</p>
+            <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Sign in with Google to continue</p>
           </div>
 
-          <form onSubmit={handleAdminAuth} className="space-y-6">
-            <div className="space-y-2">
-              <div className="relative">
-                <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                <input
-                  type="password"
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  placeholder="Admin Password"
-                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
-                  required
-                />
-              </div>
-            </div>
-
+          <div className="space-y-6">
             {authError && (
               <p className="text-red-500 text-xs font-bold flex items-center gap-1 px-2">
                 <AlertCircle size={12} /> {authError}
@@ -534,12 +506,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
             )}
 
             <button
-              type="submit"
+              onClick={handleAdminAuth}
               className="w-full py-4 bg-brand-purple text-white rounded-2xl font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20 flex items-center justify-center gap-2"
             >
-              <ShieldCheck size={20} /> Sign In
+              <ShieldCheck size={20} /> Sign in with Google
             </button>
-          </form>
+          </div>
         </motion.div>
       </div>
     );
@@ -557,13 +529,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
             </div>
             <div>
               <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">Admin Dashboard</h2>
-              <div className="flex items-center gap-3 mt-1">
-                <p className="text-slate-500 dark:text-slate-400 text-xs sm:text-sm">Manage Authorized Access Codes (User IDs)</p>
-                <div className="h-3 w-[1px] bg-slate-300 dark:bg-slate-700 hidden sm:block" />
-                <p className="text-brand-purple text-xs sm:text-sm font-bold flex items-center gap-1.5">
-                  <Zap size={14} fill="currentColor" /> {globalConfig.total_generations || 0} Generations
-                </p>
-              </div>
+              <p className="text-slate-500 dark:text-slate-400 text-xs sm:text-sm mt-1">Manage Authorized Access Codes (User IDs)</p>
             </div>
           </div>
           <div className="flex items-center gap-3 w-full sm:w-auto">
@@ -588,32 +554,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
               </button>
             </div>
             <button 
-              onClick={() => {
-                if (onLogout) {
-                  onLogout();
-                } else {
-                  setIsAuthenticated(false);
-                  localStorage.removeItem('vbs_isAdmin');
-                }
-              }}
+              onClick={() => setIsAuthenticated(false)}
               className="px-4 py-2.5 bg-slate-100 dark:bg-slate-900/50 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-500 dark:text-slate-400 text-sm font-bold transition-all"
             >
-              Sign Out
+              Lock
             </button>
           </div>
         </div>
       </div>
-
-      {/* Session Sync Status Warning */}
-      {!isSessionSynced && isAuthenticated && !syncTimeoutReached && localStorage.getItem('vbs_access_code') !== 'saw_vlogs_2026' && (
-        <div className="mb-6 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/30 rounded-xl flex items-center gap-3 text-amber-800 dark:text-amber-200">
-          <AlertCircle className="w-5 h-5 flex-shrink-0" />
-          <div className="text-sm">
-            <p className="font-bold">Session Sync Pending...</p>
-            <p className="opacity-80">Firestore permissions may be limited until the session is fully synced. Please wait a few seconds.</p>
-          </div>
-        </div>
-      )}
 
       {activeTab === 'users' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -622,19 +570,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
           <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl sticky top-8 transition-colors duration-300">
             <div className="flex items-center gap-3 mb-6">
               <UserPlus className="text-brand-purple" size={20} />
-              <h3 className="text-lg font-bold text-slate-900 dark:text-white">Create New User</h3>
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white">Create New User ID</h3>
             </div>
 
-            <form onSubmit={handleCreateUser} className="space-y-4">
+            <form onSubmit={handleCreateId} className="space-y-4">
               <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Access ID</label>
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Access Code (User ID)</label>
                 <div className="relative">
                   <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
                   <input
                     type="text"
                     value={newId}
                     onChange={(e) => setNewId(e.target.value)}
-                    placeholder="e.g. VIP-0001"
+                    placeholder="e.g. USER-12345"
                     className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
                     required
                   />
@@ -642,31 +590,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
               </div>
 
               <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">User Name</label>
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Note / Name (Optional)</label>
                 <div className="relative">
                   <User className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
                   <input
                     type="text"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    placeholder="e.g. John Doe"
+                    value={newNote}
+                    onChange={(e) => setNewNote(e.target.value)}
+                    placeholder="e.g. Saw Yan Aung"
                     className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
                   />
                 </div>
               </div>
 
               <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Expiry (Days)</label>
-                <div className="relative">
-                  <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                  <input
-                    type="number"
-                    value={newExpiryDays}
-                    onChange={(e) => setNewExpiryDays(e.target.value)}
-                    placeholder="30"
-                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
-                    required
-                  />
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Initial Role</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewRole('user')}
+                    className={`py-3 rounded-xl text-xs font-bold border transition-all ${newRole === 'user' ? 'bg-brand-purple border-brand-purple text-white' : 'bg-slate-100 dark:bg-slate-900/50 border-slate-200 dark:border-slate-800 text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-800'}`}
+                  >
+                    User
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewRole('admin')}
+                    className={`py-3 rounded-xl text-xs font-bold border transition-all ${newRole === 'admin' ? 'bg-brand-purple border-brand-purple text-white' : 'bg-slate-100 dark:bg-slate-900/50 border-slate-200 dark:border-slate-800 text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-800'}`}
+                  >
+                    Admin
+                  </button>
                 </div>
               </div>
 
@@ -676,7 +629,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
                 className="w-full py-4 bg-brand-purple text-white rounded-xl font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
               >
                 {isSubmitting ? <RefreshCw size={18} className="animate-spin" /> : <Plus size={18} />}
-                Create User
+                Create User ID
               </button>
             </form>
           </div>
@@ -688,36 +641,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
               <div className="flex items-center gap-3">
                 <Key className="text-brand-purple" size={20} />
-                <h3 className="text-lg font-bold text-slate-900 dark:text-white">Global Users</h3>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">Existing User IDs</h3>
                 <span className="px-2 py-0.5 bg-brand-purple/20 text-brand-purple border border-brand-purple/30 rounded-lg text-[9px] font-bold uppercase">
-                  {users.length} Total
+                  {authorizedUsers.length} Total
                 </span>
               </div>
 
-              <div className="relative flex-1 max-w-full md:max-w-xs flex items-center gap-2">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
-                  <input
-                    type="text"
-                    placeholder="Search IDs or notes..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg pl-10 pr-4 py-2.5 text-xs text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
-                  />
-                </div>
-                <button
-                  onClick={() => {
-                    setIsLoading(true);
-                    // The onSnapshot will handle the refresh automatically if we just trigger a re-render or wait
-                    // But we can also manually re-fetch if needed. 
-                    // Since it's onSnapshot, it should be real-time.
-                    setTimeout(() => setIsLoading(false), 500);
-                  }}
-                  className="p-2.5 bg-slate-100 dark:bg-slate-900/50 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-500 transition-all"
-                  title="Refresh List"
-                >
-                  <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
-                </button>
+              <div className="relative flex-1 max-w-full md:max-w-xs">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+                <input
+                  type="text"
+                  placeholder="Search IDs or notes..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg pl-10 pr-4 py-2.5 text-xs text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                />
               </div>
             </div>
 
@@ -730,9 +668,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="border-b border-slate-200 dark:border-white/5">
-                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Access ID</th>
-                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Name</th>
-                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Expiry</th>
+                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Access Code</th>
+                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Note</th>
+                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Role</th>
+                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Created</th>
                       <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Status</th>
                       <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">Actions</th>
                     </tr>
@@ -741,30 +680,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
                     {filteredUsers.map((u) => (
                       <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-white/5 transition-colors group">
                         <td className="px-4 py-4">
-                          <span className="font-mono text-sm text-slate-900 dark:text-white bg-slate-100 dark:bg-white/5 px-2 py-1 rounded border border-slate-200 dark:border-white/10">
-                            {u.id === 'saw_vlogs_2026' ? 'Commander Saw' : u.id}
+                          <span className="font-mono text-sm text-slate-900 dark:text-white bg-slate-100 dark:bg-white/5 px-2 py-1 rounded border border-slate-200 dark:border-white/10">{u.id}</span>
+                        </td>
+                        <td className="px-4 py-4">
+                          <span className="text-sm text-slate-700 dark:text-slate-300">{u.note || '—'}</span>
+                        </td>
+                        <td className="px-4 py-4">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${u.role === 'admin' ? 'bg-brand-purple/20 text-brand-purple border-brand-purple/30' : 'bg-slate-100 dark:bg-white/10 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-white/10'}`}>
+                            {u.role || 'user'}
                           </span>
                         </td>
                         <td className="px-4 py-4">
-                          <span className="text-sm text-slate-700 dark:text-slate-300">{u.name || '—'}</span>
-                        </td>
-                        <td className="px-4 py-4">
-                          <div className="flex flex-col gap-1">
-                            <div className="relative group/date">
-                              <div className="flex items-center gap-2 text-xs text-slate-500 cursor-pointer hover:text-brand-purple transition-colors p-1 -m-1 rounded hover:bg-slate-100 dark:hover:bg-white/5">
-                                <Calendar size={12} />
-                                {new Date(u.expiryDate).toLocaleDateString()}
-                              </div>
-                              <input 
-                                type="date"
-                                className="absolute inset-0 opacity-0 cursor-pointer"
-                                onChange={(e) => handleUpdateExpiryDate(u.id, e.target.value)}
-                                title="Change Expiry Date"
-                              />
-                            </div>
-                            {new Date(u.expiryDate) < new Date() && (
-                              <span className="text-[10px] text-red-500 font-bold uppercase">Expired</span>
-                            )}
+                          <div className="flex items-center gap-2 text-xs text-slate-500">
+                            <Calendar size={12} />
+                            {new Date(u.createdAt).toLocaleDateString()}
                           </div>
                         </td>
                         <td className="px-4 py-4">
@@ -774,32 +703,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
                             </span>
                           ) : (
                             <span className="flex items-center gap-1.5 text-red-500 text-[10px] font-bold uppercase">
-                              <XCircle size={12} /> Inactive
+                              <XCircle size={12} /> Deactivated
                             </span>
                           )}
                         </td>
                         <td className="px-4 py-4 text-right">
                           <div className="flex items-center justify-end gap-2">
-                            {/* Quick Extend Buttons */}
-                            <div className="flex items-center gap-1 mr-2">
-                              <button
-                                onClick={() => handleExtendExpiry(u.id, u.expiryDate, 30)}
-                                className="px-2 py-1 text-[9px] font-bold bg-brand-purple/10 text-brand-purple rounded hover:bg-brand-purple hover:text-white transition-all border border-brand-purple/20"
-                                title="+30 Days"
-                              >
-                                +30D
-                              </button>
-                              <button
-                                onClick={() => handleExtendExpiry(u.id, u.expiryDate, 365)}
-                                className="px-2 py-1 text-[9px] font-bold bg-blue-500/10 text-blue-500 rounded hover:bg-blue-500 hover:text-white transition-all border border-blue-500/20"
-                                title="+1 Year"
-                              >
-                                +1Y
-                              </button>
-                            </div>
-
-                            <div className="w-px h-4 bg-slate-200 dark:bg-slate-800 mx-1" />
-
+                            <button
+                              onClick={() => handleToggleRole(u.id, u.role || 'user')}
+                              className="p-2 text-slate-500 hover:text-brand-purple hover:bg-brand-purple/10 rounded-lg transition-all"
+                              title="Toggle Role"
+                            >
+                              <ShieldCheck size={16} />
+                            </button>
                             <button
                               onClick={() => handleToggleStatus(u.id, u.isActive)}
                               className={`p-2 rounded-lg transition-all ${u.isActive ? 'text-amber-500 hover:bg-amber-500/10' : 'text-emerald-500 hover:bg-emerald-500/10'}`}
@@ -808,7 +724,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
                               <RefreshCw size={16} />
                             </button>
                             <button
-                              onClick={() => handleDeleteUser(u.id)}
+                              onClick={() => handleDeleteId(u.id)}
                               disabled={isDeletingUser === u.id}
                               className="p-2 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all disabled:opacity-50"
                               title="Delete"
@@ -821,8 +737,112 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
                     ))}
                     {filteredUsers.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="py-10 text-center text-slate-500 italic text-sm">
-                          No users found.
+                        <td colSpan={6} className="py-10 text-center text-slate-500 italic text-sm">
+                          No Access Codes found matching your search.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Registered Users Section */}
+          <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-2xl mt-8 transition-colors duration-300">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+              <div className="flex items-center gap-3">
+                <User className="text-brand-purple" size={20} />
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">Registered Users</h3>
+                <span className="px-2 py-0.5 bg-brand-purple/20 text-brand-purple border border-brand-purple/30 rounded-lg text-[10px] font-bold uppercase">
+                  {registeredUsers.length} Total
+                </span>
+              </div>
+            </div>
+
+            {isUsersLoading ? (
+              <div className="flex items-center justify-center py-20">
+                <div className="w-8 h-8 border-2 border-brand-purple/20 border-t-brand-purple rounded-full animate-spin" />
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-white/5">
+                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">User</th>
+                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Role</th>
+                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Verification</th>
+                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Joined</th>
+                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Last Activity</th>
+                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-white/5">
+                    {registeredUsers.map((user) => (
+                      <tr key={user.uid} className="hover:bg-slate-50 dark:hover:bg-white/5 transition-colors group">
+                        <td className="px-4 py-4">
+                          <div className="flex flex-col">
+                            <span className="text-sm text-slate-900 dark:text-white font-medium">{user.email}</span>
+                            <span className="text-[10px] text-slate-500 font-mono">{user.uid}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${user.role === 'admin' ? 'bg-brand-purple/20 text-brand-purple border-brand-purple/30' : 'bg-slate-100 dark:bg-white/10 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-white/10'}`}>
+                            {user.role}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4">
+                          {user.is_verified ? (
+                            <span className="flex items-center gap-1.5 text-emerald-500 text-[10px] font-bold uppercase">
+                              <CheckCircle2 size={12} /> Verified
+                            </span>
+                          ) : user.pending_verification ? (
+                            <span className="flex items-center gap-1.5 text-amber-500 text-[10px] font-bold uppercase">
+                              <RefreshCw size={12} className="animate-spin" /> Pending
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1.5 text-slate-500 text-[10px] font-bold uppercase">
+                              <XCircle size={12} /> Not Verified
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="flex flex-col">
+                            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">{formatDate(user.createdAt)}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="flex flex-col">
+                            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">{formatDate(user.lastSignInAt)}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              onClick={() => handleToggleRegisteredUserRole(user.uid, user.role)}
+                              className="p-2 text-slate-500 hover:text-brand-purple hover:bg-brand-purple/10 rounded-lg transition-all"
+                              title="Toggle Role"
+                            >
+                              <ShieldCheck size={16} />
+                            </button>
+                            {!user.is_verified && (
+                              <button
+                                onClick={() => handleVerifyUser(user.uid)}
+                                disabled={isVerifyingUser === user.uid}
+                                className="px-3 py-1.5 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500 hover:text-white border border-emerald-500/20 rounded-lg text-[10px] font-bold uppercase transition-all disabled:opacity-50 flex items-center gap-2"
+                              >
+                                {isVerifyingUser === user.uid && <RefreshCw size={12} className="animate-spin" />}
+                                Verify
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {registeredUsers.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="py-10 text-center text-slate-500 italic text-sm">
+                          No registered users found.
                         </td>
                       </tr>
                     )}
@@ -845,7 +865,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
                 </div>
                 <div>
                   <h3 className="text-xl font-bold text-slate-900 dark:text-white">System Settings</h3>
-                  <p className="text-slate-500 dark:text-slate-400 text-xs">Configure Global API Keys and System Status</p>
+                  <p className="text-slate-500 dark:text-slate-400 text-xs">Configure Firebase and Telegram Integrations</p>
                 </div>
               </div>
               <button
@@ -858,93 +878,131 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
             </div>
 
             <form onSubmit={handleSaveSystemConfig} className="space-y-8">
-              {/* System Status Section */}
+              {isSystemLoading ? (
+                <div className="flex items-center justify-center py-20">
+                  <RefreshCw size={32} className="text-brand-purple animate-spin" />
+                </div>
+              ) : (
+                <>
+                  {/* Firebase Section */}
               <div className="space-y-6">
                 <div className="flex items-center gap-2 pb-2 border-b border-slate-200 dark:border-white/5">
-                  <RefreshCw size={16} className="text-brand-purple" />
-                  <h4 className="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wider">System Status</h4>
+                  <Database size={16} className="text-brand-purple" />
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wider">Firebase Configuration</h4>
                 </div>
                 
-                <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-900/50 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
-                  <div>
-                    <h5 className="text-sm font-bold text-slate-900 dark:text-white">System Live Switch</h5>
-                    <p className="text-xs text-slate-500">When OFF, only Admins can access the generator.</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setLocalConfig({ ...localConfig, isSystemLive: !localConfig.isSystemLive })}
-                    className={`w-12 h-6 rounded-full transition-all relative ${localConfig.isSystemLive ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-700'}`}
-                  >
-                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${localConfig.isSystemLive ? 'left-7' : 'left-1'}`} />
-                  </button>
-                </div>
-              </div>
-
-              {/* Global API Keys Section */}
-              <div className="space-y-6">
-                <div className="flex items-center gap-2 pb-2 border-b border-slate-200 dark:border-white/5">
-                  <Key size={16} className="text-brand-purple" />
-                  <h4 className="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wider">Global API Keys</h4>
-                </div>
-                
-                <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-900/50 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 mb-4">
-                  <div>
-                    <h5 className="text-sm font-bold text-slate-900 dark:text-white">Allow Global Key Usage</h5>
-                    <p className="text-xs text-slate-500">If enabled, users without their own API key will use these global keys.</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setLocalConfig({ ...localConfig, allow_global_key: !localConfig.allow_global_key })}
-                    className={`w-12 h-6 rounded-full transition-all relative ${localConfig.allow_global_key ? 'bg-brand-purple' : 'bg-slate-300 dark:bg-slate-700'}`}
-                  >
-                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${localConfig.allow_global_key ? 'left-7' : 'left-1'}`} />
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Gemini API Key</label>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Project ID</label>
+                    <input
+                      type="text"
+                      value={systemConfig.firebase_project_id}
+                      onChange={(e) => setSystemConfig({ ...systemConfig, firebase_project_id: e.target.value })}
+                      placeholder="e.g. my-project-123"
+                      className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">API Key</label>
                     <input
                       type={showSecrets ? "text" : "password"}
-                      value={localConfig.gemini_api_key || ''}
-                      onChange={(e) => setLocalConfig({ ...localConfig, gemini_api_key: e.target.value })}
+                      value={systemConfig.firebase_api_key}
+                      onChange={(e) => setSystemConfig({ ...systemConfig, firebase_api_key: e.target.value })}
                       placeholder="AIzaSy..."
                       className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all font-mono"
                     />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">RapidAPI Key</label>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Auth Domain</label>
                     <input
-                      type={showSecrets ? "text" : "password"}
-                      value={localConfig.rapidapi_key || ''}
-                      onChange={(e) => setLocalConfig({ ...localConfig, rapidapi_key: e.target.value })}
-                      placeholder="RapidAPI Key..."
-                      className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all font-mono"
+                      type="text"
+                      value={systemConfig.firebase_auth_domain}
+                      onChange={(e) => setSystemConfig({ ...systemConfig, firebase_auth_domain: e.target.value })}
+                      placeholder="my-project.firebaseapp.com"
+                      className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
                     />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">OpenAI API Key</label>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">App ID</label>
                     <input
-                      type={showSecrets ? "text" : "password"}
-                      value={localConfig.openai_api_key || ''}
-                      onChange={(e) => setLocalConfig({ ...localConfig, openai_api_key: e.target.value })}
-                      placeholder="sk-..."
-                      className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all font-mono"
+                      type="text"
+                      value={systemConfig.firebase_app_id}
+                      onChange={(e) => setSystemConfig({ ...systemConfig, firebase_app_id: e.target.value })}
+                      placeholder="1:123456789:web:abcdef"
+                      className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
                     />
                   </div>
                 </div>
               </div>
 
-              <div className="pt-4">
+              {/* Telegram Section */}
+              <div className="space-y-6">
+                <div className="flex items-center gap-2 pb-2 border-b border-slate-200 dark:border-white/5">
+                  <Send size={16} className="text-brand-purple" />
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wider">Telegram Notifications</h4>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Bot Token</label>
+                    <input
+                      type={showSecrets ? "text" : "password"}
+                      value={systemConfig.telegram_bot_token}
+                      onChange={(e) => setSystemConfig({ ...systemConfig, telegram_bot_token: e.target.value })}
+                      placeholder="123456789:ABC..."
+                      className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all font-mono"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Chat ID</label>
+                    <input
+                      type="text"
+                      value={systemConfig.telegram_chat_id}
+                      onChange={(e) => setSystemConfig({ ...systemConfig, telegram_chat_id: e.target.value })}
+                      placeholder="e.g. -100123456789"
+                      className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Debug & Testing Section */}
+              <div className="space-y-6">
+                <div className="flex items-center gap-2 pb-2 border-b border-slate-200 dark:border-white/5">
+                  <RefreshCw size={16} className="text-brand-purple" />
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wider">Debug & Testing</h4>
+                </div>
+                
+                <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-900/50 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
+                  <div>
+                    <h5 className="text-sm font-bold text-slate-900 dark:text-white">Mock Generation Mode</h5>
+                    <p className="text-xs text-slate-500">Enable this to test UI transitions without calling the real Gemini API.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSystemConfig({ ...systemConfig, mock_mode: !systemConfig.mock_mode })}
+                    className={`w-12 h-6 rounded-full transition-all relative ${systemConfig.mock_mode ? 'bg-brand-purple' : 'bg-slate-300 dark:bg-slate-700'}`}
+                  >
+                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${systemConfig.mock_mode ? 'left-7' : 'left-1'}`} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="pt-6">
                 <button
                   type="submit"
                   disabled={isSavingSystem}
-                  className="w-full py-4 bg-brand-purple text-white rounded-2xl font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20 flex items-center justify-center gap-2 disabled:opacity-50"
+                  className="w-full py-4 bg-brand-purple text-white rounded-2xl font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20 flex items-center justify-center gap-2 disabled:opacity-50 active:scale-95"
                 >
                   {isSavingSystem ? <RefreshCw size={20} className="animate-spin" /> : <Save size={20} />}
-                  Save Global Configuration
+                  Save System Configuration
                 </button>
+                <p className="text-center text-[10px] text-slate-500 mt-4 italic">
+                  Note: Changes to Firebase settings may require an app reload to take full effect.
+                </p>
               </div>
+                </>
+              )}
             </form>
           </div>
         </div>
