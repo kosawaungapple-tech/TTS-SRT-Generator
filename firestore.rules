@@ -1,18 +1,38 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Master Admin (saw_vlogs_2026) can do EVERYTHING
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "sawranaung75@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isMasterAdmin() {
+      return isAuthenticated() && 
+        (exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == 'saw_vlogs_2026');
+    }
+
+    // Master Admin can do EVERYTHING
     match /{document=**} {
-      allow read, write: if request.auth != null && 
-        ((request.auth.token.email == "HanKo994@gmail.com" && request.auth.token.email_verified == true) ||
-         (exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
-          get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == 'saw_vlogs_2026'));
+      allow read, write: if isAdmin() || isMasterAdmin();
     }
     
-    // Public Users can only READ their own status, but CANNOT see Admin Keys
+    // Global Config
     match /settings/global_config {
-      allow read: if true; // Allows the app to fetch keys for generation
-      allow write: if false; // NO ONE can change Admin keys except via the app logic
+      allow read: if true; // Publicly readable for the app to function
+      allow write: if isAdmin();
     }
 
     // Allow anonymous users to read/write their own session to track accessCode
@@ -22,12 +42,22 @@ service cloud.firestore {
 
     // Allow users to get their own profile if they have the access code
     match /users/{userId} {
-      allow get: if true;
+      allow get: if isAuthenticated();
+      allow read: if isOwner(userId) || isAdmin();
+      allow write: if isAdmin();
     }
 
     // Allow history access for authenticated users
     match /history/{historyId} {
-      allow read, create, update, delete: if request.auth != null;
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    // Global Rules
+    match /globalRules/{ruleId} {
+      allow read: if true;
+      allow write: if isAdmin();
     }
   }
 }

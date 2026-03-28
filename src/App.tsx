@@ -511,9 +511,12 @@ export default function App() {
     }
 
     // 2. Fallback to Global Key if personal is missing AND global usage is allowed
-    if (!key && systemConfig.allow_global_key && systemConfig.gemini_api_key) {
-      key = systemConfig.gemini_api_key.trim();
-      source = "Firestore (System Config - Global Fallback)";
+    if (!key && systemConfig.allow_global_key) {
+      // Priority: Gemini > OpenAI > RapidAPI
+      key = (systemConfig.gemini_api_key || systemConfig.openai_api_key || systemConfig.rapidapi_key || '').trim();
+      if (key) {
+        source = "Firestore (System Config - Global Fallback)";
+      }
     }
 
     // 3. Ultimate Fallback for Admin (Master Admin always has access to env key)
@@ -532,7 +535,7 @@ export default function App() {
 
   const getApiKeySource = useCallback(() => {
     if (profile?.api_key_stored || localApiKey) return 'personal';
-    if (systemConfig.allow_global_key && systemConfig.gemini_api_key) return 'admin';
+    if (systemConfig.allow_global_key && (systemConfig.gemini_api_key || systemConfig.openai_api_key || systemConfig.rapidapi_key)) return 'admin';
     if (accessCode === 'saw_vlogs_2026' && (typeof process !== 'undefined' && process.env.GEMINI_API_KEY)) return 'admin';
     return 'none';
   }, [profile, localApiKey, systemConfig, accessCode]);

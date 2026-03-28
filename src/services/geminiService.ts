@@ -84,6 +84,29 @@ export class GeminiTTSService {
       return await runMock();
     }
 
+    // DIRECT API KEY LINKING: If no key provided, pull from Firestore System Config
+    if (!this.apiKey) {
+      try {
+        const { getDoc, doc, db } = await import('../firebase');
+        const configDoc = await getDoc(doc(db, 'settings', 'global_config'));
+        if (configDoc.exists()) {
+          const data = configDoc.data();
+          // COMMANDER'S ORDER: Only use global key if allow_global_key is ON
+          if (data.allow_global_key === true) {
+            // Priority: Gemini > OpenAI > RapidAPI
+            this.apiKey = (data.gemini_api_key || data.openai_api_key || data.rapidapi_key || '').trim();
+            if (this.apiKey) {
+              console.log("TTS Service: Using system-wide API Key from Firestore (Global Usage ENABLED)");
+            }
+          } else {
+            console.log("TTS Service: Global Usage is DISABLED in Firestore");
+          }
+        }
+      } catch (e) {
+        console.error("TTS Service: Failed to fetch global API key from Firestore", e);
+      }
+    }
+
     if (!this.apiKey) {
       console.error("TTS Service: API Key missing, falling back to simulation");
       return await runMock();

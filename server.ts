@@ -120,15 +120,18 @@ async function startServer() {
         if (systemConfigDoc.exists) {
           const data = systemConfigDoc.data();
           // COMMANDER'S ORDER: Only use global key if allow_global_key is ON
-          if (data?.gemini_api_key && data?.allow_global_key === true) {
-            apiKey = data.gemini_api_key.trim();
-            console.log("Gemini Proxy: Using system-wide API Key from Firestore (Global Usage ENABLED)");
-          } else if (data?.gemini_api_key && data?.allow_global_key !== true) {
-            console.log("Gemini Proxy: Global API Key exists but Global Usage is DISABLED");
+          if (data?.allow_global_key === true) {
+            // Priority: Gemini > OpenAI > RapidAPI
+            apiKey = (data.gemini_api_key || data.openai_api_key || data.rapidapi_key || '').trim();
+            if (apiKey) {
+              console.log("Gemini Proxy: Using system-wide API Key from Firestore (Global Usage ENABLED)");
+            }
+          } else {
+            console.log("Gemini Proxy: Global Usage is DISABLED in Firestore");
           }
         }
       } catch (err) {
-        console.error("Gemini Proxy: Error fetching global API key:", err);
+        console.error("Gemini Proxy: Error fetching global API key from Firestore:", err);
       }
     }
 
