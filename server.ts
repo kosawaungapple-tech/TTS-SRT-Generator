@@ -3,7 +3,7 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import admin from "firebase-admin";
-import firebaseConfig from "./firebase-applet-config.json" assert { type: "json" };
+import firebaseConfig from "./firebase-applet-config.json" with { type: "json" };
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -55,7 +55,7 @@ async function startServer() {
 
     // Try to get from Firestore if not in env
     try {
-      const systemConfigDoc = await db.collection('system_config').doc('main').get();
+      const systemConfigDoc = await db.collection('settings').doc('global_config').get();
       if (systemConfigDoc.exists) {
         const data = systemConfigDoc.data();
         if (data?.telegram_bot_token) botToken = data.telegram_bot_token;
@@ -106,6 +106,67 @@ async function startServer() {
       }
     } catch (error) {
       res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // Gemini API Proxy
+  app.post("/api/proxy", authenticate, async (req, res) => {
+    let { apiKey, model, contents, generationConfig } = req.body;
+
+    // DIRECT API KEY LINKING: If no key provided, pull from Firestore System Config
+    if (!apiKey) {
+      try {
+        const systemConfigDoc = await db.collection('settings').doc('global_config').get();
+        if (systemConfigDoc.exists) {
+          const data = systemConfigDoc.data();
+          // COMMANDER'S ORDER: Only use global key if allow_global_key is ON
+          if (data?.gemini_api_key && data?.allow_global_key === true) {
+            apiKey = data.gemini_api_key.trim();
+            console.log("Gemini Proxy: Using system-wide API Key from Firestore (Global Usage ENABLED)");
+          } else if (data?.gemini_api_key && data?.allow_global_key !== true) {
+            console.log("Gemini Proxy: Global API Key exists but Global Usage is DISABLED");
+          }
+        }
+      } catch (err) {
+        console.error("Gemini Proxy: Error fetching global API key:", err);
+      }
+    }
+
+    // Fallback to environment variable if still missing
+    if (!apiKey && process.env.GEMINI_API_KEY) {
+      apiKey = process.env.GEMINI_API_KEY.trim();
+      console.log("Gemini Proxy: Using environment variable API Key");
+    }
+
+    if (!apiKey) {
+      return res.status(400).json({ error: "Missing API Key. Please configure it in Settings or Firestore." });
+    }
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+    try {
+      // COMMANDER'S ORDER: Pass the entire body to support systemInstruction, safetySettings etc.
+      const { apiKey: _, model: __, ...geminiBody } = req.body;
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(geminiBody)
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        console.error("Gemini Proxy: API Error:", data);
+        return res.status(response.status).json(data);
+      }
+
+      res.json(data);
+    } catch (error) {
+      console.error("Gemini Proxy: Network Error:", error);
+      res.status(500).json({ error: "Failed to proxy request to Gemini" });
     }
   });
 

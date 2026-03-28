@@ -1,42 +1,20 @@
-export interface User {
-  uid: string;
-  email: string;
-  displayName?: string;
-  photoURL?: string;
-  role: 'admin' | 'user';
-  is_verified?: boolean;
-  pending_verification?: boolean;
-  createdAt?: any;
-  lastSignInAt?: any;
-}
-
-export interface AuthorizedUser {
-  id: string; // Document ID (Access Code)
-  createdAt: any; // Firestore Timestamp
+export interface AppUser {
+  id: string; // Access ID (e.g., VIP-0001)
+  name: string;
+  createdAt: string;
+  expiryDate: string;
   isActive: boolean;
-  role: 'admin' | 'user';
-  note?: string; // Optional name/label
-  label?: string; // Alias for note
   api_key_stored?: string;
-  createdBy?: string;
 }
 
-export interface GlobalSettings {
-  global_system_key?: string;
+export interface Config {
+  gemini_api_key?: string;
+  rapidapi_key?: string;
+  openai_api_key?: string;
+  isSystemLive: boolean;
   allow_global_key: boolean;
-  total_generations: number;
-  mock_mode?: boolean;
-}
-
-export interface SystemConfig {
-  firebase_project_id: string;
-  firebase_api_key: string;
-  firebase_auth_domain: string;
-  firebase_app_id: string;
-  telegram_bot_token: string;
-  telegram_chat_id: string;
-  mock_mode?: boolean;
-  updatedAt?: any;
+  total_generations?: number;
+  updatedAt?: string;
 }
 
 export interface HistoryItem {
@@ -45,7 +23,7 @@ export interface HistoryItem {
   text: string;
   audioStorageUrl?: string;
   srtStorageUrl?: string;
-  srtContent?: string;
+  srtContent?: string; // Cache the SRT content
   createdAt: string;
   config: TTSConfig;
 }
@@ -80,6 +58,7 @@ export interface TTSConfig {
 export interface AudioResult {
   audioUrl: string; // Blob URL for local preview
   audioData: string; // base64 for download/upload
+  wavBlob?: Blob; // Actual WAV blob
   srtContent: string;
   subtitles: SRTSubtitle[];
 }
