@@ -46,8 +46,10 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      let accessCode = getAccessCode();
-      return isAuthenticated() && accessCode == 'saw_vlogs_2026';
+      return isAuthenticated() && 
+        ((request.auth.token.email == "specialmyanmar95@gmail.com" && request.auth.token.email_verified == true) ||
+         (exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == 'saw_vlogs_2026'));
     }
 
     function isDocOwner(userId) {
@@ -56,17 +58,43 @@ service cloud.firestore {
 
     function isValidUser(data) {
       return data.keys().hasAll(['id', 'name', 'createdAt', 'expiryDate', 'isActive']) &&
-             data.id is string && data.id.size() > 0 &&
-             data.name is string &&
+             data.id is string && data.id.size() > 0 && data.id.size() < 50 &&
+             data.name is string && data.name.size() < 100 &&
              data.createdAt is string &&
              data.expiryDate is string &&
-             data.isActive is bool;
+             data.isActive is bool &&
+             (!('api_key_stored' in data) || (data.api_key_stored is string && data.api_key_stored.size() < 200));
     }
 
     function isValidConfig(data) {
-      return data.keys().hasAll(['isSystemLive']) &&
+      return data.keys().hasAll(['isSystemLive', 'allow_global_key']) &&
              data.isSystemLive is bool &&
+             data.allow_global_key is bool &&
+             (!('gemini_api_key' in data) || (data.gemini_api_key is string && data.gemini_api_key.size() < 200)) &&
+             (!('rapidapi_key' in data) || (data.rapidapi_key is string && data.rapidapi_key.size() < 200)) &&
+             (!('openai_api_key' in data) || (data.openai_api_key is string && data.openai_api_key.size() < 200)) &&
              (!('total_generations' in data) || data.total_generations is number);
+    }
+
+    function isValidSession(data) {
+      return data.keys().hasAll(['accessCode', 'createdAt']) &&
+             data.accessCode is string && data.accessCode.size() > 0 && data.accessCode.size() < 50 &&
+             data.createdAt is string;
+    }
+
+    function isValidRule(data) {
+      return data.keys().hasAll(['original', 'replacement']) &&
+             data.original is string && data.original.size() > 0 && data.original.size() < 500 &&
+             data.replacement is string && data.replacement.size() > 0 && data.replacement.size() < 500;
+    }
+
+    function isValidHistory(data) {
+      return data.keys().hasAll(['userId', 'text', 'createdAt']) &&
+             data.userId is string && data.userId.size() > 0 &&
+             data.text is string && data.text.size() < 10000 &&
+             data.createdAt is string &&
+             (!('audioStorageUrl' in data) || (data.audioStorageUrl is string && data.audioStorageUrl.size() < 1000)) &&
+             (!('srtStorageUrl' in data) || (data.srtStorageUrl is string && data.srtStorageUrl.size() < 1000));
     }
 
     // ===============================================================
@@ -74,37 +102,39 @@ service cloud.firestore {
     // ===============================================================
 
     match /sessions/{uid} {
-      allow read, write: if isAuthenticated() && request.auth.uid == uid;
+      allow read: if isAuthenticated() && request.auth.uid == uid;
+      allow write: if isAuthenticated() && request.auth.uid == uid && isValidSession(request.resource.data);
     }
 
     match /users/{userId} {
-      // Anyone authenticated can try to get a specific user to log in
-      allow get: if isAuthenticated();
+      // Anyone can try to get a specific user to log in (needed for Access Code check)
+      allow get: if true;
       // Only admins can list all users
       allow list: if isAdmin();
       
       // Admins can create/update/delete users
-      allow create, update, delete: if isAdmin() && isValidUser(request.resource.data);
-      
-      // Users can update their own API key
-      allow update: if isAuthenticated() && isDocOwner(userId) && 
-                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['api_key_stored']);
+      allow create: if isAdmin() && isValidUser(request.resource.data);
+      allow update: if (isAdmin() || (isAuthenticated() && isDocOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['api_key_stored']))) && isValidUser(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     match /config/main {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      // System config should be readable by everyone to check if system is live
+      allow read: if true;
+      allow write: if isAdmin() && isValidConfig(request.resource.data);
     }
 
     match /globalRules/{ruleId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      // Rules should be readable by everyone to apply them
+      allow read: if true;
+      allow write: if isAdmin() && isValidRule(request.resource.data);
     }
 
     match /history/{historyId} {
       allow read: if isAuthenticated() && (resource.data.userId == getAccessCode() || isAdmin());
-      allow create: if isAuthenticated() && request.resource.data.userId == getAccessCode();
-      allow update, delete: if isAuthenticated() && (resource.data.userId == getAccessCode() || isAdmin());
+      allow create: if isAuthenticated() && request.resource.data.userId == getAccessCode() && isValidHistory(request.resource.data);
+      allow update: if isAuthenticated() && (resource.data.userId == getAccessCode() || isAdmin()) && isValidHistory(request.resource.data);
+      allow delete: if isAuthenticated() && (resource.data.userId == getAccessCode() || isAdmin());
     }
 
     match /test/{docId} {

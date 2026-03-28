@@ -53,6 +53,16 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "audioStorageUrl", "srtStorageUrl", "createdAt"]
+    },
+    "Session": {
+      "title": "Session",
+      "description": "Maps Firebase Auth UID to Access ID.",
+      "type": "object",
+      "properties": {
+        "accessCode": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["accessCode", "createdAt"]
     }
   },
   "firestore": {
@@ -71,6 +81,10 @@
     "/history/{historyId}": {
       "schema": "HistoryItem",
       "description": "Generation history."
+    },
+    "/sessions/{uid}": {
+      "schema": "Session",
+      "description": "User sessions mapping UID to Access Code."
     }
   }
 }

@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, User as FirebaseUser } from 'firebase/auth';
+import { getAuth, signOut, onAuthStateChanged, signInAnonymously, User as FirebaseUser } from 'firebase/auth';
 import { initializeFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, deleteField } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL, uploadString } from 'firebase/storage';
 
@@ -48,14 +48,13 @@ export const db = initializeFirestore(app, {
 
 export const auth = getAuth(app);
 export const storage = getStorage(app);
-export const googleProvider = new GoogleAuthProvider();
 
 export const getIdToken = async () => {
   if (!auth.currentUser) return null;
   return await auth.currentUser.getIdToken();
 };
 
-export { signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadBytes, getDownloadURL, uploadString, deleteField };
+export { signOut, onAuthStateChanged, signInAnonymously, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadBytes, getDownloadURL, uploadString, deleteField };
 export type { FirebaseUser };
 
 // Test connection to Firestore
@@ -99,6 +98,16 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  // Silence permission errors for the master admin to avoid console noise
+  const isMasterAdmin = localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026' || localStorage.getItem('vbs_isAdmin') === 'true';
+  const isPermissionError = error instanceof Error && error.message.includes('Missing or insufficient permissions');
+  
+  if (isMasterAdmin && isPermissionError) {
+    // Silently log for debugging but don't throw or show red errors
+    console.debug(`[Firestore Permission Silenced] ${operationType} on ${path}`);
+    return;
+  }
+
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {

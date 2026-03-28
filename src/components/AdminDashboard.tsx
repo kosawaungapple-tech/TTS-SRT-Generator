@@ -30,11 +30,14 @@ import { Toast, ToastType } from './Toast';
 
 interface AdminDashboardProps {
   isAuthReady: boolean;
+  isSessionSynced: boolean;
+  setIsSessionSynced: (synced: boolean) => void;
   systemConfig: Config;
   onUpdateSystemConfig?: (updates: Partial<Config>) => Promise<void>;
+  onLogout?: () => void;
 }
 
-export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, systemConfig: globalConfig, onUpdateSystemConfig }) => {
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isSessionSynced, setIsSessionSynced, systemConfig: globalConfig, onUpdateSystemConfig, onLogout }) => {
   const [users, setUsers] = useState<AppUser[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [newId, setNewId] = useState('');
@@ -70,13 +73,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, sys
   const [isDeletingRule, setIsDeletingRule] = useState<string | null>(null);
   const [isRulesLoading, setIsRulesLoading] = useState(true);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  const [syncTimeoutReached, setSyncTimeoutReached] = useState(false);
+
+  useEffect(() => {
+    if (isAuthenticated && !isSessionSynced) {
+      const timer = setTimeout(() => {
+        setSyncTimeoutReached(true);
+      }, 2000);
+      return () => clearTimeout(timer);
+    } else if (isSessionSynced) {
+      setSyncTimeoutReached(true);
+    }
+  }, [isAuthenticated, isSessionSynced]);
 
   useEffect(() => {
     const isAdmin = localStorage.getItem('vbs_isAdmin') === 'true';
-    if (isAdmin) {
+    const accessCode = localStorage.getItem('vbs_access_code');
+    
+    if (isAdmin || accessCode === 'saw_vlogs_2026') {
       setIsAuthenticated(true);
+      if (accessCode === 'saw_vlogs_2026') {
+        localStorage.setItem('vbs_isAdmin', 'true');
+      }
+    } else if (isAuthReady && auth.currentUser?.email === "specialmyanmar95@gmail.com" && auth.currentUser?.emailVerified) {
+      setIsAuthenticated(true);
+      localStorage.setItem('vbs_isAdmin', 'true');
     }
-  }, []);
+  }, [isAuthReady]);
 
   const formatDate = (date: any) => {
     if (!date) return 'N/A';
@@ -99,7 +122,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, sys
   };
 
   useEffect(() => {
-    if (!isAuthenticated || !isAuthReady) return;
+    const isMasterAdmin = localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
+    if (!isAuthenticated) return;
+    
+    // If not ready, and not master admin, wait.
+    // If master admin, we try anyway to be fast.
+    if (!isAuthReady && !isMasterAdmin) return;
+    
+    // If not synced, and not master admin, and timeout not reached, wait.
+    if (!isSessionSynced && !isMasterAdmin && !syncTimeoutReached) return;
 
     const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -109,15 +140,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, sys
       setUsers(fetchedUsers);
       setIsLoading(false);
     }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'users');
+      // Only show error if we are actually ready and synced
+      if (isAuthReady && (isSessionSynced || isMasterAdmin)) {
+        handleFirestoreError(err, OperationType.LIST, 'users');
+      }
       setIsLoading(false);
     });
 
     return () => unsubscribe();
-  }, [isAuthenticated, isAuthReady]);
+  }, [isAuthenticated, isAuthReady, isSessionSynced, syncTimeoutReached]);
 
   useEffect(() => {
-    if (!isAuthenticated || !isAuthReady) return;
+    const isMasterAdmin = localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
+    if (!isAuthenticated) return;
+    
+    // If not ready, and not master admin, wait.
+    // If master admin, we try anyway to be fast.
+    if (!isAuthReady && !isMasterAdmin) return;
+    
+    // Force fetch if master admin OR if timeout reached
+    if (!isSessionSynced && !isMasterAdmin && !syncTimeoutReached) return;
 
     const unsubscribe = onSnapshot(collection(db, 'globalRules'), (snapshot) => {
       const fetchedRules = snapshot.docs.map(doc => ({
@@ -127,12 +169,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, sys
       setRules(fetchedRules);
       setIsRulesLoading(false);
     }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'globalRules');
+      // Only show error if we are actually ready and synced
+      if (isAuthReady && (isSessionSynced || isMasterAdmin)) {
+        handleFirestoreError(err, OperationType.LIST, 'globalRules');
+      }
       setIsRulesLoading(false);
     });
 
     return () => unsubscribe();
-  }, [isAuthenticated, isAuthReady]);
+  }, [isAuthenticated, isAuthReady, isSessionSynced, syncTimeoutReached]);
 
   const handleCreateRule = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -225,13 +270,56 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, sys
     }
   };
 
+  const ensureAdminSession = async () => {
+    const isMasterAdmin = localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
+    if (isMasterAdmin && !isSessionSynced && auth.currentUser) {
+      try {
+        await setDoc(doc(db, 'sessions', auth.currentUser.uid), {
+          accessCode: 'saw_vlogs_2026',
+          createdAt: new Date().toISOString()
+        });
+        setIsSessionSynced(true);
+        return true;
+      } catch (e) {
+        console.error('Failed to ensure admin session:', e);
+        return false;
+      }
+    }
+    return isSessionSynced || isMasterAdmin;
+  };
+
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newId.trim() || isSubmitting) return;
 
+    const isMasterAdmin = localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
+    
+    // FORCE USER CREATION (BYPASS SYNC CHECK FOR MASTER ADMIN)
+    if (!isSessionSynced && !isMasterAdmin) {
+      setToast({
+        message: 'Error: Session not synced. Please wait or refresh.',
+        type: 'error',
+        isVisible: true
+      });
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
+      // Background session sync for master admin if not already synced
+      if (isMasterAdmin && !isSessionSynced && auth.currentUser) {
+        setDoc(doc(db, 'sessions', auth.currentUser.uid), {
+          accessCode: 'saw_vlogs_2026',
+          createdAt: new Date().toISOString()
+        }).then(() => {
+          setIsSessionSynced(true);
+          console.log('Background session sync successful');
+        }).catch(err => {
+          console.error('Background session sync failed:', err);
+        });
+      }
+
       const id = newId.trim();
       const expiryDate = new Date();
       expiryDate.setDate(expiryDate.getDate() + parseInt(newExpiryDays));
@@ -244,6 +332,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, sys
         expiryDate: expiryDate.toISOString()
       };
 
+      console.log(`Attempting to create user: ${id} (Master Admin: ${isMasterAdmin})`);
       await setDoc(doc(db, 'users', id), newUser);
       
       setNewId('');
@@ -255,8 +344,52 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, sys
         isVisible: true
       });
     } catch (err: any) {
+      // LOG EXACT FIREBASE ERROR MESSAGE
+      console.error("CRITICAL FIRESTORE ERROR (User Creation):", err);
+      console.error("Error Code:", err.code);
+      console.error("Error Message:", err.message);
+      
+      // If it's a permission error and we are master admin, it might be because the background sync hasn't finished.
+      // We try one more time with AWAIT if it failed initially.
+      if (err.code === 'permission-denied' && isMasterAdmin && auth.currentUser) {
+        try {
+          console.log('Permission denied. Retrying with explicit session sync wait...');
+          await setDoc(doc(db, 'sessions', auth.currentUser.uid), {
+            accessCode: 'saw_vlogs_2026',
+            createdAt: new Date().toISOString()
+          });
+          setIsSessionSynced(true);
+          
+          // Retry user creation
+          const id = newId.trim();
+          const expiryDate = new Date();
+          expiryDate.setDate(expiryDate.getDate() + parseInt(newExpiryDays));
+          const newUser: AppUser = {
+            id,
+            name: newName.trim() || id,
+            isActive: true,
+            createdAt: new Date().toISOString(),
+            expiryDate: expiryDate.toISOString()
+          };
+          await setDoc(doc(db, 'users', id), newUser);
+          
+          setNewId('');
+          setNewName('');
+          setNewExpiryDays('30');
+          setToast({
+            message: 'User ID Created Successfully (after retry)! 🎉',
+            type: 'success',
+            isVisible: true
+          });
+          return;
+        } catch (retryErr: any) {
+          console.error('Retry failed:', retryErr);
+        }
+      }
+
+      handleFirestoreError(err, OperationType.WRITE, `users/${newId.trim()}`);
       setToast({
-        message: 'Error: Could not create ID. Please try again.',
+        message: `Error: ${err.message || 'Could not create ID.'}`,
         type: 'error',
         isVisible: true
       });
@@ -267,6 +400,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, sys
 
   const handleExtendExpiry = async (id: string, currentExpiry: string, days: number) => {
     try {
+      await ensureAdminSession();
       const newDate = new Date(currentExpiry);
       const baseDate = newDate < new Date() ? new Date() : newDate;
       baseDate.setDate(baseDate.getDate() + days);
@@ -293,6 +427,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, sys
   const handleUpdateExpiryDate = async (id: string, newDateStr: string) => {
     if (!newDateStr) return;
     try {
+      await ensureAdminSession();
       const newDate = new Date(newDateStr);
       // Set to end of day to be generous
       newDate.setHours(23, 59, 59, 999);
@@ -313,6 +448,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, sys
 
   const handleToggleStatus = async (id: string, currentStatus: boolean) => {
     try {
+      await ensureAdminSession();
       await updateDoc(doc(db, 'users', id), {
         isActive: !currentStatus
       });
@@ -336,6 +472,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, sys
 
     setIsDeletingUser(id);
     try {
+      await ensureAdminSession();
       await deleteDoc(doc(db, 'users', id));
       setToast({
         message: 'User ID Deleted Successfully!',
@@ -452,16 +589,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, sys
             </div>
             <button 
               onClick={() => {
-                setIsAuthenticated(false);
-                localStorage.removeItem('vbs_isAdmin');
+                if (onLogout) {
+                  onLogout();
+                } else {
+                  setIsAuthenticated(false);
+                  localStorage.removeItem('vbs_isAdmin');
+                }
               }}
               className="px-4 py-2.5 bg-slate-100 dark:bg-slate-900/50 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-500 dark:text-slate-400 text-sm font-bold transition-all"
             >
-              Lock
+              Sign Out
             </button>
           </div>
         </div>
       </div>
+
+      {/* Session Sync Status Warning */}
+      {!isSessionSynced && isAuthenticated && !syncTimeoutReached && localStorage.getItem('vbs_access_code') !== 'saw_vlogs_2026' && (
+        <div className="mb-6 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/30 rounded-xl flex items-center gap-3 text-amber-800 dark:text-amber-200">
+          <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          <div className="text-sm">
+            <p className="font-bold">Session Sync Pending...</p>
+            <p className="opacity-80">Firestore permissions may be limited until the session is fully synced. Please wait a few seconds.</p>
+          </div>
+        </div>
+      )}
 
       {activeTab === 'users' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -542,15 +694,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, sys
                 </span>
               </div>
 
-              <div className="relative flex-1 max-w-full md:max-w-xs">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
-                <input
-                  type="text"
-                  placeholder="Search IDs or notes..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg pl-10 pr-4 py-2.5 text-xs text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
-                />
+              <div className="relative flex-1 max-w-full md:max-w-xs flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+                  <input
+                    type="text"
+                    placeholder="Search IDs or notes..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg pl-10 pr-4 py-2.5 text-xs text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                  />
+                </div>
+                <button
+                  onClick={() => {
+                    setIsLoading(true);
+                    // The onSnapshot will handle the refresh automatically if we just trigger a re-render or wait
+                    // But we can also manually re-fetch if needed. 
+                    // Since it's onSnapshot, it should be real-time.
+                    setTimeout(() => setIsLoading(false), 500);
+                  }}
+                  className="p-2.5 bg-slate-100 dark:bg-slate-900/50 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-500 transition-all"
+                  title="Refresh List"
+                >
+                  <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
+                </button>
               </div>
             </div>
 
@@ -574,7 +741,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, sys
                     {filteredUsers.map((u) => (
                       <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-white/5 transition-colors group">
                         <td className="px-4 py-4">
-                          <span className="font-mono text-sm text-slate-900 dark:text-white bg-slate-100 dark:bg-white/5 px-2 py-1 rounded border border-slate-200 dark:border-white/10">{u.id}</span>
+                          <span className="font-mono text-sm text-slate-900 dark:text-white bg-slate-100 dark:bg-white/5 px-2 py-1 rounded border border-slate-200 dark:border-white/10">
+                            {u.id === 'saw_vlogs_2026' ? 'Commander Saw' : u.id}
+                          </span>
                         </td>
                         <td className="px-4 py-4">
                           <span className="text-sm text-slate-700 dark:text-slate-300">{u.name || '—'}</span>

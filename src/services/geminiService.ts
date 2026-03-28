@@ -1,17 +1,16 @@
-import { GoogleGenAI, Modality } from "@google/genai";
+import { GenerateContentResponse } from "@google/genai";
 import { TTSConfig, AudioResult, SRTSubtitle } from "../types";
 import { GEMINI_MODELS, VOICE_OPTIONS } from "../constants";
 import { pcmToWav, formatTime } from "../utils/audioUtils";
+import { getIdToken } from "../firebase";
 
 export class GeminiTTSService {
-  private ai: GoogleGenAI;
   private apiKey: string;
 
   constructor(apiKey?: string) {
     const rawKey = apiKey || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '') || '';
     this.apiKey = rawKey.trim();
     console.log("GeminiTTSService: Initialized with key:", this.apiKey ? `Present (Starts with ${this.apiKey.substring(0, 4)}...)` : "Missing");
-    this.ai = new GoogleGenAI({ apiKey: this.apiKey });
   }
 
   async verifyConnection(): Promise<{ isValid: boolean; status?: number; error?: string }> {
@@ -21,13 +20,38 @@ export class GeminiTTSService {
     }
 
     try {
-      console.log("GeminiTTSService: Verifying connection with models.list...");
-      const response = await this.ai.models.list();
-      
-      if (response) {
+      console.log("GeminiTTSService: Verifying connection via proxy...");
+      const idToken = await getIdToken();
+      if (!idToken) throw new Error("Unauthenticated: No ID Token");
+
+      const response = await fetch("/api/proxy", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${idToken}`
+        },
+        body: JSON.stringify({
+          apiKey: this.apiKey,
+          model: GEMINI_MODELS.TTS,
+          contents: [{ parts: [{ text: "Hello" }] }],
+          config: {
+            responseModalities: ["AUDIO"],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: {
+                  voiceName: VOICE_OPTIONS[0].voiceName
+                }
+              }
+            }
+          }
+        })
+      });
+
+      if (response.ok) {
         return { isValid: true };
       } else {
-        return { isValid: false, error: "No response from models.list" };
+        const data = await response.json();
+        return { isValid: false, error: data.error || "Proxy verification failed", status: response.status };
       }
     } catch (err: any) {
       console.error("GeminiTTSService: Verification failed:", err);
@@ -84,35 +108,48 @@ export class GeminiTTSService {
     const volume = Math.max(0, Math.min(100, parseFloat(String(config.volume)) || 80));
     const volumeGainDb = Math.max(-96.0, Math.min(16.0, -96.0 + (volume / 100) * 112.0));
 
-    console.log("TTS Service: Sending request to Gemini API via @google/genai...", { speed, pitch, volumeGainDb });
-
-    const payload = {
-      model: GEMINI_MODELS.TTS,
-      contents: [{ parts: [{ text: `Narrate the following text in a natural, clear, and cinematic ${language} ${voice.gender} voice. 
-      Speaking rate: ${speed.toFixed(2)}x. 
-      Pitch: ${pitch.toFixed(1)}. 
-      Volume: ${volume}%.
-      Ensure word-for-word accuracy and do not summarize: ${text}` }] }],
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: {
-              voiceName: voice.voiceName
-            }
-          }
-        }
-      }
-    };
-
-    console.log("TTS Service: API Payload (Simplified):", JSON.stringify(payload, null, 2));
+    console.log("TTS Service: Sending request to Gemini API via Server Proxy...", { speed, pitch, volumeGainDb });
 
     try {
-      const response = await this.ai.models.generateContent(payload);
+      const idToken = await getIdToken();
+      if (!idToken) throw new Error("Unauthenticated: No ID Token");
 
-      console.log("TTS Service: Received response from API");
+      const response = await fetch("/api/proxy", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${idToken}`
+        },
+        body: JSON.stringify({
+          apiKey: this.apiKey,
+          model: GEMINI_MODELS.TTS,
+          contents: [{ parts: [{ text: `Narrate the following text in a natural, clear, and cinematic ${language} ${voice.gender} voice. 
+          Speaking rate: ${speed.toFixed(2)}x. 
+          Pitch: ${pitch.toFixed(1)}. 
+          Volume: ${volume}%.
+          Ensure word-for-word accuracy and do not summarize: ${text}` }] }],
+          config: {
+            responseModalities: ["AUDIO"],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: {
+                  voiceName: voice.voiceName
+                }
+              }
+            }
+          }
+        })
+      });
 
-      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Proxy error: ${response.status}`);
+      }
+
+      const data: GenerateContentResponse = await response.json();
+      console.log("TTS Service: Received response from Proxy");
+
+      const base64Audio = data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
 
       if (!base64Audio) {
         throw new Error('No audio data received from Gemini');
@@ -145,15 +182,7 @@ export class GeminiTTSService {
         subtitles
       };
     } catch (err: any) {
-      // Debugging: Capture exact error message from Google API response
-      console.error("TTS Service: Real API call failed (Error 400 check). Full error details:", {
-        message: err.message,
-        status: err.status,
-        statusText: err.statusText,
-        details: err.details || err.response?.data?.error || "No extra details",
-        stack: err.stack,
-        rawError: err
-      });
+      console.error("TTS Service: Proxy API call failed. Full error details:", err);
       // Fallback to mock if it's a network error, timeout, or CORS issue
       return await runMock();
     }

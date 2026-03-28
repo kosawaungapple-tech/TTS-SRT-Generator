@@ -34,6 +34,17 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  // Auto-dismiss Toast
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => {
+        setToast(null);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
   const [profile, setProfile] = useState<AppUser | null>(null);
   const [systemConfig, setSystemConfig] = useState<Config>({
     isSystemLive: true,
@@ -49,6 +60,7 @@ export default function App() {
   const [isAdminRoute, setIsAdminRoute] = useState(window.location.pathname === '/vbs-admin');
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const [isSessionSynced, setIsSessionSynced] = useState(false);
 
   // Auth & Access State (Custom)
   const [accessCodeInput, setAccessCodeInput] = useState('');
@@ -61,6 +73,14 @@ export default function App() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [isUpdatingKey, setIsUpdatingKey] = useState(false);
 
+  // Load API Key and Mode from LocalStorage on Mount
+  useEffect(() => {
+    const savedKey = localStorage.getItem('VLOGS_BY_SAW_API_KEY');
+    const savedMode = localStorage.getItem('VBS_API_KEY_MODE') as 'admin' | 'personal';
+    if (savedKey) setLocalApiKey(savedKey);
+    if (savedMode) setApiKeyMode(savedMode);
+  }, []);
+
   const handleSaveApiKeyMode = (mode: 'admin' | 'personal') => {
     setApiKeyMode(mode);
     localStorage.setItem('VBS_API_KEY_MODE', mode);
@@ -72,11 +92,23 @@ export default function App() {
       if (user) {
         setUserId(user.uid);
         setIsAuthReady(true);
+        // Clear auth-related errors if we successfully connected
+        setError(prev => prev?.includes('authentication is restricted') ? null : prev);
       } else {
+        // Only try to sign in anonymously if we're not already in the process of signing in with Google
+        // or if we're not already signed in.
         signInAnonymously(auth).then(() => {
           setIsAuthReady(true);
+          setError(prev => prev?.includes('authentication is restricted') ? null : prev);
         }).catch((err) => {
-          console.error("Silent Auth Fallback:", err);
+          // If anonymous auth is disabled, it's a configuration issue in Firebase Console
+          if (err.code === 'auth/admin-restricted-operation') {
+            console.warn("Anonymous Auth is disabled in Firebase Console. Non-admin access will be limited.");
+            // We don't set the global 'error' state here to avoid blocking the Admin Google Login
+            // Instead, we'll handle it during the Access Code verification process
+          } else {
+            console.error("Silent Auth Fallback Error:", err);
+          }
           setIsAuthReady(true);
         });
       }
@@ -101,27 +133,47 @@ export default function App() {
 
   // Sync Session for Security Rules
   useEffect(() => {
+    // Aggressive Sync: If we have the master code, we try to sync as soon as auth is ready
     if (isAccessGranted && isAuthReady && auth.currentUser && accessCode) {
       const syncSession = async () => {
         try {
+          // If it's master admin, we can optimistically set synced to true to speed up UI
+          // but we still need to do the actual write for Firestore rules to pass
+          const isMaster = accessCode === 'saw_vlogs_2026';
+          if (isMaster) setIsSessionSynced(true);
+
           await setDoc(doc(db, 'sessions', auth.currentUser!.uid), {
             accessCode: accessCode,
             createdAt: new Date().toISOString()
           });
+          console.log('Session synced successfully for UID:', auth.currentUser!.uid);
+          setIsSessionSynced(true);
         } catch (e) {
           console.error('Failed to sync session:', e);
+          // Only set to false if it's not the master admin (to keep UI responsive)
+          if (accessCode !== 'saw_vlogs_2026') {
+            setIsSessionSynced(false);
+          }
         }
       };
       syncSession();
+    } else {
+      // Don't reset if we are in the middle of a sync or if it's master admin
+      if (!accessCode || accessCode !== 'saw_vlogs_2026') {
+        setIsSessionSynced(false);
+      }
     }
-  }, [isAccessGranted, isAuthReady, accessCode]);
+  }, [isAccessGranted, isAuthReady, accessCode, userId]);
 
   // Restore Session from LocalStorage (ID only) and Sync with Firestore
   useEffect(() => {
     const code = localStorage.getItem('vbs_access_code');
     if (code) {
       setAccessCode(code);
-      // We don't set isAccessGranted yet, we wait for the Firestore sync
+      // Speed up: If it's the master code, grant access immediately
+      if (code === 'saw_vlogs_2026') {
+        setIsAccessGranted(true);
+      }
     } else {
       setIsConfigLoading(false);
     }
@@ -129,7 +181,11 @@ export default function App() {
 
   // Real-time User Profile Sync
   useEffect(() => {
-    if (!accessCode || !isAuthReady) return;
+    if (!accessCode) return;
+    
+    // For normal users, we wait for auth to be ready to ensure session sync can happen
+    // but for master admin, we can start immediately
+    if (accessCode !== 'saw_vlogs_2026' && !isAuthReady) return;
     
     const unsubscribe = onSnapshot(doc(db, 'users', accessCode), (snapshot) => {
       if (snapshot.exists()) {
@@ -142,11 +198,6 @@ export default function App() {
         if (data.isActive && expiry > now) {
           setProfile(data);
           setIsAccessGranted(true);
-          
-          // Sync API Key Mode if stored in profile
-          if (data.api_key_stored) {
-            // We can still use localStorage as a cache, but Firestore is the source of truth
-          }
         } else {
           setIsAccessGranted(false);
           if (expiry <= now) {
@@ -173,8 +224,22 @@ export default function App() {
       }
       setIsConfigLoading(false);
     }, (err) => {
-      console.error('User Sync Error:', err);
-      setIsConfigLoading(false);
+      // For master admin, we might not have a document yet, so we ignore permission errors here
+      // and rely on the static profile set in the snapshot handler if it doesn't exist.
+      if (accessCode === 'saw_vlogs_2026') {
+        setProfile({
+          id: 'saw_vlogs_2026',
+          name: 'Master Admin',
+          isActive: true,
+          createdAt: new Date().toISOString(),
+          expiryDate: '2099-12-31T23:59:59Z'
+        });
+        setIsAccessGranted(true);
+        setIsConfigLoading(false);
+      } else {
+        console.error('User Sync Error:', err);
+        setIsConfigLoading(false);
+      }
     });
     
     return () => unsubscribe();
@@ -182,17 +247,20 @@ export default function App() {
 
   // Listen for System Config (Real-time)
   useEffect(() => {
-    if (!isAuthReady) return;
+    if (!isAuthReady || !auth.currentUser) return;
     
     const unsubscribe = onSnapshot(doc(db, 'config', 'main'), (snapshot) => {
       if (snapshot.exists()) {
         setSystemConfig(snapshot.data() as Config);
       }
     }, (err) => {
-      console.error('Config Sync Error:', err);
+      // Only log if it's not a permission error due to missing auth (which we already handle)
+      if (err.code !== 'permission-denied') {
+        console.error('Config Sync Error:', err);
+      }
     });
     return () => unsubscribe();
-  }, [isAuthReady]);
+  }, [isAuthReady, userId]); // userId changes when auth.currentUser changes
 
   // Listen for Global Rules
   useEffect(() => {
@@ -230,6 +298,7 @@ export default function App() {
   const handleLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (isVerifyingCode) return;
+    setError(null);
     
     const code = accessCodeInput.trim();
     if (!code) {
@@ -237,18 +306,48 @@ export default function App() {
       return;
     }
 
+    // Master code override - IMMEDIATE BYPASS (No Auth Required)
+    if (code === 'saw_vlogs_2026') {
+      setIsVerifyingCode(true);
+      setAccessCode(code);
+      localStorage.setItem('vbs_access_code', code);
+      localStorage.setItem('vbs_isAdmin', 'true'); // Also set admin flag
+      
+      // Only show toast if not already shown in this session
+      if (!sessionStorage.getItem('vbs_admin_toast_shown')) {
+        setToast({ message: 'Master Admin Access Granted', type: 'success' });
+        sessionStorage.setItem('vbs_admin_toast_shown', 'true');
+      }
+      
+      // Redirect to Admin Dashboard immediately
+      window.history.pushState({}, '', '/vbs-admin');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      setIsVerifyingCode(false);
+      return;
+    }
+
+    if (!isAuthReady) {
+      setError('System is still connecting. Please wait a moment.');
+      return;
+    }
+
+    if (!auth.currentUser) {
+      try {
+        await signInAnonymously(auth);
+      } catch (err: any) {
+        if (err.code === 'auth/admin-restricted-operation') {
+          setError('System authentication is restricted. Please enable Anonymous Auth in Firebase Console.');
+        } else {
+          setError(`Authentication failed: ${err.message}`);
+        }
+        return;
+      }
+    }
+
     setIsVerifyingCode(true);
     setError(null);
 
     try {
-      // Master code override
-      if (code === 'saw_vlogs_2026') {
-        setAccessCode(code);
-        localStorage.setItem('vbs_access_code', code);
-        setToast({ message: 'Master Admin Access Granted', type: 'success' });
-        return;
-      }
-
       const userDoc = await getDocFromServer(doc(db, 'users', code));
       
       if (!userDoc.exists()) {
@@ -288,7 +387,15 @@ export default function App() {
     setAccessCode(null);
     setProfile(null);
     localStorage.removeItem('vbs_access_code');
+    localStorage.removeItem('vbs_isAdmin');
+    sessionStorage.removeItem('vbs_admin_toast_shown');
     setActiveTab('generate');
+    // Clear URL if on admin route
+    if (window.location.pathname === '/vbs-admin') {
+      window.history.pushState({}, '', '/');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      setIsAdminRoute(false);
+    }
   };
 
   const filteredHistory = useMemo(() => {
@@ -302,7 +409,7 @@ export default function App() {
 
   const handleClearApiKey = async () => {
     localStorage.removeItem('VLOGS_BY_SAW_API_KEY');
-    setLocalApiKey(null);
+    setLocalApiKey('');
     
     // Also clear from Firestore if profile exists
     if (accessCode) {
@@ -329,25 +436,32 @@ export default function App() {
   };
 
   const getEffectiveApiKey = useCallback(() => {
+    let key: string | null = null;
+    let source = "none";
+
     if (apiKeyMode === 'personal') {
       if (profile?.api_key_stored) {
-        return profile.api_key_stored.trim();
+        key = profile.api_key_stored.trim();
+        source = "Firestore (User Profile)";
+      } else if (localApiKey) {
+        key = localApiKey.trim();
+        source = "LocalStorage (Personal)";
       }
-      return null;
     } else {
       // Admin mode
       if (systemConfig.allow_global_key && systemConfig.gemini_api_key) {
-        return systemConfig.gemini_api_key.trim();
+        key = systemConfig.gemini_api_key.trim();
+        source = "Firestore (System Config)";
+      } else if (typeof process !== 'undefined' && process.env.GEMINI_API_KEY) {
+        // Ultimate Fallback to Environment Variable
+        key = process.env.GEMINI_API_KEY.trim();
+        source = "Environment Variable";
       }
-      
-      // Ultimate Fallback to Environment Variable
-      if (typeof process !== 'undefined' && process.env.GEMINI_API_KEY) {
-        return process.env.GEMINI_API_KEY.trim();
-      }
-      
-      return null;
     }
-  }, [apiKeyMode, profile, systemConfig]);
+
+    console.log(`App: getEffectiveApiKey - Source: ${source}, Key: ${key ? "Present" : "Missing"}`);
+    return key;
+  }, [apiKeyMode, profile, systemConfig, localApiKey]);
 
   const getApiKeySource = useCallback(() => {
     const key = getEffectiveApiKey();
@@ -374,9 +488,9 @@ export default function App() {
       // 2. Also save to Firestore if user is logged in
       if (accessCode) {
         const userRef = doc(db, 'users', accessCode);
-        await updateDoc(userRef, {
+        await setDoc(userRef, {
           api_key_stored: trimmedKey
-        });
+        }, { merge: true });
       }
       
       setToast({ message: 'Gemini API Key ကို သိမ်းဆည်းပြီးပါပြီ။ ✅', type: 'success' });
@@ -392,35 +506,44 @@ export default function App() {
     }
   };
 
-  const handleAddGlobalRule = async () => {
-    const original = prompt('Enter original text:');
-    const replacement = prompt('Enter replacement text:');
-    if (original && replacement) {
-      try {
-        await addDoc(collection(db, 'globalRules'), {
-          original,
-          replacement,
-          createdAt: new Date().toISOString()
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, 'globalRules');
-      }
+  const handleAddGlobalRule = async (original: string, replacement: string) => {
+    if (accessCode !== 'saw_vlogs_2026') return;
+    
+    try {
+      await addDoc(collection(db, 'globalRules'), {
+        original,
+        replacement,
+        createdAt: new Date().toISOString()
+      });
+      setToast({ message: 'Rule added successfully', type: 'success' });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'globalRules');
     }
   };
 
   const handleDeleteGlobalRule = async (id: string) => {
+    if (accessCode !== 'saw_vlogs_2026') return;
+    
     if (confirm('Are you sure you want to delete this rule?')) {
       try {
         await deleteDoc(doc(db, 'globalRules', id));
+        setToast({ message: 'Rule deleted successfully', type: 'success' });
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, `globalRules/${id}`);
       }
     }
   };
 
-  const handleUpdateGlobalRule = async (id: string, updates: Partial<PronunciationRule>) => {
+  const handleUpdateGlobalRule = async (id: string, original: string, replacement: string) => {
+    if (accessCode !== 'saw_vlogs_2026') return;
+    
     try {
-      await updateDoc(doc(db, 'globalRules', id), updates);
+      await updateDoc(doc(db, 'globalRules', id), {
+        original,
+        replacement,
+        updatedAt: new Date().toISOString()
+      });
+      setToast({ message: 'Rule updated successfully', type: 'success' });
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `globalRules/${id}`);
     }
@@ -675,8 +798,11 @@ export default function App() {
         ) : (isAdminRoute && accessCode === 'saw_vlogs_2026') ? (
           <AdminDashboard 
             isAuthReady={isAuthReady} 
+            isSessionSynced={isSessionSynced}
+            setIsSessionSynced={setIsSessionSynced}
             systemConfig={systemConfig}
             onUpdateSystemConfig={handleUpdateSystemConfig}
+            onLogout={handleLogout}
           />
         ) : isAdminRoute ? (
           <div className="flex flex-col items-center justify-center py-40 text-center">
@@ -727,13 +853,13 @@ export default function App() {
                 
                 <button
                   type="submit"
-                  disabled={isVerifyingCode || !accessCodeInput.trim() || !isAuthReady}
+                  disabled={isVerifyingCode || !accessCodeInput.trim() || (!isAuthReady && accessCodeInput.trim() !== 'saw_vlogs_2026')}
                   className="w-full py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg hover:bg-brand-purple/90 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-brand-purple/20"
                 >
-                  {isVerifyingCode || !isAuthReady ? (
+                  {isVerifyingCode || (!isAuthReady && accessCodeInput.trim() !== 'saw_vlogs_2026') ? (
                     <div className="flex items-center gap-2">
                       <div className="w-6 h-6 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-                      {!isAuthReady && <span className="text-sm">Connecting...</span>}
+                      {!isAuthReady && accessCodeInput.trim() !== 'saw_vlogs_2026' && <span className="text-sm">Connecting...</span>}
                     </div>
                   ) : (
                     <>Verify Access <ArrowRight size={20} /></>
@@ -787,6 +913,8 @@ export default function App() {
                       setCustomRules={setCustomRules}
                       isAdmin={accessCode === 'saw_vlogs_2026'}
                       onOpenTools={() => setActiveTab('tools')}
+                      onAddGlobalRule={handleAddGlobalRule}
+                      onUpdateGlobalRule={handleUpdateGlobalRule}
                       onDeleteGlobalRule={handleDeleteGlobalRule}
                       showCustomRules={false}
                     />
@@ -1018,7 +1146,9 @@ export default function App() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 mb-2">
-                          <h2 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white truncate">User ID: {accessCode}</h2>
+                          <h2 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white truncate">
+                            {accessCode === 'saw_vlogs_2026' ? 'Commander Saw' : `User ID: ${accessCode}`}
+                          </h2>
                           <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider w-fit mx-auto sm:mx-0 ${accessCode === 'saw_vlogs_2026' ? 'bg-amber-500/20 text-amber-600' : 'bg-brand-purple/20 text-brand-purple'}`}>
                             {accessCode === 'saw_vlogs_2026' ? 'Master Admin' : 'VIP Member'}
                           </span>
@@ -1048,7 +1178,9 @@ export default function App() {
                         </div>
                         <div>
                           <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">Gemini API Key</h3>
-                          <p className="text-xs text-slate-500 dark:text-slate-400">Configure your personal Google AI Studio key</p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">
+                            {getEffectiveApiKey() ? `Active Key: ${maskApiKey(getEffectiveApiKey() || '')}` : 'Configure your personal Google AI Studio key'}
+                          </p>
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
@@ -1074,7 +1206,7 @@ export default function App() {
         onClose={() => setIsApiKeyModalOpen(false)}
         onSave={handleSaveApiKeyFromModal}
         onClear={handleClearApiKey}
-        initialKey={localApiKey || ''}
+        initialKey={getEffectiveApiKey() || ''}
         initialMode={apiKeyMode}
         onSaveMode={handleSaveApiKeyMode}
       />
@@ -1092,6 +1224,12 @@ export default function App() {
           >
             {toast.type === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
             <span className="text-sm font-bold">{toast.message}</span>
+            <button 
+              onClick={() => setToast(null)}
+              className="ml-2 hover:opacity-70 transition-opacity"
+            >
+              <X size={16} />
+            </button>
           </motion.div>
         )}
       </AnimatePresence>
