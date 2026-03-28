@@ -1,20 +1,31 @@
 {
   "entities": {
     "User": {
-      "title": "User Profile",
-      "description": "Stores user account information including their role and API key.",
+      "title": "User",
+      "description": "Stores user account information for cloud synchronization.",
       "type": "object",
       "properties": {
-        "uid": { "type": "string", "description": "The unique user ID from Firebase Auth." },
-        "email": { "type": "string", "format": "email", "description": "The user's email address." },
-        "displayName": { "type": "string", "description": "The user's display name." },
-        "photoURL": { "type": "string", "description": "The user's profile picture URL." },
-        "role": { "type": "string", "enum": ["admin", "user"], "description": "The user's role in the system." },
-        "api_key_stored": { "type": "string", "description": "The user's personal Google AI Studio API Key." },
-        "is_verified": { "type": "boolean", "description": "Whether the user has been manually verified by an admin." },
-        "pending_verification": { "type": "boolean", "description": "Whether the user has requested activation." }
+        "id": { "type": "string", "description": "The unique Access ID (e.g., VIP-0001)." },
+        "name": { "type": "string", "description": "The user's name." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiryDate": { "type": "string", "format": "date-time" },
+        "isActive": { "type": "boolean" },
+        "api_key_stored": { "type": "string" }
       },
-      "required": ["uid", "email", "role", "is_verified"]
+      "required": ["id", "name", "createdAt", "expiryDate", "isActive"]
+    },
+    "Config": {
+      "title": "System Configuration",
+      "description": "Global system configuration and API keys.",
+      "type": "object",
+      "properties": {
+        "gemini_api_key": { "type": "string" },
+        "rapidapi_key": { "type": "string" },
+        "openai_api_key": { "type": "string" },
+        "isSystemLive": { "type": "boolean" },
+        "allow_global_key": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
     },
     "PronunciationRule": {
       "title": "Pronunciation Rule",
@@ -31,83 +42,35 @@
     },
     "HistoryItem": {
       "title": "History Item",
-      "description": "A record of a generated voiceover with storage links.",
+      "description": "A record of a generated voiceover.",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
         "userId": { "type": "string" },
-        "userEmail": { "type": "string", "format": "email" },
-        "text": { "type": "string", "description": "Truncated text for preview." },
-        "audioStorageUrl": { "type": "string", "description": "Firebase Storage URL for the audio file." },
-        "srtStorageUrl": { "type": "string", "description": "Firebase Storage URL for the SRT file." },
-        "srtContent": { "type": "string", "description": "Optional small SRT content." },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "config": { "type": "object" }
+        "text": { "type": "string" },
+        "audioStorageUrl": { "type": "string" },
+        "srtStorageUrl": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "audioStorageUrl", "srtStorageUrl", "createdAt"]
-    },
-    "AuthorizedUser": {
-      "title": "Authorized User (Access Code)",
-      "description": "A record of an authorized Access Code for the system.",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "description": "The Access Code itself." },
-        "label": { "type": "string", "description": "Optional name/label for the ID." },
-        "isActive": { "type": "boolean", "description": "Whether the ID is active." },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "createdBy": { "type": "string", "description": "UID of the admin who created it." }
-      },
-      "required": ["id", "isActive", "createdAt", "createdBy"]
-    },
-    "GlobalSettings": {
-      "title": "Global Settings",
-      "description": "System-wide settings for API keys and monitoring.",
-      "type": "object",
-      "properties": {
-        "global_system_key": { "type": "string" },
-        "allow_global_key": { "type": "boolean" },
-        "total_generations": { "type": "number" }
-      }
-    },
-    "SystemConfig": {
-      "title": "System Configuration",
-      "description": "Global system configuration for Firebase and Telegram.",
-      "type": "object",
-      "properties": {
-        "firebase_project_id": { "type": "string" },
-        "firebase_api_key": { "type": "string" },
-        "firebase_auth_domain": { "type": "string" },
-        "firebase_app_id": { "type": "string" },
-        "telegram_bot_token": { "type": "string" },
-        "telegram_chat_id": { "type": "string" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      }
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": "User",
-      "description": "User profile document."
+      "description": "User profile documents indexed by Access ID."
     },
-    "/settings/global": {
-      "schema": "GlobalSettings",
-      "description": "Global system settings."
+    "/config/main": {
+      "schema": "Config",
+      "description": "Global system configuration."
     },
     "/globalRules/{ruleId}": {
       "schema": "PronunciationRule",
-      "description": "Global pronunciation rules set by admins."
+      "description": "Global pronunciation rules."
     },
     "/history/{historyId}": {
       "schema": "HistoryItem",
-      "description": "Generation history for users."
-    },
-    "/authorized_users/{accessCode}": {
-      "schema": "AuthorizedUser",
-      "description": "Authorized Access Codes for the system."
-    },
-    "/system_config/main": {
-      "schema": "SystemConfig",
-      "description": "Global system configuration for Firebase and Telegram."
+      "description": "Generation history."
     }
   }
 }

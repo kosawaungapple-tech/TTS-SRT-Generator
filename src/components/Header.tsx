@@ -7,6 +7,8 @@ interface HeaderProps {
   onOpenTools: () => void;
   isAccessGranted: boolean;
   onLogout: () => void;
+  isAdminRoute?: boolean;
+  isAdmin?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({ 
@@ -14,7 +16,9 @@ export const Header: React.FC<HeaderProps> = ({
   toggleTheme, 
   onOpenTools,
   isAccessGranted,
-  onLogout
+  onLogout,
+  isAdminRoute = false,
+  isAdmin = false
 }) => {
   return (
     <header className="sticky top-0 z-50 w-full border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-[#020617]/80 backdrop-blur-md transition-colors duration-300">
@@ -43,19 +47,30 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
           {isAccessGranted && (
             <div className="flex items-center gap-2 sm:gap-3">
-              <button 
-                onClick={() => window.location.pathname = '/vbs-admin'}
-                className="px-2 py-1 sm:px-3 sm:py-1.5 bg-brand-purple/10 dark:bg-brand-purple/20 text-brand-purple border border-brand-purple/20 dark:border-brand-purple/30 rounded-lg text-[9px] sm:text-[10px] font-bold uppercase hover:bg-brand-purple hover:text-white transition-all"
-              >
-                Admin
-              </button>
-              <button 
-                onClick={onOpenTools}
-                className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors text-slate-500 dark:text-slate-400"
-                title="Settings"
-              >
-                <Settings size={18} className="sm:w-5 sm:h-5" />
-              </button>
+              {isAdmin && (
+                <>
+                  <button 
+                    onClick={() => {
+                      if (isAdminRoute) {
+                        window.history.pushState({}, '', '/');
+                      } else {
+                        window.history.pushState({}, '', '/vbs-admin');
+                      }
+                      window.dispatchEvent(new PopStateEvent('popstate'));
+                    }}
+                    className="px-2 py-1 sm:px-3 sm:py-1.5 bg-brand-purple/10 dark:bg-brand-purple/20 text-brand-purple border border-brand-purple/20 dark:border-brand-purple/30 rounded-lg text-[9px] sm:text-[10px] font-bold uppercase hover:bg-brand-purple hover:text-white transition-all"
+                  >
+                    {isAdminRoute ? 'Back to App' : 'Admin'}
+                  </button>
+                  <button 
+                    onClick={onOpenTools}
+                    className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors text-slate-500 dark:text-slate-400"
+                    title="Settings"
+                  >
+                    <Settings size={18} className="sm:w-5 sm:h-5" />
+                  </button>
+                </>
+              )}
               <div className="flex items-center gap-2 pl-2 border-l border-slate-200 dark:border-slate-800">
                 <button 
                   onClick={onLogout}

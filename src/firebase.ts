@@ -1,36 +1,38 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, User as FirebaseUser } from 'firebase/auth';
-import { initializeFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit } from 'firebase/firestore';
+import { initializeFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, deleteField } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL, uploadString } from 'firebase/storage';
 
 // Import the Firebase configuration
 import defaultFirebaseConfig from '../firebase-applet-config.json';
 
+/**
+ * COMMANDER'S ORDER: PASTE YOUR FIREBASE CREDENTIALS HERE
+ * This will override the default configuration.
+ */
+const manualFirebaseConfig = {
+  apiKey: "PASTE_YOUR_API_KEY_HERE",
+  authDomain: "PASTE_YOUR_AUTH_DOMAIN_HERE",
+  projectId: "PASTE_YOUR_PROJECT_ID_HERE",
+  storageBucket: "PASTE_YOUR_STORAGE_BUCKET_HERE",
+  messagingSenderId: "PASTE_YOUR_MESSAGING_SENDER_ID_HERE",
+  appId: "PASTE_YOUR_APP_ID_HERE",
+  measurementId: "PASTE_YOUR_MEASUREMENT_ID_HERE"
+};
+
 // Dynamic configuration logic
 const getFirebaseConfig = () => {
-  const savedConfig = localStorage.getItem('vbs_system_config');
-  if (savedConfig) {
-    try {
-      const parsed = JSON.parse(savedConfig);
-      // Only use saved config if it doesn't contain placeholder "remixed" values
-      const isPlaceholder = (val: string) => !val || val.includes('remixed-') || val.includes('TODO_');
-      
-      if (!isPlaceholder(parsed.firebase_project_id) && !isPlaceholder(parsed.firebase_api_key)) {
-        return {
-          apiKey: parsed.firebase_api_key,
-          authDomain: parsed.firebase_auth_domain,
-          projectId: parsed.firebase_project_id,
-          appId: parsed.firebase_app_id,
-          firestoreDatabaseId: defaultFirebaseConfig.firestoreDatabaseId
-        };
-      } else {
-        console.warn('Saved Firebase config contains placeholders, falling back to default.');
-        localStorage.removeItem('vbs_system_config');
-      }
-    } catch (e) {
-      console.error('Failed to parse saved firebase config', e);
-    }
+  // Check if manual config is provided (not using placeholders)
+  const isManualProvided = manualFirebaseConfig.apiKey !== "PASTE_YOUR_API_KEY_HERE";
+  
+  if (isManualProvided) {
+    return {
+      ...manualFirebaseConfig,
+      firestoreDatabaseId: defaultFirebaseConfig.firestoreDatabaseId // Keep the database ID from the environment
+    };
   }
+
+  // Fallback to default config
   return defaultFirebaseConfig;
 };
 
@@ -53,7 +55,7 @@ export const getIdToken = async () => {
   return await auth.currentUser.getIdToken();
 };
 
-export { signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadBytes, getDownloadURL, uploadString };
+export { signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadBytes, getDownloadURL, uploadString, deleteField };
 export type { FirebaseUser };
 
 // Test connection to Firestore

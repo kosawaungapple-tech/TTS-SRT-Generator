@@ -1,5 +1,5 @@
 import React from 'react';
-import { ExternalLink, ShieldCheck, Info, Plus } from 'lucide-react';
+import { ExternalLink, ShieldCheck, Info, Plus, Trash2 } from 'lucide-react';
 import { PronunciationRule } from '../types';
 
 interface PronunciationRulesProps {
@@ -9,6 +9,7 @@ interface PronunciationRulesProps {
   setCustomRules: (rules: string) => void;
   isAdmin: boolean;
   onOpenTools: () => void;
+  onDeleteGlobalRule?: (id: string) => void;
   showCustomRules?: boolean;
 }
 
@@ -19,6 +20,7 @@ export const PronunciationRules: React.FC<PronunciationRulesProps> = ({
   setCustomRules,
   isAdmin,
   onOpenTools,
+  onDeleteGlobalRule,
   showCustomRules = true,
 }) => {
   return (
@@ -44,6 +46,7 @@ export const PronunciationRules: React.FC<PronunciationRulesProps> = ({
             <tr className="bg-slate-50 dark:bg-white/5 border-b border-slate-200 dark:border-white/5">
               <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Original Text</th>
               <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Replacement (Myanmar)</th>
+              {isAdmin && <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200 dark:divide-white/5">
@@ -55,6 +58,7 @@ export const PronunciationRules: React.FC<PronunciationRulesProps> = ({
                 <td className="px-6 py-4">
                   <span className="text-sm font-bold text-brand-purple">{rule.replacement}</span>
                 </td>
+                {isAdmin && <td className="px-6 py-4 text-right"></td>}
               </tr>
             ))}
             {globalRules.map((rule) => (
@@ -66,6 +70,17 @@ export const PronunciationRules: React.FC<PronunciationRulesProps> = ({
                 <td className="px-6 py-4">
                   <span className="text-sm font-bold text-brand-purple">{rule.replacement}</span>
                 </td>
+                {isAdmin && (
+                  <td className="px-6 py-4 text-right">
+                    <button
+                      onClick={() => onDeleteGlobalRule?.(rule.id)}
+                      className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
+                      title="Delete Rule"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
