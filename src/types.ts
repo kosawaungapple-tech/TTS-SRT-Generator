@@ -1,38 +1,42 @@
-export interface AppUser {
-  id: string; // Access ID (e.g., VIP-0001)
-  name: string;
-  password?: string; // Hashed password
-  access_password?: string; // Plain text password for admin to reveal
-  failedAttempts?: number;
-  lastFailedAttempt?: string; // ISO string
-  createdAt: string;
-  expiryDate: string;
+export interface User {
+  uid: string;
+  email: string;
+  displayName?: string;
+  photoURL?: string;
+  role: 'admin' | 'user';
+  is_verified?: boolean;
+  pending_verification?: boolean;
+  createdAt?: any;
+  lastSignInAt?: any;
+}
+
+export interface AuthorizedUser {
+  id: string; // Document ID (Access Code)
+  createdAt: any; // Firestore Timestamp
   isActive: boolean;
+  role: 'admin' | 'user';
+  note?: string; // Optional name/label
+  label?: string; // Alias for note
   api_key_stored?: string;
+  createdBy?: string;
 }
 
-export interface ApiKey {
-  id: string;
-  key: string;
-  usageCount: number;
-  status: 'active' | 'idle' | 'full';
-  label?: string;
-}
-
-export interface Config {
-  gemini_api_key?: string; // Legacy
-  gemini_api_keys?: ApiKey[];
-  openai_api_key?: string; // Legacy
-  openai_api_keys?: ApiKey[];
-  isSystemLive: boolean;
+export interface GlobalSettings {
+  global_system_key?: string;
   allow_global_key: boolean;
-  total_generations?: number;
-  updatedAt?: string;
-  active_gemini_key_index?: number;
-  active_openai_key_index?: number;
-  key_logs?: { message: string; timestamp: string }[];
-  telegram_bot_token?: string;
-  telegram_chat_id?: string;
+  total_generations: number;
+  mock_mode?: boolean;
+}
+
+export interface SystemConfig {
+  firebase_project_id: string;
+  firebase_api_key: string;
+  firebase_auth_domain: string;
+  firebase_app_id: string;
+  telegram_bot_token: string;
+  telegram_chat_id: string;
+  mock_mode?: boolean;
+  updatedAt?: any;
 }
 
 export interface HistoryItem {
@@ -41,7 +45,7 @@ export interface HistoryItem {
   text: string;
   audioStorageUrl?: string;
   srtStorageUrl?: string;
-  srtContent?: string; // Cache the SRT content
+  srtContent?: string;
   createdAt: string;
   config: TTSConfig;
 }
@@ -76,8 +80,6 @@ export interface TTSConfig {
 export interface AudioResult {
   audioUrl: string; // Blob URL for local preview
   audioData: string; // base64 for download/upload
-  wavBlob?: Blob; // Actual WAV blob
   srtContent: string;
   subtitles: SRTSubtitle[];
-  generatedText?: string; // Text generated from a prompt
 }

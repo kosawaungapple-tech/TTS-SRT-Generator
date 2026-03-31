@@ -1,11 +1,40 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, signOut, onAuthStateChanged, signInAnonymously, User as FirebaseUser } from 'firebase/auth';
-import { initializeFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, deleteField, increment } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, User as FirebaseUser } from 'firebase/auth';
+import { initializeFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL, uploadString } from 'firebase/storage';
-import { safeStorage } from './utils/safeBrowser';
 
 // Import the Firebase configuration
-import firebaseConfig from '../firebase-applet-config.json';
+import defaultFirebaseConfig from '../firebase-applet-config.json';
+
+// Dynamic configuration logic
+const getFirebaseConfig = () => {
+  const savedConfig = localStorage.getItem('vbs_system_config');
+  if (savedConfig) {
+    try {
+      const parsed = JSON.parse(savedConfig);
+      // Only use saved config if it doesn't contain placeholder "remixed" values
+      const isPlaceholder = (val: string) => !val || val.includes('remixed-') || val.includes('TODO_');
+      
+      if (!isPlaceholder(parsed.firebase_project_id) && !isPlaceholder(parsed.firebase_api_key)) {
+        return {
+          apiKey: parsed.firebase_api_key,
+          authDomain: parsed.firebase_auth_domain,
+          projectId: parsed.firebase_project_id,
+          appId: parsed.firebase_app_id,
+          firestoreDatabaseId: defaultFirebaseConfig.firestoreDatabaseId
+        };
+      } else {
+        console.warn('Saved Firebase config contains placeholders, falling back to default.');
+        localStorage.removeItem('vbs_system_config');
+      }
+    } catch (e) {
+      console.error('Failed to parse saved firebase config', e);
+    }
+  }
+  return defaultFirebaseConfig;
+};
+
+const firebaseConfig = getFirebaseConfig();
 
 // Initialize Firebase SDK
 const app = initializeApp(firebaseConfig);
@@ -17,63 +46,14 @@ export const db = initializeFirestore(app, {
 
 export const auth = getAuth(app);
 export const storage = getStorage(app);
+export const googleProvider = new GoogleAuthProvider();
 
 export const getIdToken = async () => {
-  // 1. If we already have a user, return the token
-  if (auth.currentUser) {
-    try {
-      return await auth.currentUser.getIdToken(true); // Force refresh to be safe
-    } catch (e) {
-      console.warn("getIdToken: Failed to get token from current user, trying re-auth", e);
-    }
-  }
-
-  // 2. Try to sign in anonymously if no user
-  try {
-    console.log("getIdToken: Attempting anonymous sign-in...");
-    const credential = await signInAnonymously(auth);
-    if (credential.user) {
-      console.log("getIdToken: Anonymous sign-in successful");
-      return await credential.user.getIdToken();
-    }
-  } catch (e: any) {
-    if (e.code === 'auth/admin-restricted-operation') {
-      console.error("getIdToken: CRITICAL - Anonymous Auth is DISABLED in Firebase Console. Please enable it in Authentication > Sign-in method.");
-    } else {
-      console.warn("getIdToken: Anonymous sign-in attempt failed:", e);
-    }
-  }
-
-  // 3. Fallback: Wait for auth to settle with retries
-  console.log("getIdToken: Waiting for auth state to settle...");
-  for (let i = 0; i < 3; i++) {
-    const user = await new Promise<FirebaseUser | null>((resolve) => {
-      const unsubscribe = onAuthStateChanged(auth, (user) => {
-        if (user) {
-          unsubscribe();
-          resolve(user);
-        }
-      });
-      setTimeout(() => {
-        unsubscribe();
-        resolve(null);
-      }, 1500); // Wait 1.5s per attempt
-    });
-
-    if (user) return await user.getIdToken();
-    if (auth.currentUser) return await auth.currentUser.getIdToken();
-    
-    // If it failed, try signing in again
-    try {
-      await signInAnonymously(auth);
-    } catch (e) {}
-  }
-
-  console.error("getIdToken: FAILED - No authenticated user found. API calls will fail.");
-  return null;
+  if (!auth.currentUser) return null;
+  return await auth.currentUser.getIdToken();
 };
 
-export { signOut, onAuthStateChanged, signInAnonymously, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadBytes, getDownloadURL, uploadString, deleteField };
+export { signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadBytes, getDownloadURL, uploadString };
 export type { FirebaseUser };
 
 // Test connection to Firestore
@@ -117,23 +97,6 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  // Silence permission errors for the master admin to avoid console noise
-  let isMasterAdmin = false;
-  try {
-    isMasterAdmin = safeStorage.getItem('vbs_access_code') === 'saw_vlogs_2026' || safeStorage.getItem('vbs_isAdmin') === 'true';
-  } catch (e) {
-    // Ignore storage errors in restricted environments
-  }
-  
-  const isPermissionError = error instanceof Error && error.message.includes('Missing or insufficient permissions');
-  const isReadOperation = operationType === OperationType.GET || operationType === OperationType.LIST;
-  
-  if (isMasterAdmin && isPermissionError && isReadOperation) {
-    // Silently log for debugging but don't throw or show red errors for READS
-    console.debug(`[Firestore Permission Silenced] ${operationType} on ${path}`);
-    return;
-  }
-
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {

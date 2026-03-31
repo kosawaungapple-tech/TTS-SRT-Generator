@@ -1,9 +1,9 @@
 import { VoiceOption } from './types';
 
 export const VOICE_OPTIONS: VoiceOption[] = [
-  { id: 'zephyr', name: 'Burmese Female (အမျိုးသမီး) - Nan', gender: 'female', voiceName: 'Zephyr' },
-  { id: 'puck', name: 'Burmese Male (အမျိုးသား) - Puck', gender: 'male', voiceName: 'Puck' },
+  { id: 'zephyr', name: 'Burmese Female (အမျိုးသမီး) - Zephyr', gender: 'female', voiceName: 'Zephyr' },
   { id: 'kore', name: 'Burmese Male (အမျိုးသား) - Kore', gender: 'male', voiceName: 'Kore' },
+  { id: 'puck', name: 'Burmese Male (အမျိုးသား) - Puck', gender: 'male', voiceName: 'Puck' },
   { id: 'charon', name: 'Burmese Male (အမျိုးသား) - Charon', gender: 'male', voiceName: 'Charon' },
   { id: 'fenrir', name: 'Burmese Male (အမျိုးသား) - Fenrir', gender: 'male', voiceName: 'Fenrir' },
 ];
@@ -21,6 +21,6 @@ export const DEFAULT_RULES = [
 
 export const GEMINI_MODELS = {
   VERIFY: 'gemini-3-flash-preview',
-  LIVE: 'gemini-3.1-flash-live-preview',
+  LIVE: 'gemini-2.5-flash-native-audio-preview-12-2025',
   TTS: 'gemini-2.5-flash-preview-tts',
 };
