@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { AlertCircle, RefreshCw } from 'lucide-react';
+import { safeLocation } from '../utils/safeBrowser';
 
 export class ErrorBoundary extends React.Component<any, any> {
   constructor(props: any) {
@@ -17,7 +18,7 @@ export class ErrorBoundary extends React.Component<any, any> {
 
   handleReset = () => {
     (this as any).setState({ hasError: false, error: null });
-    window.location.reload();
+    safeLocation.reload();
   };
 
   render() {

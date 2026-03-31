@@ -17,36 +17,12 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, isD
   return (
     <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-[32px] p-8 shadow-2xl transition-colors duration-300">
       <div className="space-y-8">
-        {/* Voice Selection */}
-        <div className="group">
-          <label className="flex items-center gap-2 text-lg font-medium text-slate-700 dark:text-slate-100 mb-4 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
-            <Volume2 size={20} className="text-brand-purple" />
-            အသံရွေးချယ်ရန်
-          </label>
-          <div className="relative">
-            <select
-              value={config.voiceId}
-              onChange={(e) => handleChange('voiceId', e.target.value)}
-              className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl px-6 py-4 text-slate-900 dark:text-white appearance-none focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all cursor-pointer font-medium"
-            >
-              {VOICE_OPTIONS.map((voice) => (
-                <option key={voice.id} value={voice.id} className="bg-white dark:bg-slate-950 text-slate-900 dark:text-white">
-                  {voice.name}
-                </option>
-              ))}
-            </select>
-            <div className="absolute right-6 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
-              <ChevronDown size={20} />
-            </div>
-          </div>
-        </div>
-
         <Slider
           label="အမြန်နှုန်း"
           value={config.speed}
           min={0.25}
-          max={4.0}
-          step={0.05}
+          max={10.0}
+          step={0.1}
           suffix="x"
           onChange={(v) => handleChange('speed', v)}
           isDarkMode={isDarkMode}

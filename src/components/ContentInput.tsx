@@ -1,19 +1,27 @@
 import React from 'react';
 import { Trash2, Clipboard } from 'lucide-react';
+import { safeClipboard } from '../utils/safeBrowser';
 
 interface ContentInputProps {
   text: string;
   setText: (text: string) => void;
   isDarkMode: boolean;
+  onToast?: (message: string, type: 'success' | 'error') => void;
 }
 
-export const ContentInput: React.FC<ContentInputProps> = ({ text, setText, isDarkMode }) => {
+export const ContentInput: React.FC<ContentInputProps> = ({ text, setText, isDarkMode, onToast }) => {
   const handlePaste = async () => {
     try {
-      const clipboardText = await navigator.clipboard.readText();
-      setText(text + clipboardText);
-    } catch (err) {
-      console.error('Failed to read clipboard');
+      const clipboardText = await safeClipboard.readText();
+      if (clipboardText) {
+        setText(text + clipboardText);
+        if (onToast) onToast('Pasted from clipboard!', 'success');
+      } else {
+        if (onToast) onToast('Could not access clipboard. Please use Ctrl+V.', 'error');
+      }
+    } catch (err: any) {
+      console.error('Failed to read clipboard', err);
+      if (onToast) onToast('Could not access clipboard. Please use Ctrl+V.', 'error');
     }
   };
 
