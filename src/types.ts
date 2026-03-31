@@ -79,4 +79,5 @@ export interface AudioResult {
   wavBlob?: Blob; // Actual WAV blob
   srtContent: string;
   subtitles: SRTSubtitle[];
+  generatedText?: string; // Text generated from a prompt
 }

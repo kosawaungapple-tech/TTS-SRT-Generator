@@ -1,18 +1,23 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Master Admin (saw_vlogs_2026) can do EVERYTHING
-    match /{document=**} {
-      allow read, write: if request.auth != null && 
+    // Helper function for Admin check
+    function isAdmin() {
+      return request.auth != null && 
         ((request.auth.token.email == "HanKo994@gmail.com" && request.auth.token.email_verified == true) ||
          (exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
           get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == 'saw_vlogs_2026'));
+    }
+
+    // Master Admin can do EVERYTHING
+    match /{document=**} {
+      allow read, write: if isAdmin();
     }
     
     // Public Users can only READ their own status, but CANNOT see Admin Keys
     match /settings/global_config {
       allow read: if true; // Allows the app to fetch keys for generation
-      allow write: if false; // NO ONE can change Admin keys except via the app logic
+      allow write: if isAdmin(); // Allow admin to change settings
     }
 
     // Allow anonymous users to read/write their own session to track accessCode

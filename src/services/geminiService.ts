@@ -153,6 +153,22 @@ export class GeminiTTSService {
         throw new Error(errorMessage);
       }
 
+      // Check for generated text in headers
+      const xGeneratedText = response.headers.get('X-Generated-Text');
+      let finalScript = text;
+      if (xGeneratedText) {
+        try {
+          // Decode base64 text from header
+          const decodedText = atob(xGeneratedText);
+          // Handle UTF-8 correctly
+          const utf8Text = decodeURIComponent(escape(decodedText));
+          finalScript = utf8Text;
+          console.log("TTS Service: Received generated script from Gemini:", finalScript.substring(0, 50) + "...");
+        } catch (e) {
+          console.warn("TTS Service: Failed to decode X-Generated-Text header", e);
+        }
+      }
+
       const wavBlob = await response.blob();
       console.log("TTS Service: Received binary audio from Proxy", { size: wavBlob.size });
 
@@ -177,7 +193,7 @@ export class GeminiTTSService {
       const duration = (wavBlob.size - 44) / 48000;
       console.log(`TTS Service: Audio generation complete. Duration: ${duration.toFixed(3)}s`);
       
-      const subtitles = this.generateMockSRT(text, duration);
+      const subtitles = this.generateMockSRT(finalScript, duration);
       const srtContent = subtitles.map(s => 
         `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}\n`
       ).join('\n');
@@ -187,7 +203,8 @@ export class GeminiTTSService {
         audioData,
         wavBlob,
         srtContent,
-        subtitles
+        subtitles,
+        generatedText: finalScript !== text ? finalScript : undefined
       };
     } catch (err: any) {
       const errorMsg = err instanceof Error ? err.message : JSON.stringify(err);

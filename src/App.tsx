@@ -310,10 +310,7 @@ export default function App() {
           setIsSessionSynced(true);
         } catch (e) {
           console.error('Failed to sync session:', e);
-          // Only set to false if it's not the master admin (to keep UI responsive)
-          if (accessCode !== 'saw_vlogs_2026') {
-            setIsSessionSynced(false);
-          }
+          setIsSessionSynced(false);
         }
       };
       syncSession();
@@ -907,10 +904,17 @@ export default function App() {
         }
       } else {
         console.log("App: TTS generation successful, updating state...");
+        // If Gemini generated a script from a prompt, update the text area
+        if (audioResult.generatedText) {
+          setText(audioResult.generatedText);
+          setToast({ message: 'Gemini generated a script and audio! ✨', type: 'success' });
+        }
       }
       
       setResult(audioResult);
-      setToast({ message: 'SRT နှင့် အသံဖိုင် ထုတ်ယူပြီးပါပြီ။ ✅', type: 'success' });
+      if (!audioResult.generatedText) {
+        setToast({ message: 'SRT နှင့် အသံဖိုင် ထုတ်ယူပြီးပါပြီ။ ✅', type: 'success' });
+      }
 
       // Update last generation time for rate limiting
       const now = Date.now();

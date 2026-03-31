@@ -602,7 +602,7 @@ async function startServer() {
       return res.status(400).json({ error: "Missing API Key" });
     }
 
-    const model = "gemini-2.5-flash-preview-tts";
+    const model = "gemini-3-flash-preview";
     const maxKeyRetries = isUsingGlobalKey ? 3 : 1;
     let keyRetries = 0;
 
@@ -616,6 +616,11 @@ async function startServer() {
               text: text 
             }] 
           }],
+          systemInstruction: {
+            parts: [{
+              text: `Generate the response as spoken audio in Burmese or English as requested. Provide the audio bytes in the response. If the input is a prompt, execute the prompt and speak the result. Map the user-selected Voice/Pitch/Speed directly to the Gemini 'speech_config' parameters.`
+            }]
+          },
           generationConfig: {
             responseModalities: ["AUDIO"],
             speechConfig: {
@@ -627,6 +632,14 @@ async function startServer() {
             }
           }
         };
+
+        // Map speed and pitch if provided
+        if (config.speed !== undefined) {
+          (geminiBody.generationConfig.speechConfig.voiceConfig as any).speakingRate = config.speed;
+        }
+        if (config.pitch !== undefined) {
+          (geminiBody.generationConfig.speechConfig.voiceConfig as any).pitch = config.pitch;
+        }
 
         const response = await fetchWithRetry(url, {
           method: 'POST',
@@ -660,8 +673,20 @@ async function startServer() {
           await incrementKeyUsage('gemini', activeKeyIndex);
         }
 
-        const base64Audio = data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-        const audioMimeType = data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.mimeType;
+        let base64Audio = null;
+        let audioMimeType = null;
+        let generatedText = null;
+        
+        if (data.candidates?.[0]?.content?.parts) {
+          for (const part of data.candidates[0].content.parts) {
+            if (part.inlineData?.data) {
+              base64Audio = part.inlineData.data;
+              audioMimeType = part.inlineData.mimeType;
+            } else if (part.text) {
+              generatedText = part.text;
+            }
+          }
+        }
         
         if (!base64Audio) {
           console.error("Gemini TTS Proxy: No audio data in response", JSON.stringify(data));
@@ -669,6 +694,9 @@ async function startServer() {
         }
 
         console.log(`Gemini TTS Proxy: Received audio data. MimeType: ${audioMimeType}, Base64 Length: ${base64Audio.length}`);
+        if (generatedText) {
+          console.log(`Gemini TTS Proxy: Also received text content: ${generatedText.substring(0, 50)}...`);
+        }
 
         let binaryString = Buffer.from(base64Audio, 'base64');
         
@@ -717,6 +745,14 @@ async function startServer() {
         const wavFile = Buffer.concat([wavHeader, binaryString]);
 
         console.log(`Gemini TTS Proxy: Sending WAV file. Total Size: ${wavFile.length} bytes`);
+        
+        // If we have generated text, we should return JSON instead of raw binary
+        // but the current frontend expects a blob.
+        // To support both, we'll return the WAV file but add a custom header for the text
+        if (generatedText) {
+          res.setHeader('X-Generated-Text', Buffer.from(generatedText).toString('base64'));
+        }
+        
         res.setHeader('Content-Type', 'audio/wav');
         res.setHeader('Content-Length', wavFile.length);
         return res.send(wavFile);

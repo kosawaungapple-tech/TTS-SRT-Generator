@@ -310,6 +310,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
     setLocalConfig({ ...localConfig, isSystemLive: newValue });
     setIsSavingSystem(true);
     try {
+      await ensureAdminSession();
       await updateDoc(doc(db, 'settings', 'global_config'), {
         isSystemLive: newValue,
         updatedAt: new Date().toISOString()
@@ -338,6 +339,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
     setLocalConfig({ ...localConfig, allow_global_key: newValue });
     setIsSavingSystem(true);
     try {
+      await ensureAdminSession();
       await updateDoc(doc(db, 'settings', 'global_config'), {
         allow_global_key: newValue,
         updatedAt: new Date().toISOString()
@@ -417,6 +419,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
     e.preventDefault();
     setIsSavingSystem(true);
     try {
+      await ensureAdminSession();
       const updatedConfig = {
         ...localConfig,
         gemini_api_keys: geminiKeys,
@@ -463,9 +466,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
         return true;
       } catch (e) {
         console.error('Failed to ensure admin session:', e);
-        return false;
+        throw new Error('Failed to synchronize admin session. Please try again.');
       }
     }
+    
+    if (isMasterAdmin && !isSessionSynced && !auth.currentUser) {
+      throw new Error('Authentication not ready. Please wait a moment and try again.');
+    }
+
     return isSessionSynced || isMasterAdmin;
   };
 
@@ -1431,9 +1439,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
                 </div>
                 
                 <div className="flex items-center justify-between bg-slate-50/50 dark:bg-slate-950/50 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 hover:border-brand-purple/30 transition-all group">
-                  <div className="space-y-1">
-                    <h5 className="text-base font-bold text-slate-900 dark:text-white group-hover:text-brand-purple transition-colors">System Live Switch</h5>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">When OFF, only Admins can access the generator.</p>
+                  <div className="flex items-center gap-4">
+                    <div className="space-y-1">
+                      <h5 className="text-base font-bold text-slate-900 dark:text-white group-hover:text-brand-purple transition-colors">System Live Switch</h5>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">When OFF, only Admins can access the generator.</p>
+                    </div>
+                    {isSavingSystem && (
+                      <RefreshCw size={14} className="animate-spin text-brand-purple" />
+                    )}
                   </div>
                   <button
                     type="button"
@@ -1458,9 +1471,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, isS
                 </div>
                 
                 <div className="flex items-center justify-between bg-slate-50/50 dark:bg-slate-950/50 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 hover:border-brand-purple/30 transition-all group mb-8">
-                  <div className="space-y-1">
-                    <h5 className="text-base font-bold text-slate-900 dark:text-white group-hover:text-brand-purple transition-colors">Allow Global Key Usage</h5>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">If enabled, users without their own API key will use these global keys.</p>
+                  <div className="flex items-center gap-4">
+                    <div className="space-y-1">
+                      <h5 className="text-base font-bold text-slate-900 dark:text-white group-hover:text-brand-purple transition-colors">Allow Global Key Usage</h5>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">If enabled, users without their own API key will use these global keys.</p>
+                    </div>
+                    {isSavingSystem && (
+                      <RefreshCw size={14} className="animate-spin text-brand-purple" />
+                    )}
                   </div>
                   <button
                     type="button"

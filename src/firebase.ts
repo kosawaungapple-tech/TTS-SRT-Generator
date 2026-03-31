@@ -5,39 +5,7 @@ import { getStorage, ref, uploadBytes, getDownloadURL, uploadString } from 'fire
 import { safeStorage } from './utils/safeBrowser';
 
 // Import the Firebase configuration
-import defaultFirebaseConfig from '../firebase-applet-config.json';
-
-/**
- * COMMANDER'S ORDER: PASTE YOUR FIREBASE CREDENTIALS HERE
- * This will override the default configuration.
- */
-const manualFirebaseConfig = {
-  apiKey: "AIzaSyCGi_wusEhj_w85jVA-a2QJyKf4kizW9EU",
-  authDomain: "gen-lang-client-0489476198.firebaseapp.com",
-  projectId: "gen-lang-client-0489476198",
-  storageBucket: "gen-lang-client-0311965889.firebasestorage.app",
-  messagingSenderId: "332642984036",
-  appId: "1:152973917771:web:76cb4f8133a95c970a57ce",
-  measurementId: ""
-};
-
-// Dynamic configuration logic
-const getFirebaseConfig = () => {
-  // Check if manual config is provided (not using placeholders)
-  const isManualProvided = manualFirebaseConfig.apiKey !== "PASTE_YOUR_API_KEY_HERE";
-  
-  if (isManualProvided) {
-    return {
-      ...manualFirebaseConfig,
-      firestoreDatabaseId: defaultFirebaseConfig.firestoreDatabaseId // Keep the database ID from the environment
-    };
-  }
-
-  // Fallback to default config
-  return defaultFirebaseConfig;
-};
-
-const firebaseConfig = getFirebaseConfig();
+import firebaseConfig from '../firebase-applet-config.json';
 
 // Initialize Firebase SDK
 const app = initializeApp(firebaseConfig);
@@ -158,9 +126,10 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   }
   
   const isPermissionError = error instanceof Error && error.message.includes('Missing or insufficient permissions');
+  const isReadOperation = operationType === OperationType.GET || operationType === OperationType.LIST;
   
-  if (isMasterAdmin && isPermissionError) {
-    // Silently log for debugging but don't throw or show red errors
+  if (isMasterAdmin && isPermissionError && isReadOperation) {
+    // Silently log for debugging but don't throw or show red errors for READS
     console.debug(`[Firestore Permission Silenced] ${operationType} on ${path}`);
     return;
   }
