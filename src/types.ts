@@ -12,18 +12,22 @@ export interface User {
 
 export interface AuthorizedUser {
   id: string; // Document ID (Access Code)
+  userId?: string; // Explicit User ID as requested
   createdAt: any; // Firestore Timestamp
   isActive: boolean;
   role: 'admin' | 'user';
   note?: string; // Optional name/label
   label?: string; // Alias for note
   api_key_stored?: string;
+  password?: string; // User password
+  expiryDate?: string; // ISO date string
   createdBy?: string;
 }
 
 export interface GlobalSettings {
   global_system_key?: string;
-  allow_global_key: boolean;
+  api_keys?: string[]; // List of rotated API keys
+  allow_admin_keys: boolean; // Toggle to allow users to use admin keys
   total_generations: number;
   mock_mode?: boolean;
 }

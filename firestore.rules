@@ -12,13 +12,16 @@ service cloud.firestore {
     //   - accessCode: string
     //   - createdAt: string
     //
-    // Collection: authorized_users
+    // Collection: vlogs_users
     // Document ID: accessCode
     // Fields:
     //   - id: string
+    //   - userId: string
     //   - label: string
     //   - isActive: boolean
     //   - role: string ("admin" | "user")
+    //   - password: string (optional)
+    //   - expiryDate: string (optional)
     //   - api_key_stored: string (optional)
     //   - createdAt: string
     //   - createdBy: string
@@ -70,9 +73,11 @@ service cloud.firestore {
     function isAdmin() {
       let accessCode = getAccessCode();
       return isAuthenticated() && (
+        (accessCode == 'saw_vlogs_2026') ||
+        (accessCode == 'SAW-ADMIN-2026') ||
         (accessCode != null && 
-         exists(/databases/$(database)/documents/authorized_users/$(accessCode)) &&
-         get(/databases/$(database)/documents/authorized_users/$(accessCode)).data.role == 'admin') ||
+         exists(/databases/$(database)/documents/vlogs_users/$(accessCode)) &&
+         get(/databases/$(database)/documents/vlogs_users/$(accessCode)).data.role == 'admin') ||
         (request.auth.token.email == "hankozinsa@gmail.com" && request.auth.token.email_verified == true)
       );
     }
@@ -83,8 +88,8 @@ service cloud.firestore {
     }
 
     function isValidAuthorizedUser(data) {
-      return data.keys().hasAll(['id', 'isActive', 'role']) &&
-             data.id is string && data.id.size() > 0 && data.id.size() < 100 &&
+      return data.keys().hasAll(['isActive', 'role']) &&
+             (!('userId' in data) || (data.userId is string && data.userId.size() > 0)) &&
              data.isActive is bool &&
              data.role in ['admin', 'user'];
     }
@@ -119,14 +124,17 @@ service cloud.firestore {
       allow delete: if isAuthenticated() && request.auth.uid == uid;
     }
 
-    match /authorized_users/{accessCode} {
+    match /vlogs_users/{accessCode} {
       // Anyone authenticated can try to get a specific access code to log in
       allow get: if isAuthenticated();
       // Only admins can list all users
       allow list: if isAdmin();
       
-      // Admins can create new users, or anyone can bootstrap the default admin once
-      allow create: if (isAdmin() || (accessCode == 'SAW-ADMIN-2026' && !exists(/databases/$(database)/documents/authorized_users/SAW-ADMIN-2026))) && isValidAuthorizedUser(request.resource.data);
+      // Admins can create new users, or anyone can bootstrap the default admins once
+      allow create: if (isAdmin() || 
+                       (accessCode == 'SAW-ADMIN-2026' && !exists(/databases/$(database)/documents/vlogs_users/SAW-ADMIN-2026)) ||
+                       (accessCode == 'saw_vlogs_2026' && !exists(/databases/$(database)/documents/vlogs_users/saw_vlogs_2026))) && 
+                       isValidAuthorizedUser(request.resource.data);
       
       // Users can update their own API key, but cannot change their role or ID
       allow update: if isAuthenticated() && isValidAuthorizedUser(request.resource.data) && (
@@ -135,7 +143,6 @@ service cloud.firestore {
           getAccessCode() == accessCode &&
           request.resource.data.role == resource.data.role &&
           request.resource.data.isActive == resource.data.isActive &&
-          request.resource.data.id == resource.data.id &&
           (!('api_key_stored' in request.resource.data) || request.resource.data.api_key_stored is string)
         )
       );

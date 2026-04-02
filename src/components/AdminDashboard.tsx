@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { 
   ShieldCheck, 
+  Shield,
   UserPlus, 
   Trash2, 
   CheckCircle2, 
@@ -11,6 +12,7 @@ import {
   Key,
   Calendar,
   User,
+  Mic2,
   AlertCircle,
   RefreshCw,
   Lock,
@@ -23,15 +25,16 @@ import {
   Languages,
   Edit3
 } from 'lucide-react';
-import { AuthorizedUser, User as RegisteredUser, SystemConfig, PronunciationRule } from '../types';
+import { AuthorizedUser, User as RegisteredUser, SystemConfig, PronunciationRule, GlobalSettings } from '../types';
 import { db, collection, onSnapshot, query, orderBy, setDoc, doc, deleteDoc, updateDoc, handleFirestoreError, OperationType, getDoc, auth, googleProvider, signInWithPopup } from '../firebase';
 import { Toast, ToastType } from './Toast';
 
 interface AdminDashboardProps {
   isAuthReady: boolean;
+  onAdminLogin?: (code: string) => void;
 }
 
-export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) => {
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onAdminLogin }) => {
   const [authorizedUsers, setAuthorizedUsers] = useState<AuthorizedUser[]>([]);
   const [registeredUsers, setRegisteredUsers] = useState<RegisteredUser[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -39,10 +42,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
   const [newId, setNewId] = useState('');
   const [newNote, setNewNote] = useState('');
   const [newRole, setNewRole] = useState<'admin' | 'user'>('user');
+  const [newExpiryDate, setNewExpiryDate] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeletingUser, setIsDeletingUser] = useState<string | null>(null);
   const [isVerifyingUser, setIsVerifyingUser] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [newPassword, setNewPassword] = useState('');
   
   // Toast State
   const [toast, setToast] = useState<{ message: string; type: ToastType; isVisible: boolean }>({
@@ -53,6 +58,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
   
   // Admin Auth Protection
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [adminIdInput, setAdminIdInput] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'users' | 'system' | 'rules'>('users');
 
@@ -65,7 +71,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
     telegram_bot_token: '',
     telegram_chat_id: ''
   });
+  const [globalSettings, setGlobalSettings] = useState<GlobalSettings>({
+    allow_admin_keys: false,
+    total_generations: 0,
+    api_keys: ['']
+  });
   const [isSavingSystem, setIsSavingSystem] = useState(false);
+  const [isSavingKeys, setIsSavingKeys] = useState(false);
   const [isSystemLoading, setIsSystemLoading] = useState(true);
   const [showSecrets, setShowSecrets] = useState(false);
 
@@ -77,37 +89,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
   const [isDeletingRule, setIsDeletingRule] = useState<string | null>(null);
   const [isRulesLoading, setIsRulesLoading] = useState(true);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  const [isSessionSynced, setIsSessionSynced] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(async (user) => {
-      if (user && !user.isAnonymous) {
-        try {
-          let isAdmin = false;
-          try {
-            const userDoc = await getDoc(doc(db, 'users', user.uid));
-            isAdmin = (user.email === 'hankozinsa@gmail.com' && user.emailVerified) || 
-                      (userDoc.exists() && userDoc.data()?.role === 'admin');
-          } catch (e: any) {
-            if (e.message?.includes('permission') || e.code === 'permission-denied') {
-              isAdmin = false;
-            } else {
-              throw e;
-            }
-          }
-          
-          if (isAdmin) {
-            setIsAuthenticated(true);
-          } else {
-            // Not an admin, sign out
-            await auth.signOut();
-          }
-        } catch (err) {
-          console.error("Error checking admin status:", err);
-        }
+    const savedAdminAuth = localStorage.getItem('vbs_admin_auth');
+    if (savedAdminAuth === 'saw_vlogs_2026') {
+      setIsAuthenticated(true);
+      
+      // Ensure session is synced on mount if already authenticated
+      if (isAuthReady && auth.currentUser) {
+        setDoc(doc(db, 'sessions', auth.currentUser.uid), {
+          accessCode: 'saw_vlogs_2026',
+          createdAt: new Date().toISOString()
+        })
+        .then(() => {
+          setIsSessionSynced(true);
+          if (onAdminLogin) onAdminLogin('saw_vlogs_2026');
+        })
+        .catch(err => {
+          console.error('Failed to sync admin session on mount:', err);
+          // Still set synced if it's a permission error on the session itself (unlikely)
+          // but we want to try listing anyway if we think we are admin
+          setIsSessionSynced(true); 
+          if (onAdminLogin) onAdminLogin('saw_vlogs_2026');
+        });
+      } else if (isAuthReady) {
+        setIsSessionSynced(true);
+        if (onAdminLogin) onAdminLogin('saw_vlogs_2026');
       }
-    });
-    return () => unsubscribe();
-  }, []);
+    }
+  }, [isAuthReady]);
 
   const formatDate = (date: any) => {
     if (!date) return 'N/A';
@@ -124,54 +135,57 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
   const handleAdminAuth = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setAuthError(null);
-    try {
-      const result = await signInWithPopup(auth, googleProvider);
-      const user = result.user;
+    
+    if (adminIdInput === 'saw_vlogs_2026') {
+      setIsAuthenticated(true);
+      localStorage.setItem('vbs_admin_auth', 'saw_vlogs_2026');
+      localStorage.setItem('vbs_access_granted', 'true');
+      localStorage.setItem('vbs_access_code', 'saw_vlogs_2026');
       
-      // Check if user is the default admin or has admin role in Firestore
-      let isAdmin = false;
-      let userDocExists = false;
-      
-      try {
-        const userDoc = await getDoc(doc(db, 'users', user.uid));
-        userDocExists = userDoc.exists();
-        isAdmin = (user.email === 'hankozinsa@gmail.com' && user.emailVerified) || 
-                  (userDocExists && userDoc.data()?.role === 'admin');
-      } catch (e: any) {
-        // If permission denied, they are definitely not an admin
-        if (e.message?.includes('permission') || e.code === 'permission-denied') {
-          isAdmin = false;
-        } else {
-          throw e;
-        }
-      }
-                      
-      if (isAdmin) {
-        setIsAuthenticated(true);
-        // Ensure the admin document exists
-        if (!userDocExists) {
-          await setDoc(doc(db, 'users', user.uid), {
-            uid: user.uid,
-            email: user.email,
-            role: 'admin',
+      // Sync session for security rules
+      if (auth.currentUser) {
+        try {
+          await setDoc(doc(db, 'sessions', auth.currentUser.uid), {
+            accessCode: 'saw_vlogs_2026',
             createdAt: new Date().toISOString()
           });
+          console.log('Admin session synced successfully.');
+          setIsSessionSynced(true);
+          if (onAdminLogin) onAdminLogin('saw_vlogs_2026');
+        } catch (e) {
+          console.error('Failed to sync admin session:', e);
+          setIsSessionSynced(true); // Proceed anyway
+          if (onAdminLogin) onAdminLogin('saw_vlogs_2026');
         }
       } else {
-        setAuthError("Unauthorized email address. You are not an admin.");
-        await auth.signOut();
+        setIsSessionSynced(true);
+        if (onAdminLogin) onAdminLogin('saw_vlogs_2026');
       }
-    } catch (err: any) {
-      console.error("Admin Auth Error:", err);
-      setAuthError(err.message || "Authentication failed.");
-      await auth.signOut();
+      
+      setToast({
+        message: 'Admin Access Granted! 🛡️',
+        type: 'success',
+        isVisible: true
+      });
+    } else {
+      setAuthError("Unauthorized Access: Admin Only");
+      setToast({
+        message: 'Unauthorized Access: Admin Only',
+        type: 'error',
+        isVisible: true
+      });
     }
   };
 
-  useEffect(() => {
-    if (!isAuthenticated || !isAuthReady) return;
+  const handleAdminLogout = () => {
+    setIsAuthenticated(false);
+    localStorage.removeItem('vbs_admin_auth');
+  };
 
-    const q = query(collection(db, 'authorized_users'), orderBy('createdAt', 'desc'));
+  useEffect(() => {
+    if (!isAuthenticated || !isAuthReady || !isSessionSynced) return;
+
+    const q = query(collection(db, 'vlogs_users'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const users = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -180,15 +194,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
       setAuthorizedUsers(users);
       setIsLoading(false);
     }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'authorized_users');
       setIsLoading(false);
+      handleFirestoreError(err, OperationType.LIST, 'vlogs_users');
     });
 
     return () => unsubscribe();
-  }, [isAuthenticated, isAuthReady]);
+  }, [isAuthenticated, isAuthReady, isSessionSynced]);
 
   useEffect(() => {
-    if (!isAuthenticated || !isAuthReady) return;
+    if (!isAuthenticated || !isAuthReady || !isSessionSynced) return;
 
     const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -199,15 +213,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
       setRegisteredUsers(users);
       setIsUsersLoading(false);
     }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'users');
       setIsUsersLoading(false);
+      handleFirestoreError(err, OperationType.LIST, 'users');
     });
 
     return () => unsubscribe();
-  }, [isAuthenticated, isAuthReady]);
+  }, [isAuthenticated, isAuthReady, isSessionSynced]);
 
   useEffect(() => {
-    if (!isAuthenticated || !isAuthReady) return;
+    if (!isAuthenticated || !isAuthReady || !isSessionSynced) return;
 
     const unsubscribe = onSnapshot(collection(db, 'globalRules'), (snapshot) => {
       const fetchedRules = snapshot.docs.map(doc => ({
@@ -222,7 +236,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
     });
 
     return () => unsubscribe();
-  }, [isAuthenticated, isAuthReady]);
+  }, [isAuthenticated, isAuthReady, isSessionSynced]);
 
   const handleCreateRule = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -295,6 +309,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
         if (docSnap.exists()) {
           setSystemConfig(docSnap.data() as SystemConfig);
         }
+
+        const globalRef = doc(db, 'settings', 'global');
+        const globalSnap = await getDoc(globalRef);
+        if (globalSnap.exists()) {
+          const data = globalSnap.data() as GlobalSettings;
+          setGlobalSettings({
+            ...data,
+            api_keys: data.api_keys || ['']
+          });
+        }
       } catch (err) {
         console.error('Failed to fetch system config:', err);
       } finally {
@@ -334,6 +358,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
     }
   };
 
+  const handleSaveGlobalSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingKeys(true);
+    try {
+      await setDoc(doc(db, 'settings', 'global'), {
+        ...globalSettings,
+        updatedAt: new Date().toISOString()
+      });
+      setToast({
+        message: 'API Key Settings Saved! 🔑',
+        type: 'success',
+        isVisible: true
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'settings/global');
+      setToast({
+        message: 'Failed to save API key settings.',
+        type: 'error',
+        isVisible: true
+      });
+    } finally {
+      setIsSavingKeys(false);
+    }
+  };
+
+  const generateRandomPassword = () => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
+    let password = '';
+    for (let i = 0; i < 12; i++) {
+      password += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setNewPassword(password);
+  };
+
   const handleCreateId = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newId.trim() || isSubmitting) return;
@@ -343,16 +401,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
     try {
       const accessCode = newId.trim();
       const newAuthorizedUser = {
+        id: accessCode, // Include id
+        userId: accessCode, // Explicitly set userId as requested
         isActive: true,
         createdAt: new Date().toISOString(),
         note: newNote.trim(),
-        role: newRole
+        role: newRole,
+        password: newPassword.trim() || null,
+        expiryDate: newExpiryDate || null
       };
 
-      await setDoc(doc(db, 'authorized_users', accessCode), newAuthorizedUser);
+      await setDoc(doc(db, 'vlogs_users', accessCode), newAuthorizedUser);
       
       setNewId('');
       setNewNote('');
+      setNewPassword('');
+      setNewExpiryDate('');
       setNewRole('user');
       setToast({
         message: 'User ID Created Successfully! 🎉',
@@ -360,6 +424,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
         isVisible: true
       });
     } catch (err: any) {
+      handleFirestoreError(err, OperationType.CREATE, `vlogs_users/${newId.trim()}`);
       setToast({
         message: 'Error: Could not create ID. Please try again.',
         type: 'error',
@@ -370,9 +435,96 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
     }
   };
 
+  const handleUpdatePassword = async (id: string) => {
+    const password = prompt('Enter new password for this user:');
+    if (password === null) return;
+
+    try {
+      await updateDoc(doc(db, 'vlogs_users', id), {
+        password: password.trim() || null
+      });
+      setToast({
+        message: 'User Password Updated!',
+        type: 'success',
+        isVisible: true
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `vlogs_users/${id}`);
+      setToast({
+        message: 'Failed to update user password.',
+        type: 'error',
+        isVisible: true
+      });
+    }
+  };
+
+  const handleExtendExpiry = async (id: string, currentExpiry: string | undefined) => {
+    try {
+      const now = new Date();
+      let baseDate = now;
+      
+      if (currentExpiry) {
+        const current = new Date(currentExpiry);
+        if (current > now) {
+          baseDate = current;
+        }
+      }
+      
+      const newExpiry = new Date(baseDate);
+      newExpiry.setDate(newExpiry.getDate() + 30);
+      
+      await updateDoc(doc(db, 'vlogs_users', id), {
+        expiryDate: newExpiry.toISOString()
+      });
+      
+      setToast({
+        message: 'Subscription Extended 30 Days! 📅',
+        type: 'success',
+        isVisible: true
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `vlogs_users/${id}`);
+      setToast({
+        message: 'Failed to extend subscription.',
+        type: 'error',
+        isVisible: true
+      });
+    }
+  };
+
+  const handleSetCustomExpiry = async (id: string) => {
+    const dateStr = prompt('Enter custom expiry date (YYYY-MM-DD):');
+    if (!dateStr) return;
+    
+    try {
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) {
+        alert('Invalid date format. Please use YYYY-MM-DD.');
+        return;
+      }
+      
+      await updateDoc(doc(db, 'vlogs_users', id), {
+        expiryDate: date.toISOString()
+      });
+      
+      setToast({
+        message: 'Custom Expiry Date Set! 📅',
+        type: 'success',
+        isVisible: true
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `vlogs_users/${id}`);
+      setToast({
+        message: 'Failed to set custom expiry date.',
+        type: 'error',
+        isVisible: true
+      });
+    }
+  };
+
   const handleToggleStatus = async (id: string, currentStatus: boolean) => {
     try {
-      await updateDoc(doc(db, 'authorized_users', id), {
+      await updateDoc(doc(db, 'vlogs_users', id), {
         isActive: !currentStatus
       });
       setToast({
@@ -381,7 +533,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
         isVisible: true
       });
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `authorized_users/${id}`);
+      handleFirestoreError(err, OperationType.UPDATE, `vlogs_users/${id}`);
       setToast({
         message: 'Failed to update user status.',
         type: 'error',
@@ -392,7 +544,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
 
   const handleToggleRole = async (id: string, currentRole: 'admin' | 'user') => {
     try {
-      await updateDoc(doc(db, 'authorized_users', id), {
+      await updateDoc(doc(db, 'vlogs_users', id), {
         role: currentRole === 'admin' ? 'user' : 'admin'
       });
       setToast({
@@ -401,7 +553,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
         isVisible: true
       });
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `authorized_users/${id}`);
+      handleFirestoreError(err, OperationType.UPDATE, `vlogs_users/${id}`);
       setToast({
         message: 'Failed to update user role.',
         type: 'error',
@@ -415,14 +567,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
 
     setIsDeletingUser(id);
     try {
-      await deleteDoc(doc(db, 'authorized_users', id));
+      await deleteDoc(doc(db, 'vlogs_users', id));
       setToast({
         message: 'User ID Deleted Successfully!',
         type: 'success',
         isVisible: true
       });
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `authorized_users/${id}`);
+      handleFirestoreError(err, OperationType.DELETE, `vlogs_users/${id}`);
       setToast({
         message: 'Failed to delete User ID.',
         type: 'error',
@@ -495,10 +647,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
               <Lock size={32} />
             </div>
             <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Admin Access</h2>
-            <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Sign in with Google to continue</p>
+            <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Enter Admin ID to continue</p>
           </div>
 
-          <div className="space-y-6">
+          <form onSubmit={handleAdminAuth} className="space-y-6">
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Admin ID</label>
+              <div className="relative">
+                <Shield className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
+                <input
+                  type="password"
+                  value={adminIdInput}
+                  onChange={(e) => setAdminIdInput(e.target.value)}
+                  placeholder="Enter Admin ID"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-4 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                  required
+                />
+              </div>
+            </div>
+
             {authError && (
               <p className="text-red-500 text-xs font-bold flex items-center gap-1 px-2">
                 <AlertCircle size={12} /> {authError}
@@ -506,12 +673,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
             )}
 
             <button
-              onClick={handleAdminAuth}
+              type="submit"
               className="w-full py-4 bg-brand-purple text-white rounded-2xl font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20 flex items-center justify-center gap-2"
             >
-              <ShieldCheck size={20} /> Sign in with Google
+              <ShieldCheck size={20} /> Verify Access
             </button>
-          </div>
+          </form>
         </motion.div>
       </div>
     );
@@ -535,6 +702,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
           <div className="flex items-center gap-3 w-full sm:w-auto">
             <div className="flex bg-slate-100 dark:bg-slate-900/50 p-1 rounded-xl border border-slate-200 dark:border-slate-800">
               <button
+                onClick={() => {
+                  window.history.pushState({}, '', '/');
+                  window.dispatchEvent(new PopStateEvent('popstate'));
+                }}
+                className="px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+              >
+                <Mic2 size={14} /> Generator
+              </button>
+              <button
                 onClick={() => setActiveTab('users')}
                 className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'users' ? 'bg-white dark:bg-slate-800 text-brand-purple shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
               >
@@ -554,7 +730,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
               </button>
             </div>
             <button 
-              onClick={() => setIsAuthenticated(false)}
+              onClick={handleAdminLogout}
               className="px-4 py-2.5 bg-slate-100 dark:bg-slate-900/50 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-500 dark:text-slate-400 text-sm font-bold transition-all"
             >
               Lock
@@ -598,6 +774,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
                     value={newNote}
                     onChange={(e) => setNewNote(e.target.value)}
                     placeholder="e.g. Saw Yan Aung"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex justify-between items-center px-1">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Password (Optional)</label>
+                  <button 
+                    type="button"
+                    onClick={generateRandomPassword}
+                    className="text-[10px] font-bold text-brand-purple hover:underline flex items-center gap-1"
+                  >
+                    <RefreshCw size={10} /> Generate
+                  </button>
+                </div>
+                <div className="relative">
+                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
+                  <input
+                    type="text"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Enter or generate password"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm font-mono text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Expiry Date (Optional)</label>
+                <div className="relative">
+                  <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
+                  <input
+                    type="date"
+                    value={newExpiryDate}
+                    onChange={(e) => setNewExpiryDate(e.target.value)}
                     className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
                   />
                 </div>
@@ -670,8 +882,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
                     <tr className="border-b border-slate-200 dark:border-white/5">
                       <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Access Code</th>
                       <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Note</th>
+                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Password</th>
                       <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Role</th>
-                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Created</th>
+                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Expiry Date</th>
                       <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Status</th>
                       <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">Actions</th>
                     </tr>
@@ -686,14 +899,41 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
                           <span className="text-sm text-slate-700 dark:text-slate-300">{u.note || '—'}</span>
                         </td>
                         <td className="px-4 py-4">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs text-slate-600 dark:text-slate-400">
+                              {u.password ? '••••••••' : '—'}
+                            </span>
+                            {u.password && (
+                              <button 
+                                onClick={() => alert(`Password for ${u.id}: ${u.password}`)}
+                                className="text-slate-400 hover:text-brand-purple"
+                                title="View Password"
+                              >
+                                <Eye size={12} />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-4">
                           <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${u.role === 'admin' ? 'bg-brand-purple/20 text-brand-purple border-brand-purple/30' : 'bg-slate-100 dark:bg-white/10 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-white/10'}`}>
                             {u.role || 'user'}
                           </span>
                         </td>
                         <td className="px-4 py-4">
-                          <div className="flex items-center gap-2 text-xs text-slate-500">
-                            <Calendar size={12} />
-                            {new Date(u.createdAt).toLocaleDateString()}
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-2 text-xs text-slate-500">
+                              <Calendar size={12} />
+                              {u.expiryDate ? (
+                                <span className={new Date(u.expiryDate) < new Date() ? 'text-red-500 font-bold' : 'text-emerald-500'}>
+                                  {new Date(u.expiryDate).toLocaleDateString()}
+                                </span>
+                              ) : (
+                                <span>No Expiry</span>
+                              )}
+                            </div>
+                            {u.expiryDate && new Date(u.expiryDate) < new Date() && (
+                              <span className="text-[9px] text-red-500 font-bold uppercase tracking-tighter">Expired</span>
+                            )}
                           </div>
                         </td>
                         <td className="px-4 py-4">
@@ -709,6 +949,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
                         </td>
                         <td className="px-4 py-4 text-right">
                           <div className="flex items-center justify-end gap-2">
+                            <button
+                              onClick={() => handleExtendExpiry(u.id, u.expiryDate)}
+                              className="p-2 text-slate-500 hover:text-emerald-500 hover:bg-emerald-500/10 rounded-lg transition-all"
+                              title="Extend 30 Days"
+                            >
+                              <Calendar size={16} />
+                            </button>
+                            <button
+                              onClick={() => handleSetCustomExpiry(u.id)}
+                              className="p-2 text-slate-500 hover:text-brand-purple hover:bg-brand-purple/10 rounded-lg transition-all"
+                              title="Set Custom Expiry"
+                            >
+                              <Edit3 size={16} />
+                            </button>
+                            <button
+                              onClick={() => handleUpdatePassword(u.id)}
+                              className="p-2 text-slate-500 hover:text-brand-purple hover:bg-brand-purple/10 rounded-lg transition-all"
+                              title="Update Password"
+                            >
+                              <Lock size={16} />
+                            </button>
                             <button
                               onClick={() => handleToggleRole(u.id, u.role || 'user')}
                               className="p-2 text-slate-500 hover:text-brand-purple hover:bg-brand-purple/10 rounded-lg transition-all"
@@ -856,7 +1117,60 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
       )}
 
       {activeTab === 'system' && (
-        <div className="max-w-4xl mx-auto w-full">
+        <div className="max-w-4xl mx-auto w-full space-y-8">
+          {/* API Key Rotation & Switch */}
+          <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl transition-colors duration-300">
+            <div className="flex items-center gap-3 mb-8">
+              <div className="w-10 h-10 bg-brand-purple/20 text-brand-purple rounded-xl flex items-center justify-center border border-brand-purple/20">
+                <Key size={20} />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white">API Key Rotation & Switch</h3>
+                <p className="text-slate-500 dark:text-slate-400 text-xs">Manage multiple keys for auto-switching on rate limits</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveGlobalSettings} className="space-y-6">
+              <div className="bg-slate-50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-6">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-1">
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">Allow Users to use Admin API Keys</h4>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">If ON, the system uses rotated Admin keys. If OFF, users must provide their own.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setGlobalSettings({ ...globalSettings, allow_admin_keys: !globalSettings.allow_admin_keys })}
+                    className={`w-12 h-6 rounded-full transition-all relative ${globalSettings.allow_admin_keys ? 'bg-brand-purple' : 'bg-slate-300 dark:bg-slate-700'}`}
+                  >
+                    <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${globalSettings.allow_admin_keys ? 'left-7' : 'left-1'}`} />
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Google AI Studio API Keys (One per line)</label>
+                  <textarea
+                    value={globalSettings.api_keys?.join('\n')}
+                    onChange={(e) => setGlobalSettings({ ...globalSettings, api_keys: e.target.value.split('\n') })}
+                    placeholder="Paste your API keys here, one per line..."
+                    className="w-full h-32 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm font-mono text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all resize-none"
+                  />
+                  <p className="text-[10px] text-slate-500 italic px-1">
+                    The system will automatically switch to the next key if a 429 (Rate Limit) error occurs.
+                  </p>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isSavingKeys}
+                  className="w-full py-3.5 bg-brand-purple hover:bg-brand-purple/90 text-white rounded-xl text-sm font-bold shadow-lg shadow-brand-purple/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isSavingKeys ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
+                  Save API Key Settings
+                </button>
+              </div>
+            </form>
+          </div>
+
           <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl transition-colors duration-300">
             <div className="flex items-center justify-between mb-8">
               <div className="flex items-center gap-3">
@@ -864,8 +1178,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady }) =
                   <Settings size={20} />
                 </div>
                 <div>
-                  <h3 className="text-xl font-bold text-slate-900 dark:text-white">System Settings</h3>
-                  <p className="text-slate-500 dark:text-slate-400 text-xs">Configure Firebase and Telegram Integrations</p>
+                  <h3 className="text-xl font-bold text-slate-900 dark:text-white">Firebase & Telegram Settings</h3>
+                  <p className="text-slate-500 dark:text-slate-400 text-xs">Configure Infrastructure Integrations</p>
                 </div>
               </div>
               <button

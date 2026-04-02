@@ -2,20 +2,23 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
-import admin from "firebase-admin";
-import firebaseConfig from "./firebase-applet-config.json" assert { type: "json" };
+import { getFirestore } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
+import { initializeApp, getApps, getApp } from "firebase-admin/app";
+import firebaseConfig from "./firebase-applet-config.json" with { type: "json" };
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Initialize Firebase Admin
-if (!admin.apps.length) {
-  admin.initializeApp({
-    projectId: firebaseConfig.projectId,
-  });
-}
+const app = getApps().length 
+  ? getApp() 
+  : initializeApp({
+      projectId: firebaseConfig.projectId,
+    });
 
-const db = admin.firestore();
+const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+const auth = getAuth(app);
 
 // Middleware to verify Firebase ID Token
 const authenticate = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -26,7 +29,7 @@ const authenticate = async (req: express.Request, res: express.Response, next: e
 
   const idToken = authHeader.split('Bearer ')[1];
   try {
-    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    const decodedToken = await auth.verifyIdToken(idToken);
     (req as any).user = decodedToken;
     next();
   } catch (error) {

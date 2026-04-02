@@ -44,8 +44,9 @@ export default function App() {
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [profile, setProfile] = useState<AuthorizedUser | null>(null);
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings>({
-    allow_global_key: false,
-    total_generations: 0
+    allow_admin_keys: false,
+    total_generations: 0,
+    api_keys: ['']
   });
   const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
 
@@ -62,9 +63,10 @@ export default function App() {
 
   // Auth & Access State (Custom)
   const [accessCodeInput, setAccessCodeInput] = useState('');
-  const [isAccessGranted, setIsAccessGranted] = useState(true); // Default to true for preview environment
+  const [passwordInput, setPasswordInput] = useState('');
+  const [isAccessGranted, setIsAccessGranted] = useState(false); // Force login by default
   const [isVerifyingCode, setIsVerifyingCode] = useState(false);
-  const [accessCode, setAccessCode] = useState<string | null>('preview-user');
+  const [accessCode, setAccessCode] = useState<string | null>(null);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
 
   // Handle Anonymous Auth
@@ -128,9 +130,20 @@ export default function App() {
       setAccessCode(code);
       
       // Fetch profile data directly from server for reliability without auth dependencies
-      getDocFromServer(doc(db, 'authorized_users', code)).then(async (snapshot) => {
+      getDocFromServer(doc(db, 'vlogs_users', code)).then(async (snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.data() as AuthorizedUser;
+          
+          // Check for expiry on session restore
+          if (data.expiryDate) {
+            const expiry = new Date(data.expiryDate);
+            if (expiry < new Date()) {
+              console.warn('Session expired on restore');
+              handleLogout();
+              return;
+            }
+          }
+
           setProfile(data);
           
           // Sync API Key from Firestore to LocalStorage if missing locally
@@ -223,22 +236,40 @@ export default function App() {
     if (!isAuthReady) return;
     const seedDefaultAdmin = async () => {
       try {
-        const adminDoc = await getDocFromServer(doc(db, 'authorized_users', 'SAW-ADMIN-2026'));
+        // Seed SAW-ADMIN-2026
+        const adminDoc = await getDocFromServer(doc(db, 'vlogs_users', 'SAW-ADMIN-2026'));
         if (!adminDoc.exists()) {
           console.log('Seeding default admin Access Code...');
           const defaultAdmin: AuthorizedUser = {
             id: 'SAW-ADMIN-2026',
+            userId: 'SAW-ADMIN-2026',
             label: 'Default Admin',
             isActive: true,
             role: 'admin',
             createdAt: new Date().toISOString(),
             createdBy: 'system'
           };
-          await setDoc(doc(db, 'authorized_users', defaultAdmin.id), defaultAdmin);
-          console.log('Default admin seeded successfully.');
+          await setDoc(doc(db, 'vlogs_users', defaultAdmin.id), defaultAdmin);
         }
+
+        // Seed saw_vlogs_2026 as master admin
+        const masterAdminDoc = await getDocFromServer(doc(db, 'vlogs_users', 'saw_vlogs_2026'));
+        if (!masterAdminDoc.exists()) {
+          console.log('Seeding master admin Access Code...');
+          const masterAdmin: AuthorizedUser = {
+            id: 'saw_vlogs_2026',
+            userId: 'saw_vlogs_2026',
+            label: 'Master Admin',
+            isActive: true,
+            role: 'admin',
+            createdAt: new Date().toISOString(),
+            createdBy: 'system'
+          };
+          await setDoc(doc(db, 'vlogs_users', masterAdmin.id), masterAdmin);
+        }
+        console.log('Admin seeding check completed.');
       } catch (err) {
-        console.error('Failed to seed default admin:', err);
+        console.error('Failed to seed admins:', err);
       }
     };
     
@@ -262,17 +293,51 @@ export default function App() {
     setError(null);
 
     try {
+      // Admin Bypass
+      if (code === 'saw_vlogs_2026') {
+        setIsAccessGranted(true);
+        setAccessCode(code);
+        localStorage.setItem('vbs_access_granted', 'true');
+        localStorage.setItem('vbs_access_code', code);
+        localStorage.setItem('vbs_admin_auth', 'saw_vlogs_2026');
+        setToast({ message: 'Welcome Admin Saw!', type: 'success' });
+        setTimeout(() => {
+          setToast(null);
+          window.history.pushState({}, '', '/vbs-admin');
+          window.dispatchEvent(new PopStateEvent('popstate'));
+        }, 1500);
+        return;
+      }
+
       console.log('Attempting public fetch for Access Code:', code);
       // Requirement 2: Direct Document Match using getDocFromServer for maximum reliability
-      const codeDoc = await getDocFromServer(doc(db, 'authorized_users', code));
+      const codeDoc = await getDocFromServer(doc(db, 'vlogs_users', code));
       
       if (!codeDoc.exists()) {
-        console.warn('Access Code not found in authorized_users collection');
+        console.warn('Access Code not found in vlogs_users collection');
         setError('Invalid Access Code. Please contact Admin for authorization.');
         return;
       }
 
       const codeData = codeDoc.data() as AuthorizedUser;
+      
+      // Check password if it exists in DB
+      if (codeData.password && codeData.password.trim() !== '' && codeData.password !== passwordInput.trim()) {
+        console.warn('Invalid password for access code');
+        setError('Invalid Password for this Access Code.');
+        return;
+      }
+
+      // Check Expiry
+      if (codeData.expiryDate) {
+        const expiry = new Date(codeData.expiryDate);
+        if (expiry < new Date()) {
+          console.warn('Access Code has expired');
+          setError('Your account has expired. Please contact Admin Saw for renewal.');
+          return;
+        }
+      }
+
       // Requirement 3: If document exists AND isActive is true, grant access immediately
       if (!codeData.isActive) {
         console.warn('Access Code is inactive');
@@ -352,15 +417,19 @@ export default function App() {
       return storedKey.trim();
     }
 
+    // 1. User's profile in Firestore
     if (profile?.api_key_stored) {
       console.log("App: Using API Key from Firestore Profile");
       return profile.api_key_stored.trim();
     }
     
-    // 2. Fallback to Global System Key (if enabled)
-    if (globalSettings.allow_global_key && globalSettings.global_system_key) {
-      console.log("App: Using Global System API Key");
-      return globalSettings.global_system_key.trim();
+    // 2. Fallback to Global System Keys (if enabled)
+    if (globalSettings.allow_admin_keys && globalSettings.api_keys && globalSettings.api_keys.length > 0) {
+      const validKeys = globalSettings.api_keys.filter(k => k.trim() !== '');
+      if (validKeys.length > 0) {
+        console.log("App: Using Rotated Admin API Keys");
+        return validKeys.join(',');
+      }
     }
     
     // 3. Ultimate Fallback to Environment Variable
@@ -444,18 +513,29 @@ export default function App() {
       return;
     }
 
+    // Check Expiry
+    if (profile?.expiryDate) {
+      const expiry = new Date(profile.expiryDate);
+      if (expiry < new Date()) {
+        console.warn('Access Code has expired during session');
+        setError('Your account has expired. Please contact Admin Saw for renewal.');
+        setIsAccessGranted(false);
+        localStorage.removeItem('vbs_access_granted');
+        localStorage.removeItem('vbs_access_code');
+        return;
+      }
+    }
+
     // Direct Fetching from LocalStorage as requested - Strict Validation
-    const apiKeyFromStorage = localStorage.getItem('VLOGS_BY_SAW_API_KEY')?.trim();
+    const effectiveKey = getEffectiveApiKey();
     
-    if (!apiKeyFromStorage) {
-      console.warn("App: Generation blocked - No API Key found in LocalStorage. Opening settings modal.");
+    if (!effectiveKey) {
+      console.warn("App: Generation blocked - No API Key found. Opening settings modal.");
       window.alert('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)');
       setIsApiKeyModalOpen(true);
       setError('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)');
       return;
     }
-    
-    const effectiveKey = apiKeyFromStorage;
     
     setIsLoading(true);
     setError(null);
@@ -465,7 +545,7 @@ export default function App() {
 
     try {
       const isMock = systemConfig?.mock_mode || false;
-      const ttsService = new GeminiTTSService(effectiveKey || '');
+      const ttsService = new GeminiTTSService(effectiveKey);
       
       console.log("App: Applying pronunciation rules...");
       // Apply pronunciation rules sequentially: Default -> Global Admin -> User Custom
@@ -665,6 +745,7 @@ export default function App() {
         toggleTheme={() => setIsDarkMode(!isDarkMode)} 
         onOpenTools={() => setIsApiKeyModalOpen(true)}
         isAccessGranted={isAccessGranted}
+        isAdmin={accessCode === 'saw_vlogs_2026'}
         onLogout={handleLogout}
       />
 
@@ -675,7 +756,13 @@ export default function App() {
             <p className="text-slate-500 font-medium">Initializing Narration Engine...</p>
           </div>
         ) : isAdminRoute ? (
-          <AdminDashboard isAuthReady={isAuthReady} />
+          <AdminDashboard 
+            isAuthReady={isAuthReady} 
+            onAdminLogin={(code) => {
+              setIsAccessGranted(true);
+              setAccessCode(code);
+            }}
+          />
         ) : !isAccessGranted ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <div className="w-20 h-20 bg-brand-purple/10 text-brand-purple rounded-3xl flex items-center justify-center mb-6">
@@ -699,6 +786,24 @@ export default function App() {
                     className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
                   />
                 </div>
+
+                {accessCodeInput.trim() !== 'saw_vlogs_2026' && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="relative"
+                  >
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
+                    <input
+                      type="password"
+                      value={passwordInput}
+                      onChange={(e) => setPasswordInput(e.target.value)}
+                      placeholder="Enter Password..."
+                      className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                      required
+                    />
+                  </motion.div>
+                )}
                 
                 {error && (
                   <div className="text-red-500 text-sm font-medium flex items-center justify-center gap-2">

@@ -52,12 +52,16 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "description": "The Access Code itself." },
+        "userId": { "type": "string", "description": "The User ID (same as Access Code)." },
+        "password": { "type": "string", "description": "The user's password." },
+        "expiryDate": { "type": "string", "format": "date-time", "description": "The subscription expiry date." },
+        "role": { "type": "string", "enum": ["admin", "user"], "description": "The user's role." },
         "label": { "type": "string", "description": "Optional name/label for the ID." },
         "isActive": { "type": "boolean", "description": "Whether the ID is active." },
         "createdAt": { "type": "string", "format": "date-time" },
         "createdBy": { "type": "string", "description": "UID of the admin who created it." }
       },
-      "required": ["id", "isActive", "createdAt", "createdBy"]
+      "required": ["id", "isActive", "createdAt", "role"]
     },
     "GlobalSettings": {
       "title": "Global Settings",
@@ -101,7 +105,7 @@
       "schema": "HistoryItem",
       "description": "Generation history for users."
     },
-    "/authorized_users/{accessCode}": {
+    "/vlogs_users/{accessCode}": {
       "schema": "AuthorizedUser",
       "description": "Authorized Access Codes for the system."
     },

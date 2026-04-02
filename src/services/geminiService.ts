@@ -5,18 +5,38 @@ import { pcmToWav, formatTime } from "../utils/audioUtils";
 
 export class GeminiTTSService {
   private ai: GoogleGenAI;
-  private apiKey: string;
+  private apiKeys: string[];
+  private currentKeyIndex: number = 0;
 
-  constructor(apiKey?: string) {
-    const rawKey = apiKey || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '') || '';
-    this.apiKey = rawKey.trim();
-    console.log("GeminiTTSService: Initialized with key:", this.apiKey ? `Present (Starts with ${this.apiKey.substring(0, 4)}...)` : "Missing");
-    this.ai = new GoogleGenAI({ apiKey: this.apiKey });
+  constructor(apiKeys?: string | string[]) {
+    if (Array.isArray(apiKeys)) {
+      this.apiKeys = apiKeys.filter(k => k.trim()).map(k => k.trim());
+    } else {
+      const rawKey = apiKeys || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '') || '';
+      // Support comma-separated keys if passed as string
+      this.apiKeys = rawKey.split(',').map(k => k.trim()).filter(k => k);
+    }
+
+    if (this.apiKeys.length === 0) {
+      this.apiKeys = [''];
+    }
+
+    console.log("GeminiTTSService: Initialized with", this.apiKeys.length, "keys");
+    this.ai = new GoogleGenAI({ apiKey: this.apiKeys[0] });
+  }
+
+  private rotateKey(): boolean {
+    if (this.apiKeys.length <= 1) return false;
+    this.currentKeyIndex = (this.currentKeyIndex + 1) % this.apiKeys.length;
+    const nextKey = this.apiKeys[this.currentKeyIndex];
+    this.ai = new GoogleGenAI({ apiKey: nextKey });
+    console.log(`GeminiTTSService: Rotated to key index ${this.currentKeyIndex} (Starts with ${nextKey.substring(0, 4)}...)`);
+    return true;
   }
 
   async verifyConnection(): Promise<{ isValid: boolean; status?: number; error?: string }> {
-    if (!this.apiKey) {
-      console.error("GeminiTTSService: Cannot verify connection - API Key is empty");
+    if (!this.apiKeys[this.currentKeyIndex]) {
+      console.error("GeminiTTSService: Cannot verify connection - Current API Key is empty");
       return { isValid: false, error: "Empty API Key" };
     }
 
@@ -39,23 +59,28 @@ export class GeminiTTSService {
     console.log("TTS Service: Starting generation...", { 
       forceMock, 
       textLength: text.length,
-      hasKey: !!this.apiKey,
-      keyPreview: this.apiKey ? `${this.apiKey.substring(0, 4)}...` : 'none'
+      keyCount: this.apiKeys.length,
+      currentKeyIndex: this.currentKeyIndex
     });
 
     const runMock = async () => {
       console.log("TTS Service: Running in SIMULATION mode");
       await new Promise(resolve => setTimeout(resolve, 1500)); // Brief delay for realism
       
-      const dummyBytes = new Uint8Array(24000);
-      const wavBlob = pcmToWav(dummyBytes, 24000);
+      // Estimate duration for simulation (approx 15 chars per second)
+      const estimatedDuration = Math.max(2, text.length / 15);
+      const sampleRate = 24000;
+      const numSamples = Math.floor(estimatedDuration * sampleRate);
+      const dummyBytes = new Uint8Array(numSamples * 2); // 16-bit PCM
+      
+      const wavBlob = pcmToWav(dummyBytes, sampleRate);
       const audioUrl = URL.createObjectURL(wavBlob);
-      const subtitles = this.generateMockSRT(text);
+      const subtitles = this.generateMockSRT(text, estimatedDuration);
       const srtContent = subtitles.map(s => 
         `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}\n`
       ).join('\n');
 
-      console.log("TTS Service: Simulation generation successful");
+      console.log("TTS Service: Simulation generation successful", { estimatedDuration });
       return {
         audioUrl,
         audioData: "MOCK_DATA",
@@ -69,7 +94,7 @@ export class GeminiTTSService {
       return await runMock();
     }
 
-    if (!this.apiKey) {
+    if (!this.apiKeys[this.currentKeyIndex]) {
       console.error("TTS Service: API Key missing, falling back to simulation");
       return await runMock();
     }
@@ -82,8 +107,6 @@ export class GeminiTTSService {
     const pitch = Math.max(-20.0, Math.min(20.0, parseFloat(String(config.pitch)) || 0.0));
     const volume = Math.max(0, Math.min(100, parseFloat(String(config.volume)) || 80));
     const volumeGainDb = Math.max(-96.0, Math.min(16.0, -96.0 + (volume / 100) * 112.0));
-
-    console.log("TTS Service: Sending request to Gemini API via @google/genai...", { speed, pitch, volumeGainDb });
 
     const payload = {
       model: GEMINI_MODELS.TTS,
@@ -104,52 +127,71 @@ export class GeminiTTSService {
       }
     };
 
-    console.log("TTS Service: API Payload (Simplified):", JSON.stringify(payload, null, 2));
+    let attempts = 0;
+    const maxAttempts = this.apiKeys.length;
 
-    try {
-      const response = await this.ai.models.generateContent(payload);
+    while (attempts < maxAttempts) {
+      try {
+        console.log(`TTS Service: Sending request (Attempt ${attempts + 1}/${maxAttempts}) using key index ${this.currentKeyIndex}`);
+        const response = await this.ai.models.generateContent(payload);
 
-      console.log("TTS Service: Received response from API");
+        console.log("TTS Service: Received response from API");
 
-      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
 
-      if (!base64Audio) {
-        throw new Error('No audio data received from Gemini');
+        if (!base64Audio) {
+          throw new Error('No audio data received from Gemini');
+        }
+
+        const binaryString = window.atob(base64Audio);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        // Gemini TTS returns raw PCM (24000Hz, 16-bit, mono)
+        const sampleRate = 24000;
+        const wavBlob = pcmToWav(bytes, sampleRate);
+        const audioUrl = URL.createObjectURL(wavBlob);
+        
+        // Calculate actual duration: bytes / (sampleRate * bytesPerSample * channels)
+        // 16-bit mono = 2 bytes per sample
+        const actualDuration = bytes.length / (sampleRate * 2);
+        
+        const subtitles = this.generateMockSRT(text, actualDuration);
+        const srtContent = subtitles.map(s => 
+          `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}\n`
+        ).join('\n');
+
+        console.log("TTS Service: API generation successful", { actualDuration });
+        return {
+          audioUrl,
+          audioData: base64Audio,
+          srtContent,
+          subtitles
+        };
+      } catch (err: any) {
+        const isRateLimit = err.status === 429 || (err.message && err.message.includes('429')) || (err.details && err.details.includes('429'));
+        
+        if (isRateLimit && attempts < maxAttempts - 1) {
+          console.warn(`TTS Service: Rate limit hit (429) on key index ${this.currentKeyIndex}. Rotating key...`);
+          this.rotateKey();
+          attempts++;
+          continue;
+        }
+
+        console.error("TTS Service: API call failed.", {
+          message: err.message,
+          status: err.status,
+          attempts: attempts + 1
+        });
+        
+        // If we've exhausted all keys or it's not a rate limit error, fallback to mock
+        return await runMock();
       }
-
-      const binaryString = window.atob(base64Audio);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-
-      // Gemini TTS returns raw PCM (24000Hz, 16-bit, mono)
-      const wavBlob = pcmToWav(bytes, 24000);
-      const audioUrl = URL.createObjectURL(wavBlob);
-      const subtitles = this.generateMockSRT(text);
-      const srtContent = subtitles.map(s => 
-        `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}\n`
-      ).join('\n');
-
-      return {
-        audioUrl,
-        audioData: base64Audio,
-        srtContent,
-        subtitles
-      };
-    } catch (err: any) {
-      // Debugging: Capture exact error message from Google API response
-      console.error("TTS Service: Real API call failed (Error 400 check). Full error details:", {
-        message: err.message,
-        status: err.status,
-        statusText: err.statusText,
-        details: err.details || err.response?.data?.error || "No extra details",
-        stack: err.stack,
-        rawError: err
-      });
-      // Fallback to mock if it's a network error, timeout, or CORS issue
-      return await runMock();
     }
+
+    return await runMock();
   }
 
   static parseSRT(srt: string): SRTSubtitle[] {
@@ -164,24 +206,36 @@ export class GeminiTTSService {
     }).filter((s): s is SRTSubtitle => s !== null);
   }
 
-  private generateMockSRT(text: string): SRTSubtitle[] {
+  private generateMockSRT(text: string, totalDuration?: number): SRTSubtitle[] {
     const words = text.split(/\s+/);
     const subtitles: SRTSubtitle[] = [];
-    let currentTime = 0;
     const wordsPerSubtitle = 5;
+    const chunks: string[] = [];
 
     for (let i = 0; i < words.length; i += wordsPerSubtitle) {
-      const chunk = words.slice(i, i + wordsPerSubtitle).join(' ');
-      const duration = chunk.length * 0.1; // Rough estimate
+      chunks.push(words.slice(i, i + wordsPerSubtitle).join(' '));
+    }
+
+    const totalChars = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
+    
+    // If totalDuration is not provided, estimate it (approx 15 chars per second)
+    const effectiveDuration = totalDuration || (totalChars / 15);
+    
+    let currentTime = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      // Calculate weight based on character length
+      const weight = chunk.length / totalChars;
+      const duration = weight * effectiveDuration;
       
       subtitles.push({
-        index: Math.floor(i / wordsPerSubtitle) + 1,
+        index: i + 1,
         startTime: formatTime(currentTime),
         endTime: formatTime(currentTime + duration),
         text: chunk
       });
       
-      currentTime += duration + 0.5;
+      currentTime += duration;
     }
 
     return subtitles;
