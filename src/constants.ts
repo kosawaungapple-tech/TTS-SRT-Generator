@@ -34,4 +34,5 @@ export const GEMINI_MODELS = {
   VERIFY: 'gemini-3-flash-preview',
   LIVE: 'gemini-2.5-flash-native-audio-preview-12-2025',
   TTS: 'gemini-2.5-flash-preview-tts',
+  REWRITE: 'gemini-2.0-flash',
 };

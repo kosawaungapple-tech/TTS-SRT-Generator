@@ -61,22 +61,42 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   }, []);
 
-  const getApiKey = useCallback(() => {
-    // Priority 1: Local API Key (from Settings)
-    if (localApiKey) return localApiKey;
+  const getEffectiveApiKey = useCallback(() => {
+    // Priority 0: Local Storage (for immediate sync and persistence as requested)
+    const storedKey = localStorage.getItem('VLOGS_BY_SAW_API_KEY');
+    if (storedKey) {
+      console.log("App: Using API Key from LocalStorage (VLOGS_BY_SAW_API_KEY)");
+      return storedKey.trim();
+    }
+
+    // 1. User's profile in Firestore
+    if (profile?.api_key_stored) {
+      console.log("App: Using API Key from Firestore Profile");
+      return profile.api_key_stored.trim();
+    }
     
-    // Priority 2: Global API Keys (from Firestore) with Rotation
-    if (globalSettings.api_keys && globalSettings.api_keys.length > 0) {
-      const validKeys = globalSettings.api_keys.filter(k => k && k.trim());
+    // 2. Fallback to Global System Keys (if enabled)
+    if (globalSettings.allow_admin_keys && globalSettings.api_keys && globalSettings.api_keys.length > 0) {
+      const validKeys = globalSettings.api_keys.filter(k => k.trim() !== '');
       if (validKeys.length > 0) {
-        // Simple random rotation for non-TTS tasks
-        const randomIndex = Math.floor(Math.random() * validKeys.length);
-        return validKeys[randomIndex];
+        console.log("App: Using Rotated Admin API Keys");
+        return validKeys.join(',');
       }
     }
     
+    // 3. Ultimate Fallback to Environment Variable
+    if (typeof process !== 'undefined' && process.env.GEMINI_API_KEY) {
+      console.log("App: Using Environment Variable API Key");
+      return process.env.GEMINI_API_KEY.trim();
+    }
+    
+    console.warn("App: No effective API Key found");
     return null;
-  }, [localApiKey, globalSettings.api_keys]);
+  }, [profile, globalSettings]);
+
+  const getApiKey = useCallback(() => {
+    return getEffectiveApiKey();
+  }, [getEffectiveApiKey]);
 
   // Global Rules & History
   const [globalRules, setGlobalRules] = useState<PronunciationRule[]>([]);
@@ -97,7 +117,7 @@ export default function App() {
   const handleTranslate = async () => {
     if (!sourceText.trim()) return;
     
-    const apiKey = getApiKey();
+    const apiKey = getEffectiveApiKey();
     if (!apiKey) {
       showToast('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)', 'error');
       return;
@@ -105,10 +125,10 @@ export default function App() {
 
     setIsTranslating(true);
     try {
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI({ apiKey, apiVersion: 'v1beta' });
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Translate the provided text into natural, professional, storytelling Burmese. Use a tone suitable for video narration. Original: ${sourceText}`,
+        model: "gemini-2.0-flash",
+        contents: [{ parts: [{ text: `Translate the provided text into natural, professional, storytelling Burmese. Use a tone suitable for video narration. Original: ${sourceText}` }] }],
       });
 
       const resultText = response.text;
@@ -549,39 +569,6 @@ export default function App() {
     if (showApiKey) return key;
     return `${key.substring(0, 8)}...${key.substring(key.length - 4)}`;
   };
-
-  const getEffectiveApiKey = useCallback(() => {
-    // Priority 0: Local Storage (for immediate sync and persistence as requested)
-    const storedKey = localStorage.getItem('VLOGS_BY_SAW_API_KEY');
-    if (storedKey) {
-      console.log("App: Using API Key from LocalStorage (VLOGS_BY_SAW_API_KEY)");
-      return storedKey.trim();
-    }
-
-    // 1. User's profile in Firestore
-    if (profile?.api_key_stored) {
-      console.log("App: Using API Key from Firestore Profile");
-      return profile.api_key_stored.trim();
-    }
-    
-    // 2. Fallback to Global System Keys (if enabled)
-    if (globalSettings.allow_admin_keys && globalSettings.api_keys && globalSettings.api_keys.length > 0) {
-      const validKeys = globalSettings.api_keys.filter(k => k.trim() !== '');
-      if (validKeys.length > 0) {
-        console.log("App: Using Rotated Admin API Keys");
-        return validKeys.join(',');
-      }
-    }
-    
-    // 3. Ultimate Fallback to Environment Variable
-    if (typeof process !== 'undefined' && process.env.GEMINI_API_KEY) {
-      console.log("App: Using Environment Variable API Key");
-      return process.env.GEMINI_API_KEY.trim();
-    }
-    
-    console.warn("App: No effective API Key found");
-    return null;
-  }, [profile, globalSettings]);
 
   const handleUpdateGlobalSettings = async (updates: Partial<GlobalSettings>) => {
     try {
@@ -1070,7 +1057,7 @@ export default function App() {
                       text={text} 
                       setText={setText} 
                       isDarkMode={isDarkMode} 
-                      getApiKey={getApiKey}
+                      getApiKey={getEffectiveApiKey}
                       showToast={showToast}
                     />
                     

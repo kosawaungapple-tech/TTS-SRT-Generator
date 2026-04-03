@@ -33,20 +33,34 @@ export const ContentInput: React.FC<ContentInputProps> = ({ text, setText, isDar
 
     setIsRewriting(true);
     try {
-      const ai = new GoogleGenAI({ apiKey });
+      const modelId = 'gemini-2.0-flash';
+      const ai = new GoogleGenAI({ apiKey, apiVersion: 'v1beta' });
+      
+      const prompt = `You are a professional Burmese content creator. Paraphrase the following text to be unique, engaging, and copyright-safe. Use a natural storytelling tone. Original text: ${text}`;
+      
+      console.log(`Rewriting with model: ${modelId}...`);
       
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `You are a professional Burmese content creator. Paraphrase the following text to be unique, engaging, and copyright-safe. Use a natural storytelling tone. Original text: ${text}`,
+        model: modelId,
+        contents: [{
+          parts: [{
+            text: prompt
+          }]
+        }]
       });
 
       const rewrittenText = response.text;
+      
       if (rewrittenText) {
-        setText(rewrittenText);
+        setText(rewrittenText.trim());
         showToast('စာသားကို အောင်မြင်စွာ ပြန်လည်ရေးသားပြီးပါပြီ။ (Text rewritten successfully!)', 'success');
+      } else {
+        throw new Error('No text returned from AI');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Rewriting failed:', err);
+      // Log status if available (though SDK might not expose it directly in all error types)
+      if (err.status) console.error(`Status code: ${err.status}`);
       showToast('Rewrite failed. Please check your connection.', 'error');
     } finally {
       setIsRewriting(false);

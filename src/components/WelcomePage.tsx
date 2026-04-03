@@ -34,15 +34,15 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnter }) => {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2 }}
-          className="flex flex-col gap-6 mb-12 px-4"
+          className="flex flex-col gap-4 md:gap-6 mb-8 md:mb-12 px-4"
         >
-          <h1 className="text-4xl md:text-6xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-b from-white via-white to-purple-400 leading-tight">
+          <h1 className="text-3xl md:text-6xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-b from-white via-white to-purple-400 leading-tight">
             Vlogs By Saw AI အသံဖန်တီးမှု စနစ်
           </h1>
-          <p className="text-lg md:text-xl font-bold text-purple-300 tracking-wide">
+          <p className="text-base md:text-xl font-bold text-purple-300 tracking-wide">
             Burmese Storytelling, TTS နှင့် Video Recap များအတွက် အကောင်းဆုံး AI နည်းပညာ။
           </p>
-          <p className="text-slate-400 max-w-2xl mx-auto text-base md:text-lg">
+          <p className="text-slate-400 max-w-2xl mx-auto text-sm md:text-lg">
             Experience high-quality narration with cutting-edge AI technology. 
             မြန်မာစကားပြော အသံဖန်တီးမှုများအတွက် အထူးပြုလုပ်ထားပါသည်။
           </p>
@@ -53,20 +53,26 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnter }) => {
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.4 }}
-          className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-16 w-full px-4"
+          className="flex flex-wrap justify-center gap-6 md:grid md:grid-cols-3 mb-16 w-full px-4 sm:px-6"
         >
-          <FeatureCard 
-            icon={<Mic className="text-purple-400" />}
-            title="သဘာဝကျသော အသံများ"
-          />
-          <FeatureCard 
-            icon={<Languages className="text-purple-400" />}
-            title="ကျွမ်းကျင်စွာ ဘာသာပြန်ဆိုမှု"
-          />
-          <FeatureCard 
-            icon={<Zap className="text-purple-400" />}
-            title="၄ ဆ ပိုမိုမြန်ဆန်သော လုပ်ဆောင်ချက်"
-          />
+          <div className="w-full md:w-auto flex-1 min-w-[280px]">
+            <FeatureCard 
+              icon={<Mic className="text-purple-400" />}
+              title="သဘာဝကျသော အသံများ"
+            />
+          </div>
+          <div className="w-full md:w-auto flex-1 min-w-[280px]">
+            <FeatureCard 
+              icon={<Languages className="text-purple-400" />}
+              title="ကျွမ်းကျင်စွာ ဘာသာပြန်ဆိုမှု"
+            />
+          </div>
+          <div className="w-full md:w-auto flex-1 min-w-[280px]">
+            <FeatureCard 
+              icon={<Zap className="text-purple-400" />}
+              title="၄ ဆ ပိုမိုမြန်ဆန်သော လုပ်ဆောင်ချက်"
+            />
+          </div>
         </motion.div>
 
         {/* CTA Section */}
@@ -74,13 +80,13 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnter }) => {
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ delay: 0.6 }}
-          className="mt-4"
+          className="mt-4 w-full flex justify-center px-6"
         >
           <motion.button
             whileHover={{ scale: 1.05, boxShadow: "0 0 30px rgba(168,85,247,0.6)" }}
             whileTap={{ scale: 0.95 }}
             onClick={onEnter}
-            className="group relative bg-brand-purple hover:bg-purple-500 text-white px-12 py-5 rounded-2xl font-black text-xl tracking-widest uppercase flex items-center gap-3 transition-all duration-300 shadow-[0_0_20px_rgba(168,85,247,0.3)]"
+            className="group relative bg-brand-purple hover:bg-purple-500 text-white px-8 md:px-12 py-4 md:py-5 rounded-2xl font-black text-lg md:text-xl tracking-widest uppercase flex items-center gap-3 transition-all duration-300 shadow-[0_0_20px_rgba(168,85,247,0.3)]"
           >
             စတင်အသုံးပြုမည်
             <ChevronRight className="group-hover:translate-x-1 transition-transform" />
@@ -93,7 +99,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnter }) => {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.8 }}
-        className="absolute bottom-8 text-slate-500 font-mono text-sm tracking-widest uppercase"
+        className="absolute bottom-8 text-slate-500 font-mono text-[10px] md:text-sm tracking-widest uppercase px-4 text-center"
       >
         © 2026 Vlogs By Saw • Premium AI Narration
       </motion.div>
@@ -102,10 +108,10 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnter }) => {
 };
 
 const FeatureCard: React.FC<{ icon: React.ReactNode; title: string }> = ({ icon, title }) => (
-  <div className="bg-white/5 backdrop-blur-sm border border-white/10 p-8 rounded-[32px] hover:bg-white/10 transition-all duration-300 group flex flex-col items-center text-center">
-    <div className="bg-purple-500/10 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform shadow-lg shadow-purple-500/5">
+  <div className="bg-white/5 backdrop-blur-sm border border-white/10 p-6 md:p-8 rounded-[24px] md:rounded-[32px] hover:bg-white/10 transition-all duration-300 group flex flex-col items-center text-center h-full">
+    <div className="bg-purple-500/10 w-12 h-12 md:w-16 md:h-16 rounded-xl md:rounded-2xl flex items-center justify-center mb-4 md:mb-6 group-hover:scale-110 transition-transform shadow-lg shadow-purple-500/5">
       {icon}
     </div>
-    <h3 className="text-xl font-bold text-white leading-tight">{title}</h3>
+    <h3 className="text-lg md:text-xl font-bold text-white leading-tight">{title}</h3>
   </div>
 );
