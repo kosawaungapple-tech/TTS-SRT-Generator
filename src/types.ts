@@ -75,10 +75,12 @@ export interface SRTSubtitle {
 }
 
 export interface TTSConfig {
+  model: string;
   voiceId: string;
   speed: number;
   pitch: number;
   volume: number;
+  styleInstruction?: string;
 }
 
 export interface AudioResult {

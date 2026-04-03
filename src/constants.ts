@@ -8,6 +8,17 @@ export const VOICE_OPTIONS: VoiceOption[] = [
   { id: 'fenrir', name: 'Burmese Male (အမျိုးသား) - Fenrir', gender: 'male', voiceName: 'Fenrir' },
 ];
 
+export const MODEL_OPTIONS = [
+  { id: 'gemini-2.5-flash-preview-tts', name: 'Gemini 2.5 Flash (Latest)' },
+];
+
+// Define which voices are supported by which models
+const STABLE_VOICES = ['zephyr', 'kore', 'puck', 'charon', 'fenrir'];
+
+export const MODEL_VOICE_MAPPING: Record<string, string[]> = {
+  'gemini-2.5-flash-preview-tts': STABLE_VOICES,
+};
+
 export const DEFAULT_RULES = [
   { id: '1', original: 'Vlogs By Saw', replacement: 'ဗလော့ ဘိုင် စော' },
   { id: '2', original: 'AI', replacement: 'အေအိုင်' },

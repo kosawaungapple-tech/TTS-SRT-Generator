@@ -22,14 +22,14 @@ export class GeminiTTSService {
     }
 
     console.log("GeminiTTSService: Initialized with", this.apiKeys.length, "keys");
-    this.ai = new GoogleGenAI({ apiKey: this.apiKeys[0] });
+    this.ai = new GoogleGenAI({ apiKey: this.apiKeys[0], apiVersion: 'v1beta' });
   }
 
   private rotateKey(): boolean {
     if (this.apiKeys.length <= 1) return false;
     this.currentKeyIndex = (this.currentKeyIndex + 1) % this.apiKeys.length;
     const nextKey = this.apiKeys[this.currentKeyIndex];
-    this.ai = new GoogleGenAI({ apiKey: nextKey });
+    this.ai = new GoogleGenAI({ apiKey: nextKey, apiVersion: 'v1beta' });
     console.log(`GeminiTTSService: Rotated to key index ${this.currentKeyIndex} (Starts with ${nextKey.substring(0, 4)}...)`);
     return true;
   }
@@ -77,8 +77,8 @@ export class GeminiTTSService {
       const audioUrl = URL.createObjectURL(wavBlob);
       const subtitles = this.generateMockSRT(text, estimatedDuration);
       const srtContent = subtitles.map(s => 
-        `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}\n`
-      ).join('\n');
+        `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}`
+      ).join('\n\n') + '\n\n';
 
       console.log("TTS Service: Simulation generation successful", { estimatedDuration });
       return {
@@ -99,18 +99,24 @@ export class GeminiTTSService {
       return await runMock();
     }
 
-    const voice = VOICE_OPTIONS.find(v => v.id === config.voiceId) || VOICE_OPTIONS[0];
+    const voiceId = config.voiceId || 'zephyr';
+    const voice = VOICE_OPTIONS.find(v => v.id === voiceId) || VOICE_OPTIONS[0];
     const language = voice.name.split(' ')[0];
     
     // Request Validation (Error 400 Fix)
     const speed = Math.max(0.25, Math.min(4.0, parseFloat(String(config.speed)) || 1.0));
     const pitch = Math.max(-20.0, Math.min(20.0, parseFloat(String(config.pitch)) || 0.0));
     const volume = Math.max(0, Math.min(100, parseFloat(String(config.volume)) || 80));
-    const volumeGainDb = Math.max(-96.0, Math.min(16.0, -96.0 + (volume / 100) * 112.0));
+
+    const styleCmd = config.styleInstruction?.trim() 
+      ? `Command: ${config.styleInstruction.trim()}. Now, read the following text: ` 
+      : "Narrate the following text in a natural, clear, and cinematic voice. ";
 
     const payload = {
-      model: GEMINI_MODELS.TTS,
-      contents: [{ parts: [{ text: `Narrate the following text in a natural, clear, and cinematic ${language} ${voice.gender} voice. 
+      model: config.model || GEMINI_MODELS.TTS,
+      contents: [{ parts: [{ text: `${styleCmd}
+      Language: ${language}.
+      Gender: ${voice.gender}.
       Speaking rate: ${speed.toFixed(2)}x. 
       Pitch: ${pitch.toFixed(1)}. 
       Volume: ${volume}%.
@@ -126,6 +132,8 @@ export class GeminiTTSService {
         }
       }
     };
+
+    console.log("TTS Service: API Payload", JSON.stringify(payload, null, 2));
 
     let attempts = 0;
     const maxAttempts = this.apiKeys.length;
@@ -160,8 +168,8 @@ export class GeminiTTSService {
         
         const subtitles = this.generateMockSRT(text, actualDuration);
         const srtContent = subtitles.map(s => 
-          `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}\n`
-        ).join('\n');
+          `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}`
+        ).join('\n\n') + '\n\n';
 
         console.log("TTS Service: API generation successful", { actualDuration });
         return {

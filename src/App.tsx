@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Wand2, Key, Settings, User, LogIn, LogOut, ShieldCheck, ShieldAlert, Shield, CheckCircle2, XCircle, History, Wrench, Plus, Trash2, Download, Play, Music, FileText, Eye, EyeOff, Cloud, RefreshCw, Zap, X, ExternalLink, Calendar, Clock, Mail, Wifi, Save, Lock, Info, ArrowRight, ChevronRight } from 'lucide-react';
+import { AlertCircle, Wand2, Key, Settings, User, LogIn, LogOut, ShieldCheck, ShieldAlert, Shield, CheckCircle2, XCircle, History, Wrench, Plus, Trash2, Download, Play, Music, FileText, Eye, EyeOff, Cloud, RefreshCw, Zap, X, ExternalLink, Calendar, Clock, Mail, Wifi, Save, Lock, Info, ArrowRight, ChevronRight, Languages } from 'lucide-react';
+import { WelcomePage } from './components/WelcomePage';
 import { Header } from './components/Header';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { ContentInput } from './components/ContentInput';
@@ -9,25 +10,30 @@ import { VoiceConfig } from './components/VoiceConfig';
 import { OutputPreview } from './components/OutputPreview';
 import { MiniAudioPlayer } from './components/MiniAudioPlayer';
 import { AdminDashboard } from './components/AdminDashboard';
+import { Modal, ModalType } from './components/Modal';
 import { GeminiTTSService } from './services/geminiService';
 import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, AuthorizedUser, SystemConfig } from './types';
 import { DEFAULT_RULES } from './constants';
 import { pcmToWav } from './utils/audioUtils';
+import { GoogleGenAI } from "@google/genai";
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDoc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadString, getDownloadURL } from './firebase';
 
-type Tab = 'generate' | 'history' | 'tools' | 'admin' | 'vbs-admin';
+type Tab = 'generate' | 'translator' | 'history' | 'tools' | 'admin' | 'vbs-admin';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('generate');
+  const [hasEntered, setHasEntered] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [text, setText] = useState('');
   const [customRules, setCustomRules] = useState('');
   const [saveToHistory, setSaveToHistory] = useState(false);
   const [config, setConfig] = useState<TTSConfig>({
+    model: 'gemini-2.5-flash-preview-tts',
     voiceId: 'zephyr',
     speed: 1.0,
     pitch: 0,
     volume: 80,
+    styleInstruction: '',
   });
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<AudioResult | null>(null);
@@ -50,6 +56,28 @@ export default function App() {
   });
   const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
 
+  const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  }, []);
+
+  const getApiKey = useCallback(() => {
+    // Priority 1: Local API Key (from Settings)
+    if (localApiKey) return localApiKey;
+    
+    // Priority 2: Global API Keys (from Firestore) with Rotation
+    if (globalSettings.api_keys && globalSettings.api_keys.length > 0) {
+      const validKeys = globalSettings.api_keys.filter(k => k && k.trim());
+      if (validKeys.length > 0) {
+        // Simple random rotation for non-TTS tasks
+        const randomIndex = Math.floor(Math.random() * validKeys.length);
+        return validKeys[randomIndex];
+      }
+    }
+    
+    return null;
+  }, [localApiKey, globalSettings.api_keys]);
+
   // Global Rules & History
   const [globalRules, setGlobalRules] = useState<PronunciationRule[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -61,13 +89,90 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
 
+  // Translator State
+  const [sourceText, setSourceText] = useState('');
+  const [translatedText, setTranslatedText] = useState('');
+  const [isTranslating, setIsTranslating] = useState(false);
+
+  const handleTranslate = async () => {
+    if (!sourceText.trim()) return;
+    
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      showToast('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)', 'error');
+      return;
+    }
+
+    setIsTranslating(true);
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Translate the provided text into natural, professional, storytelling Burmese. Use a tone suitable for video narration. Original: ${sourceText}`,
+      });
+
+      const resultText = response.text;
+      if (resultText) {
+        setTranslatedText(resultText);
+        showToast('ဘာသာပြန်ဆိုမှု အောင်မြင်ပါသည်။ (Translation successful!)', 'success');
+      }
+    } catch (err) {
+      console.error('Translation failed:', err);
+      showToast('ဘာသာပြန်ဆိုမှု မအောင်မြင်ပါ။ (Translation failed. Please check your connection.)', 'error');
+    } finally {
+      setIsTranslating(false);
+    }
+  };
+
+  const sendToGenerator = () => {
+    if (!translatedText.trim()) return;
+    setText(translatedText);
+    setActiveTab('generate');
+    showToast('စာသားကို Generator သို့ ပို့လိုက်ပါပြီ။ (Sent to Generator!)', 'success');
+  };
+
   // Auth & Access State (Custom)
   const [accessCodeInput, setAccessCodeInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
+  const [isStepTwo, setIsStepTwo] = useState(false);
   const [isAccessGranted, setIsAccessGranted] = useState(false); // Force login by default
   const [isVerifyingCode, setIsVerifyingCode] = useState(false);
   const [accessCode, setAccessCode] = useState<string | null>(null);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+
+  // Modal State
+  const [modal, setModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: ModalType;
+    confirmText?: string;
+    cancelText?: string;
+    placeholder?: string;
+    defaultValue?: string;
+    inputType?: 'text' | 'password' | 'date';
+    onConfirm?: (value?: string) => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'alert',
+  });
+
+  const openModal = (config: Partial<Omit<typeof modal, 'isOpen'>> & { title: string; message: string }) => {
+    setModal({
+      isOpen: true,
+      title: config.title,
+      message: config.message,
+      type: config.type || 'alert',
+      confirmText: config.confirmText || 'Confirm',
+      cancelText: config.cancelText || 'Cancel',
+      placeholder: config.placeholder || 'Enter value...',
+      defaultValue: config.defaultValue || '',
+      inputType: config.inputType || 'text',
+      onConfirm: config.onConfirm,
+    });
+  };
 
   // Handle Anonymous Auth
   useEffect(() => {
@@ -153,7 +258,16 @@ export default function App() {
           }
         } else {
           // If the code is no longer in authorized_users, log out
-          if (code !== 'preview-user') {
+          if (code === 'saw_vlogs_2026') {
+            setProfile({
+              id: 'saw_vlogs_2026',
+              note: 'Admin Saw',
+              isActive: true,
+              role: 'admin',
+              createdAt: new Date(),
+              expiryDate: '2099-12-31'
+            });
+          } else if (code !== 'preview-user') {
             handleLogout();
           }
         }
@@ -289,26 +403,51 @@ export default function App() {
       return;
     }
 
+    // Step 1: Admin bypass or reveal password
+    if (!isStepTwo) {
+      if (code === 'saw_vlogs_2026') {
+        setIsVerifyingCode(true);
+        setError(null);
+        try {
+          setIsAccessGranted(true);
+          setAccessCode(code);
+          setProfile({
+            id: 'saw_vlogs_2026',
+            note: 'Admin Saw',
+            isActive: true,
+            role: 'admin',
+            createdAt: new Date(),
+            expiryDate: '2099-12-31'
+          });
+          localStorage.setItem('vbs_access_granted', 'true');
+          localStorage.setItem('vbs_access_code', code);
+          localStorage.setItem('vbs_admin_auth', 'saw_vlogs_2026');
+          setToast({ message: 'Welcome Admin Saw!', type: 'success' });
+          setTimeout(() => {
+            setToast(null);
+            window.history.pushState({}, '', '/vbs-admin');
+            window.dispatchEvent(new PopStateEvent('popstate'));
+          }, 1500);
+        } catch (err) {
+          console.error('Admin login error:', err);
+          setError('An error occurred during login.');
+        } finally {
+          setIsVerifyingCode(false);
+        }
+        return;
+      } else {
+        // Regular user - show password field
+        setIsStepTwo(true);
+        setError(null);
+        return;
+      }
+    }
+
+    // Step 2: Regular user login with password
     setIsVerifyingCode(true);
     setError(null);
 
     try {
-      // Admin Bypass
-      if (code === 'saw_vlogs_2026') {
-        setIsAccessGranted(true);
-        setAccessCode(code);
-        localStorage.setItem('vbs_access_granted', 'true');
-        localStorage.setItem('vbs_access_code', code);
-        localStorage.setItem('vbs_admin_auth', 'saw_vlogs_2026');
-        setToast({ message: 'Welcome Admin Saw!', type: 'success' });
-        setTimeout(() => {
-          setToast(null);
-          window.history.pushState({}, '', '/vbs-admin');
-          window.dispatchEvent(new PopStateEvent('popstate'));
-        }, 1500);
-        return;
-      }
-
       console.log('Attempting public fetch for Access Code:', code);
       // Requirement 2: Direct Document Match using getDocFromServer for maximum reliability
       const codeDoc = await getDocFromServer(doc(db, 'vlogs_users', code));
@@ -378,6 +517,8 @@ export default function App() {
     await signOut(auth);
     setIsAccessGranted(false);
     setAccessCode(null);
+    setProfile(null);
+    setIsStepTwo(false);
     localStorage.removeItem('vbs_access_granted');
     localStorage.removeItem('vbs_access_code');
     // We do NOT remove the API Key on logout as per safety requirements
@@ -471,30 +612,56 @@ export default function App() {
     }
   };
 
-  const handleAddGlobalRule = async () => {
-    const original = prompt('Enter original text:');
-    const replacement = prompt('Enter replacement text:');
-    if (original && replacement) {
-      try {
-        await addDoc(collection(db, 'globalRules'), {
-          original,
-          replacement,
-          createdAt: new Date().toISOString()
+  const handleAddGlobalRule = () => {
+    openModal({
+      title: 'Add Global Rule',
+      message: 'Enter the original text and its replacement:',
+      type: 'prompt',
+      placeholder: 'Original text...',
+      confirmText: 'Next',
+      onConfirm: (original) => {
+        if (!original) return;
+        openModal({
+          title: 'Add Global Rule',
+          message: `Enter the replacement for "${original}":`,
+          type: 'prompt',
+          placeholder: 'Replacement text...',
+          confirmText: 'Add Rule',
+          onConfirm: async (replacement) => {
+            if (!replacement) return;
+            try {
+              await addDoc(collection(db, 'globalRules'), {
+                original: original.trim(),
+                replacement: replacement.trim(),
+                createdAt: new Date().toISOString()
+              });
+              setToast({ message: 'Global rule added successfully!', type: 'success' });
+              setTimeout(() => setToast(null), 3000);
+            } catch (err) {
+              handleFirestoreError(err, OperationType.CREATE, 'globalRules');
+            }
+          }
         });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, 'globalRules');
       }
-    }
+    });
   };
 
   const handleDeleteGlobalRule = async (id: string) => {
-    if (confirm('Delete this rule?')) {
-      try {
-        await deleteDoc(doc(db, 'globalRules', id));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, `globalRules/${id}`);
+    openModal({
+      title: 'Delete Global Rule',
+      message: 'Are you sure you want to delete this global pronunciation rule?',
+      type: 'confirm',
+      confirmText: 'Delete',
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'globalRules', id));
+          setToast({ message: 'Global rule deleted successfully!', type: 'success' });
+          setTimeout(() => setToast(null), 3000);
+        } catch (err) {
+          handleFirestoreError(err, OperationType.DELETE, `globalRules/${id}`);
+        }
       }
-    }
+    });
   };
 
   const handleUpdateGlobalRule = async (id: string, updates: Partial<PronunciationRule>) => {
@@ -531,8 +698,13 @@ export default function App() {
     
     if (!effectiveKey) {
       console.warn("App: Generation blocked - No API Key found. Opening settings modal.");
-      window.alert('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)');
-      setIsApiKeyModalOpen(true);
+      openModal({
+        title: 'API Key Required',
+        message: 'ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)',
+        type: 'error',
+        confirmText: 'Open Settings',
+        onConfirm: () => setIsApiKeyModalOpen(true)
+      });
       setError('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)');
       return;
     }
@@ -634,13 +806,21 @@ export default function App() {
   };
 
   const handleDeleteHistory = async (id: string) => {
-    if (confirm('Delete this history record?')) {
-      try {
-        await deleteDoc(doc(db, 'history', id));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, `history/${id}`);
+    openModal({
+      title: 'Delete History',
+      message: 'Are you sure you want to delete this history record?',
+      type: 'confirm',
+      confirmText: 'Delete',
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'history', id));
+          setToast({ message: 'History deleted successfully!', type: 'success' });
+          setTimeout(() => setToast(null), 3000);
+        } catch (err) {
+          handleFirestoreError(err, OperationType.DELETE, `history/${id}`);
+        }
       }
-    }
+    });
   };
 
   const handleDownloadAudio = async (dataOrUrl: string, filename: string) => {
@@ -680,11 +860,14 @@ export default function App() {
       const response = await fetch(contentOrUrl);
       content = await response.text();
     }
-    const blob = new Blob([content], { type: 'text/plain' });
+    
+    // Add UTF-8 BOM for mobile compatibility
+    const BOM = '\uFEFF';
+    const blob = new Blob([BOM + content], { type: 'text/srt;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = filename;
+    a.download = filename.toLowerCase(); // Ensure lowercase .srt
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -738,6 +921,10 @@ export default function App() {
     }
   };
 
+  if (!hasEntered) {
+    return <WelcomePage onEnter={() => setHasEntered(true)} />;
+  }
+
   return (
     <div className={`min-h-screen flex flex-col transition-colors duration-300 ${isDarkMode ? 'dark bg-[#020617] text-white' : 'bg-white text-slate-900'}`}>
       <Header 
@@ -747,6 +934,7 @@ export default function App() {
         isAccessGranted={isAccessGranted}
         isAdmin={accessCode === 'saw_vlogs_2026'}
         onLogout={handleLogout}
+        profile={profile}
       />
 
       <main className="flex-1 container mx-auto px-4 sm:px-6 py-6 sm:py-8 overflow-x-hidden">
@@ -781,29 +969,36 @@ export default function App() {
                   <input
                     type="text"
                     value={accessCodeInput}
-                    onChange={(e) => setAccessCodeInput(e.target.value)}
+                    onChange={(e) => {
+                      setAccessCodeInput(e.target.value);
+                      if (isStepTwo) setIsStepTwo(false);
+                    }}
                     placeholder="Enter Access Code..."
                     className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
                   />
                 </div>
 
-                {accessCodeInput.trim() !== 'saw_vlogs_2026' && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: -10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="relative"
-                  >
-                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
-                    <input
-                      type="password"
-                      value={passwordInput}
-                      onChange={(e) => setPasswordInput(e.target.value)}
-                      placeholder="Enter Password..."
-                      className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
-                      required
-                    />
-                  </motion.div>
-                )}
+                <AnimatePresence>
+                  {isStepTwo && (
+                    <motion.div 
+                      initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                      animate={{ opacity: 1, height: 'auto', marginTop: 16 }}
+                      exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                      className="relative overflow-hidden"
+                    >
+                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
+                      <input
+                        type="password"
+                        value={passwordInput}
+                        onChange={(e) => setPasswordInput(e.target.value)}
+                        placeholder="Enter Password..."
+                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                        required
+                        autoFocus
+                      />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
                 
                 {error && (
                   <div className="text-red-500 text-sm font-medium flex items-center justify-center gap-2">
@@ -822,7 +1017,10 @@ export default function App() {
                       {!isAuthReady && <span className="text-sm">Connecting...</span>}
                     </div>
                   ) : (
-                    <>Verify Access <ArrowRight size={20} /></>
+                    <>
+                      {isStepTwo ? 'Verify Access' : 'Continue'} 
+                      <ArrowRight size={20} />
+                    </>
                   )}
                 </button>
               </form>
@@ -836,7 +1034,13 @@ export default function App() {
                 onClick={() => setActiveTab('generate')}
                 className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'generate' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
               >
-                <Wand2 size={18} /> Generate
+                <Wand2 size={18} /> Generator
+              </button>
+              <button
+                onClick={() => setActiveTab('translator')}
+                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'translator' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
+              >
+                <Languages size={18} /> Translator
               </button>
               <button
                 onClick={() => setActiveTab('history')}
@@ -863,7 +1067,13 @@ export default function App() {
                 >
                     {/* Left Column - Main Flow */}
                   <div className="lg:col-span-7 space-y-8">
-                    <ContentInput text={text} setText={setText} isDarkMode={isDarkMode} />
+                    <ContentInput 
+                      text={text} 
+                      setText={setText} 
+                      isDarkMode={isDarkMode} 
+                      getApiKey={getApiKey}
+                      showToast={showToast}
+                    />
                     
                     {/* Default Pronunciation Rules Table */}
                     <PronunciationRules
@@ -932,6 +1142,71 @@ export default function App() {
                             </span>
                           </span>
                         </div>
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+
+              {activeTab === 'translator' && (
+                <motion.div
+                  key="translator"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="max-w-5xl mx-auto space-y-8"
+                >
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* Source Text */}
+                    <div className="bg-white/50 backdrop-blur dark:bg-slate-900 rounded-[32px] p-8 shadow-2xl border border-slate-200 dark:border-slate-800 transition-colors duration-300">
+                      <h3 className="text-xl font-bold mb-6 flex items-center gap-3 text-slate-900 dark:text-white">
+                        <FileText className="text-brand-purple" /> Source Text
+                      </h3>
+                      <textarea
+                        value={sourceText}
+                        onChange={(e) => setSourceText(e.target.value)}
+                        placeholder="Enter text to translate (English, Thai, etc.)..."
+                        className="w-full h-64 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl px-6 py-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all resize-none font-medium placeholder:text-slate-400"
+                      />
+                      <button
+                        onClick={handleTranslate}
+                        disabled={isTranslating || !sourceText.trim()}
+                        className={`w-full mt-6 py-4 rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center gap-3 transition-all active:scale-[0.98] ${
+                          isTranslating || !sourceText.trim()
+                            ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
+                            : 'bg-brand-purple hover:bg-brand-purple/90 text-white shadow-brand-purple/20'
+                        }`}
+                      >
+                        {isTranslating ? (
+                          <RefreshCw size={20} className="animate-spin" />
+                        ) : (
+                          <Languages size={20} />
+                        )}
+                        {isTranslating ? 'Translating...' : 'Translate to Burmese'}
+                      </button>
+                    </div>
+
+                    {/* Burmese Result */}
+                    <div className="bg-white/50 backdrop-blur dark:bg-slate-900 rounded-[32px] p-8 shadow-2xl border border-slate-200 dark:border-slate-800 transition-colors duration-300">
+                      <h3 className="text-xl font-bold mb-6 flex items-center gap-3 text-slate-900 dark:text-white">
+                        <Languages className="text-brand-purple" /> Burmese Result
+                      </h3>
+                      <textarea
+                        value={translatedText}
+                        readOnly
+                        placeholder="Burmese translation will appear here..."
+                        className="w-full h-64 bg-slate-100 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 rounded-2xl px-6 py-4 text-slate-900 dark:text-white focus:outline-none transition-all resize-none font-medium placeholder:text-slate-400"
+                      />
+                      <button
+                        onClick={sendToGenerator}
+                        disabled={!translatedText.trim()}
+                        className={`w-full mt-6 py-4 rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center gap-3 transition-all active:scale-[0.98] ${
+                          !translatedText.trim()
+                            ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
+                            : 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:opacity-90'
+                        }`}
+                      >
+                        <ArrowRight size={20} /> Send to Generator
                       </button>
                     </div>
                   </div>
@@ -1129,6 +1404,19 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+      <Modal
+        isOpen={modal.isOpen}
+        onClose={() => setModal({ ...modal, isOpen: false })}
+        onConfirm={modal.onConfirm}
+        title={modal.title}
+        message={modal.message}
+        type={modal.type}
+        confirmText={modal.confirmText}
+        cancelText={modal.cancelText}
+        placeholder={modal.placeholder}
+        defaultValue={modal.defaultValue}
+        inputType={modal.inputType}
+      />
     </div>
   );
 }

@@ -28,6 +28,7 @@ import {
 import { AuthorizedUser, User as RegisteredUser, SystemConfig, PronunciationRule, GlobalSettings } from '../types';
 import { db, collection, onSnapshot, query, orderBy, setDoc, doc, deleteDoc, updateDoc, handleFirestoreError, OperationType, getDoc, auth, googleProvider, signInWithPopup } from '../firebase';
 import { Toast, ToastType } from './Toast';
+import { Modal, ModalType } from './Modal';
 
 interface AdminDashboardProps {
   isAuthReady: boolean;
@@ -90,6 +91,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
   const [isRulesLoading, setIsRulesLoading] = useState(true);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [isSessionSynced, setIsSessionSynced] = useState(false);
+
+  // Modal State
+  const [modal, setModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: ModalType;
+    confirmText?: string;
+    cancelText?: string;
+    placeholder?: string;
+    defaultValue?: string;
+    inputType?: 'text' | 'password' | 'date';
+    onConfirm?: (value?: string) => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'alert',
+  });
+
+  const openModal = (config: Partial<Omit<typeof modal, 'isOpen'>> & { title: string; message: string }) => {
+    setModal({
+      isOpen: true,
+      title: config.title,
+      message: config.message,
+      type: config.type || 'alert',
+      confirmText: config.confirmText || 'Confirm',
+      cancelText: config.cancelText || 'Cancel',
+      placeholder: config.placeholder || 'Enter value...',
+      defaultValue: config.defaultValue || '',
+      inputType: config.inputType || 'text',
+      onConfirm: config.onConfirm,
+    });
+  };
 
   useEffect(() => {
     const savedAdminAuth = localStorage.getItem('vbs_admin_auth');
@@ -285,17 +320,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
   };
 
   const handleDeleteRule = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this rule?')) return;
-    setIsDeletingRule(id);
-    try {
-      await deleteDoc(doc(db, 'globalRules', id));
-      setToast({ message: 'Rule deleted', type: 'success', isVisible: true });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `globalRules/${id}`);
-      setToast({ message: 'Failed to delete rule', type: 'error', isVisible: true });
-    } finally {
-      setIsDeletingRule(null);
-    }
+    openModal({
+      title: 'Delete Rule',
+      message: 'Are you sure you want to delete this pronunciation rule?',
+      type: 'confirm',
+      confirmText: 'Delete',
+      onConfirm: async () => {
+        setIsDeletingRule(id);
+        try {
+          await deleteDoc(doc(db, 'globalRules', id));
+          setToast({ message: 'Rule deleted', type: 'success', isVisible: true });
+        } catch (error) {
+          handleFirestoreError(error, OperationType.DELETE, `globalRules/${id}`);
+          setToast({ message: 'Failed to delete rule', type: 'error', isVisible: true });
+        } finally {
+          setIsDeletingRule(null);
+        }
+      }
+    });
   };
 
   useEffect(() => {
@@ -436,26 +478,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
   };
 
   const handleUpdatePassword = async (id: string) => {
-    const password = prompt('Enter new password for this user:');
-    if (password === null) return;
-
-    try {
-      await updateDoc(doc(db, 'vlogs_users', id), {
-        password: password.trim() || null
-      });
-      setToast({
-        message: 'User Password Updated!',
-        type: 'success',
-        isVisible: true
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `vlogs_users/${id}`);
-      setToast({
-        message: 'Failed to update user password.',
-        type: 'error',
-        isVisible: true
-      });
-    }
+    openModal({
+      title: 'Update Password',
+      message: 'Enter a new password for this user:',
+      type: 'prompt',
+      inputType: 'password',
+      placeholder: 'New password...',
+      confirmText: 'Update',
+      onConfirm: async (password) => {
+        if (!password) return;
+        try {
+          await updateDoc(doc(db, 'vlogs_users', id), {
+            password: password.trim() || null
+          });
+          setToast({
+            message: 'User Password Updated!',
+            type: 'success',
+            isVisible: true
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.UPDATE, `vlogs_users/${id}`);
+          setToast({
+            message: 'Failed to update user password.',
+            type: 'error',
+            isVisible: true
+          });
+        }
+      }
+    });
   };
 
   const handleExtendExpiry = async (id: string, currentExpiry: string | undefined) => {
@@ -493,33 +543,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
   };
 
   const handleSetCustomExpiry = async (id: string) => {
-    const dateStr = prompt('Enter custom expiry date (YYYY-MM-DD):');
-    if (!dateStr) return;
-    
-    try {
-      const date = new Date(dateStr);
-      if (isNaN(date.getTime())) {
-        alert('Invalid date format. Please use YYYY-MM-DD.');
-        return;
+    openModal({
+      title: 'Set Expiry Date',
+      message: 'Enter custom expiry date (YYYY-MM-DD):',
+      type: 'prompt',
+      inputType: 'date',
+      confirmText: 'Set Expiry',
+      onConfirm: async (dateStr) => {
+        if (!dateStr) return;
+        
+        try {
+          const date = new Date(dateStr);
+          if (isNaN(date.getTime())) {
+            openModal({
+              title: 'Invalid Date',
+              message: 'Invalid date format. Please use YYYY-MM-DD.',
+              type: 'error'
+            });
+            return;
+          }
+          
+          await updateDoc(doc(db, 'vlogs_users', id), {
+            expiryDate: date.toISOString()
+          });
+          
+          setToast({
+            message: 'Custom Expiry Date Set! 📅',
+            type: 'success',
+            isVisible: true
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.UPDATE, `vlogs_users/${id}`);
+          setToast({
+            message: 'Failed to set custom expiry date.',
+            type: 'error',
+            isVisible: true
+          });
+        }
       }
-      
-      await updateDoc(doc(db, 'vlogs_users', id), {
-        expiryDate: date.toISOString()
-      });
-      
-      setToast({
-        message: 'Custom Expiry Date Set! 📅',
-        type: 'success',
-        isVisible: true
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `vlogs_users/${id}`);
-      setToast({
-        message: 'Failed to set custom expiry date.',
-        type: 'error',
-        isVisible: true
-      });
-    }
+    });
   };
 
   const handleToggleStatus = async (id: string, currentStatus: boolean) => {
@@ -563,26 +625,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
   };
 
   const handleDeleteId = async (id: string) => {
-    if (!window.confirm(`Are you sure you want to delete Access Code: ${id}?`)) return;
-
-    setIsDeletingUser(id);
-    try {
-      await deleteDoc(doc(db, 'vlogs_users', id));
-      setToast({
-        message: 'User ID Deleted Successfully!',
-        type: 'success',
-        isVisible: true
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `vlogs_users/${id}`);
-      setToast({
-        message: 'Failed to delete User ID.',
-        type: 'error',
-        isVisible: true
-      });
-    } finally {
-      setIsDeletingUser(null);
-    }
+    openModal({
+      title: 'Delete User ID',
+      message: `Are you sure you want to delete Access Code: ${id}?`,
+      type: 'confirm',
+      confirmText: 'Delete',
+      onConfirm: async () => {
+        setIsDeletingUser(id);
+        try {
+          await deleteDoc(doc(db, 'vlogs_users', id));
+          setToast({
+            message: 'User ID Deleted Successfully!',
+            type: 'success',
+            isVisible: true
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.DELETE, `vlogs_users/${id}`);
+          setToast({
+            message: 'Failed to delete User ID.',
+            type: 'error',
+            isVisible: true
+          });
+        } finally {
+          setIsDeletingUser(null);
+        }
+      }
+    });
   };
 
   const handleVerifyUser = async (uid: string) => {
@@ -699,39 +767,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
               <p className="text-slate-500 dark:text-slate-400 text-xs sm:text-sm mt-1">Manage Authorized Access Codes (User IDs)</p>
             </div>
           </div>
-          <div className="flex items-center gap-3 w-full sm:w-auto">
-            <div className="flex bg-slate-100 dark:bg-slate-900/50 p-1 rounded-xl border border-slate-200 dark:border-slate-800">
+          <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto overflow-hidden">
+            <div className="flex flex-nowrap overflow-x-auto no-scrollbar bg-slate-100 dark:bg-slate-900/50 p-1 rounded-xl border border-slate-200 dark:border-slate-800 flex-1 sm:flex-initial">
               <button
                 onClick={() => {
                   window.history.pushState({}, '', '/');
                   window.dispatchEvent(new PopStateEvent('popstate'));
                 }}
-                className="px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                className="px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center gap-1.5 sm:gap-2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 whitespace-nowrap"
               >
                 <Mic2 size={14} /> Generator
               </button>
               <button
                 onClick={() => setActiveTab('users')}
-                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'users' ? 'bg-white dark:bg-slate-800 text-brand-purple shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                className={`px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center gap-1.5 sm:gap-2 whitespace-nowrap ${activeTab === 'users' ? 'bg-white dark:bg-slate-800 text-brand-purple shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
               >
                 <User size={14} /> Users
               </button>
               <button
                 onClick={() => setActiveTab('system')}
-                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'system' ? 'bg-white dark:bg-slate-800 text-brand-purple shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                className={`px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center gap-1.5 sm:gap-2 whitespace-nowrap ${activeTab === 'system' ? 'bg-white dark:bg-slate-800 text-brand-purple shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
               >
                 <Settings size={14} /> System
               </button>
               <button
                 onClick={() => setActiveTab('rules')}
-                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'rules' ? 'bg-white dark:bg-slate-800 text-brand-purple shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                className={`px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center gap-1.5 sm:gap-2 whitespace-nowrap ${activeTab === 'rules' ? 'bg-white dark:bg-slate-800 text-brand-purple shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
               >
                 <Languages size={14} /> Rules
               </button>
             </div>
             <button 
               onClick={handleAdminLogout}
-              className="px-4 py-2.5 bg-slate-100 dark:bg-slate-900/50 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-500 dark:text-slate-400 text-sm font-bold transition-all"
+              className="px-3 sm:px-4 py-2 sm:py-2.5 bg-slate-100 dark:bg-slate-900/50 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-500 dark:text-slate-400 text-[10px] sm:text-sm font-bold transition-all whitespace-nowrap"
             >
               Lock
             </button>
@@ -905,7 +973,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
                             </span>
                             {u.password && (
                               <button 
-                                onClick={() => alert(`Password for ${u.id}: ${u.password}`)}
+                                onClick={() => openModal({
+                                  title: 'User Password',
+                                  message: `Password for ${u.id}: ${u.password || 'No password set'}`,
+                                  type: 'info'
+                                })}
                                 className="text-slate-400 hover:text-brand-purple"
                                 title="View Password"
                               >
@@ -1444,6 +1516,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
         type={toast.type}
         isVisible={toast.isVisible}
         onClose={() => setToast(prev => ({ ...prev, isVisible: false }))}
+      />
+      <Modal
+        isOpen={modal.isOpen}
+        onClose={() => setModal({ ...modal, isOpen: false })}
+        onConfirm={modal.onConfirm}
+        title={modal.title}
+        message={modal.message}
+        type={modal.type}
+        confirmText={modal.confirmText}
+        cancelText={modal.cancelText}
+        placeholder={modal.placeholder}
+        defaultValue={modal.defaultValue}
+        inputType={modal.inputType}
       />
     </>
   );

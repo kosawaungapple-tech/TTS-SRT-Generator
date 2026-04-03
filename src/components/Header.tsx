@@ -1,5 +1,6 @@
-import React from 'react';
-import { Sun, Moon, Settings, Mic2 } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Sun, Moon, Settings, Mic2, User, ChevronDown, LogOut, ShieldCheck, Calendar, UserCircle } from 'lucide-react';
+import { AuthorizedUser } from '../types';
 
 interface HeaderProps {
   isDarkMode: boolean;
@@ -8,6 +9,7 @@ interface HeaderProps {
   isAccessGranted: boolean;
   isAdmin: boolean;
   onLogout: () => void;
+  profile: AuthorizedUser | null;
 }
 
 export const Header: React.FC<HeaderProps> = ({ 
@@ -16,8 +18,32 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenTools,
   isAccessGranted,
   isAdmin,
-  onLogout
+  onLogout,
+  profile
 }) => {
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsProfileOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const formatDate = (dateStr?: string) => {
+    if (!dateStr) return 'N/A';
+    try {
+      const date = new Date(dateStr);
+      return date.toLocaleDateString('en-GB'); // DD/MM/YYYY
+    } catch (e) {
+      return dateStr;
+    }
+  };
+
   return (
     <header className="sticky top-0 z-50 w-full border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-[#020617]/80 backdrop-blur-md transition-colors duration-300">
       <div className="container mx-auto px-4 h-16 flex items-center justify-between">
@@ -69,13 +95,67 @@ export const Header: React.FC<HeaderProps> = ({
               >
                 <Settings size={18} className="sm:w-5 sm:h-5" />
               </button>
-              <div className="flex items-center gap-2 pl-2 border-l border-slate-200 dark:border-slate-800">
+              
+              {/* User Profile Dropdown */}
+              <div className="relative" ref={dropdownRef}>
                 <button 
-                  onClick={onLogout}
-                  className="text-[9px] sm:text-[10px] font-bold uppercase tracking-widest text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap"
+                  onClick={() => setIsProfileOpen(!isProfileOpen)}
+                  className="flex items-center gap-2 p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-white/5 transition-all border border-transparent hover:border-slate-200 dark:hover:border-white/10"
                 >
-                  Sign Out
+                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-purple to-purple-700 flex items-center justify-center text-white shadow-lg shadow-brand-purple/20">
+                    <User size={18} />
+                  </div>
+                  <ChevronDown size={14} className={`text-slate-400 transition-transform duration-300 ${isProfileOpen ? 'rotate-180' : ''}`} />
                 </button>
+
+                {isProfileOpen && (
+                  <div className="absolute right-0 mt-3 w-72 bg-white/90 dark:bg-[#0f172a]/90 backdrop-blur-xl border border-slate-200 dark:border-white/10 rounded-3xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200 z-[60]">
+                    <div className="p-6">
+                      {/* User Info */}
+                      <div className="flex items-center gap-4 mb-6">
+                        <div className="w-12 h-12 rounded-2xl bg-brand-purple/10 flex items-center justify-center text-brand-purple">
+                          <UserCircle size={32} />
+                        </div>
+                        <div className="overflow-hidden">
+                          <h3 className="font-bold text-slate-900 dark:text-white truncate">
+                            {profile?.note || profile?.label || 'Saw User'}
+                          </h3>
+                          <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-emerald-500">
+                            <ShieldCheck size={12} />
+                            အကောင့်အခြေအနေ: Active
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Details */}
+                      <div className="space-y-3 mb-6">
+                        <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-white/5 border border-slate-100 dark:border-white/5">
+                          <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                            <Calendar size={14} />
+                            သက်တမ်းကုန်ဆုံးရက်
+                          </div>
+                          <div className="text-xs font-bold text-slate-900 dark:text-white">
+                            {formatDate(profile?.expiryDate)}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div className="space-y-2">
+                        <button 
+                          onClick={() => {
+                            setIsProfileOpen(false);
+                            onLogout();
+                          }}
+                          className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-medium text-rose-500 hover:bg-rose-500/10 transition-colors text-left"
+                        >
+                          <LogOut size={16} />
+                          Sign Out
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

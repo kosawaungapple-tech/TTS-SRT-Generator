@@ -149,12 +149,23 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading,
   };
 
   const downloadFile = (content: string | Blob, fileName: string) => {
-    const url = typeof content === 'string' 
-      ? URL.createObjectURL(new Blob([content], { type: 'text/plain' }))
-      : URL.createObjectURL(content);
+    let blob: Blob;
+    if (typeof content === 'string') {
+      if (fileName.endsWith('.srt')) {
+        // Add UTF-8 BOM for mobile compatibility
+        const BOM = '\uFEFF';
+        blob = new Blob([BOM + content], { type: 'text/srt;charset=utf-8' });
+      } else {
+        blob = new Blob([content], { type: 'text/plain' });
+      }
+    } else {
+      blob = content;
+    }
+    
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = fileName;
+    a.download = fileName.toLowerCase(); // Ensure lowercase .srt
     a.click();
     URL.revokeObjectURL(url);
   };
