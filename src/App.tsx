@@ -15,7 +15,6 @@ import { GeminiTTSService } from './services/geminiService';
 import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, AuthorizedUser, SystemConfig } from './types';
 import { DEFAULT_RULES } from './constants';
 import { pcmToWav } from './utils/audioUtils';
-import { GoogleGenAI } from "@google/genai";
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDoc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadString, getDownloadURL } from './firebase';
 
 type Tab = 'generate' | 'translator' | 'history' | 'tools' | 'admin' | 'vbs-admin';
@@ -125,18 +124,46 @@ export default function App() {
 
     setIsTranslating(true);
     try {
-      const ai = new GoogleGenAI({ apiKey, apiVersion: 'v1beta' });
-      const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
-        contents: [{ parts: [{ text: `Translate the provided text into natural, professional, storytelling Burmese. Use a tone suitable for video narration. Original: ${sourceText}` }] }],
+      const modelId = 'gemini-2.5-flash-latest';
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
+      
+      const prompt = `Translate the provided text into natural, professional, storytelling Burmese. Use a tone suitable for video narration. Original: ${sourceText}`;
+      
+      const payload = {
+        contents: [{
+          parts: [{
+            text: prompt
+          }]
+        }]
+      };
+
+      console.log(`Translating with model: ${modelId}...`);
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload)
       });
 
-      const resultText = response.text;
-      if (resultText) {
-        setTranslatedText(resultText);
-        showToast('ဘာသာပြန်ဆိုမှု အောင်မြင်ပါသည်။ (Translation successful!)', 'success');
+      if (!response.ok) {
+        console.error(`Translation failed with status: ${response.status}`);
+        const errorData = await response.json().catch(() => ({}));
+        console.error('Error details:', errorData);
+        throw new Error(`API Error: ${response.status}`);
       }
-    } catch (err) {
+
+      const data = await response.json();
+      const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+      if (resultText) {
+        setTranslatedText(resultText.trim());
+        showToast('ဘာသာပြန်ဆိုမှု အောင်မြင်ပါသည်။ (Translation successful!)', 'success');
+      } else {
+        throw new Error('No text returned from AI');
+      }
+    } catch (err: any) {
       console.error('Translation failed:', err);
       showToast('ဘာသာပြန်ဆိုမှု မအောင်မြင်ပါ။ (Translation failed. Please check your connection.)', 'error');
     } finally {

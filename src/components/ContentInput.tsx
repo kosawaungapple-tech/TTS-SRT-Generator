@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Trash2, Clipboard, Sparkles, RefreshCw } from 'lucide-react';
-import { GoogleGenAI } from "@google/genai";
 
 interface ContentInputProps {
   text: string;
@@ -33,23 +32,38 @@ export const ContentInput: React.FC<ContentInputProps> = ({ text, setText, isDar
 
     setIsRewriting(true);
     try {
-      const modelId = 'gemini-2.0-flash';
-      const ai = new GoogleGenAI({ apiKey, apiVersion: 'v1beta' });
+      const modelId = 'gemini-2.5-flash-latest';
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
       
       const prompt = `You are a professional Burmese content creator. Paraphrase the following text to be unique, engaging, and copyright-safe. Use a natural storytelling tone. Original text: ${text}`;
       
-      console.log(`Rewriting with model: ${modelId}...`);
-      
-      const response = await ai.models.generateContent({
-        model: modelId,
+      const payload = {
         contents: [{
           parts: [{
             text: prompt
           }]
         }]
+      };
+
+      console.log(`Rewriting with model: ${modelId}...`);
+      
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload)
       });
 
-      const rewrittenText = response.text;
+      if (!response.ok) {
+        console.error(`Rewrite failed with status: ${response.status}`);
+        const errorData = await response.json().catch(() => ({}));
+        console.error('Error details:', errorData);
+        throw new Error(`API Error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const rewrittenText = data.candidates?.[0]?.content?.parts?.[0]?.text;
       
       if (rewrittenText) {
         setText(rewrittenText.trim());
@@ -59,8 +73,6 @@ export const ContentInput: React.FC<ContentInputProps> = ({ text, setText, isDar
       }
     } catch (err: any) {
       console.error('Rewriting failed:', err);
-      // Log status if available (though SDK might not expose it directly in all error types)
-      if (err.status) console.error(`Status code: ${err.status}`);
       showToast('Rewrite failed. Please check your connection.', 'error');
     } finally {
       setIsRewriting(false);
