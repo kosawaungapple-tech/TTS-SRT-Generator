@@ -934,7 +934,6 @@ export default function App() {
         isAccessGranted={isAccessGranted}
         isAdmin={accessCode === 'saw_vlogs_2026'}
         onLogout={handleLogout}
-        profile={profile}
       />
 
       <main className="flex-1 container mx-auto px-4 sm:px-6 py-6 sm:py-8 overflow-x-hidden">
