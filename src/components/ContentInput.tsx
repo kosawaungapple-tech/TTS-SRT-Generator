@@ -24,7 +24,15 @@ export const ContentInput: React.FC<ContentInputProps> = ({ text, setText, isDar
   const handleRewrite = async () => {
     if (!text.trim()) return;
     
-    const apiKey = getApiKey();
+    // FORCE SYNC: Pull API Key from the EXACT same source as TTS engine
+    const apiKey = localStorage.getItem('VLOGS_BY_SAW_API_KEY');
+    
+    // Debugging Log: Verify the key is actually being passed (masked for security)
+    console.log('REWRITE_KEY_PRESENT:', !!apiKey);
+    if (apiKey) {
+      console.log('REWRITE_KEY_START:', apiKey.substring(0, 8) + '...');
+    }
+
     if (!apiKey) {
       showToast('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)', 'error');
       return;
@@ -32,7 +40,8 @@ export const ContentInput: React.FC<ContentInputProps> = ({ text, setText, isDar
 
     setIsRewriting(true);
     try {
-      const modelId = 'gemini-2.5-flash-latest';
+      // CLONE TTS MODEL ID: Using gemini-1.5-flash as the primary stable model
+      const modelId = 'gemini-1.5-flash';
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
       
       const prompt = `You are a professional Burmese content creator. Paraphrase the following text to be unique, engaging, and copyright-safe. Use a natural storytelling tone. Original text: ${text}`;
@@ -47,7 +56,7 @@ export const ContentInput: React.FC<ContentInputProps> = ({ text, setText, isDar
 
       console.log(`Rewriting with model: ${modelId}...`);
       
-      const response = await fetch(endpoint, {
+      let response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -55,11 +64,27 @@ export const ContentInput: React.FC<ContentInputProps> = ({ text, setText, isDar
         body: JSON.stringify(payload)
       });
 
+      // FALLBACK MODEL LOGIC: If gemini-1.5-flash fails, try gemini-1.5-flash-latest
+      if (!response.ok && response.status === 404) {
+        console.warn('Primary model failed (404), trying fallback: gemini-1.5-flash-latest');
+        const fallbackModel = 'gemini-1.5-flash-latest';
+        const fallbackEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent?key=${apiKey}`;
+        response = await fetch(fallbackEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload)
+        });
+      }
+
       if (!response.ok) {
-        console.error(`Rewrite failed with status: ${response.status}`);
+        const status = response.status;
+        console.error(`Rewrite failed with status: ${status}`);
         const errorData = await response.json().catch(() => ({}));
         console.error('Error details:', errorData);
-        throw new Error(`API Error: ${response.status}`);
+        
+        throw new Error(`Rewrite failed (Status: ${status}). ${errorData.error?.message || 'Please check your connection.'}`);
       }
 
       const data = await response.json();
@@ -69,11 +94,11 @@ export const ContentInput: React.FC<ContentInputProps> = ({ text, setText, isDar
         setText(rewrittenText.trim());
         showToast('စာသားကို အောင်မြင်စွာ ပြန်လည်ရေးသားပြီးပါပြီ။ (Text rewritten successfully!)', 'success');
       } else {
-        throw new Error('No text returned from AI');
+        throw new Error('No text returned from AI (Status: 200 but empty response)');
       }
     } catch (err: any) {
       console.error('Rewriting failed:', err);
-      showToast('Rewrite failed. Please check your connection.', 'error');
+      showToast(err.message || 'Rewrite failed. Please check your connection.', 'error');
     } finally {
       setIsRewriting(false);
     }
