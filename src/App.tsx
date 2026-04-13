@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Wand2, Key, Settings, User, LogIn, LogOut, ShieldCheck, ShieldAlert, Shield, CheckCircle2, XCircle, History, Wrench, Plus, Trash2, Download, Play, Music, FileText, Eye, EyeOff, Cloud, RefreshCw, Zap, X, ExternalLink, Calendar, Clock, Mail, Wifi, Save, Lock, Info, ArrowRight, ChevronRight, Languages } from 'lucide-react';
+import { AlertCircle, Wand2, Key, Settings, User, LogIn, LogOut, ShieldCheck, ShieldAlert, Shield, CheckCircle2, XCircle, History, Wrench, Plus, Trash2, Download, Play, Music, FileText, Eye, EyeOff, Cloud, RefreshCw, Zap, X, ExternalLink, Calendar, Clock, Mail, Wifi, Save, Lock, Info, ArrowRight, ChevronRight, Languages, Search } from 'lucide-react';
 import { WelcomePage } from './components/WelcomePage';
 import { Header } from './components/Header';
 import { ApiKeyModal } from './components/ApiKeyModal';
@@ -124,60 +124,11 @@ export default function App() {
 
     setIsTranslating(true);
     try {
-      const modelId = 'gemini-1.5-flash';
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
-      
-      const prompt = `Translate the provided text into natural, professional, storytelling Burmese. Use a tone suitable for video narration. Original: ${sourceText}`;
-      
-      const payload = {
-        contents: [{
-          parts: [{
-            text: prompt
-          }]
-        }]
-      };
+      const gemini = new GeminiTTSService(apiKey);
+      const resultText = await gemini.translateContent(sourceText);
 
-      console.log(`Translating with model: ${modelId}...`);
-
-      let response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload)
-      });
-
-      // FALLBACK MODEL LOGIC: If gemini-1.5-flash fails, try gemini-1.5-flash-latest
-      if (!response.ok && response.status === 404) {
-        console.warn('Primary translation model failed (404), trying fallback: gemini-1.5-flash-latest');
-        const fallbackModel = 'gemini-1.5-flash-latest';
-        const fallbackEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent?key=${apiKey}`;
-        response = await fetch(fallbackEndpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload)
-        });
-      }
-
-      if (!response.ok) {
-        const status = response.status;
-        console.error(`Translation failed with status: ${status}`);
-        const errorData = await response.json().catch(() => ({}));
-        console.error('Error details:', errorData);
-        throw new Error(`API Error: ${status}`);
-      }
-
-      const data = await response.json();
-      const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-      if (resultText) {
-        setTranslatedText(resultText.trim());
-        showToast('ဘာသာပြန်ဆိုမှု အောင်မြင်ပါသည်။ (Translation successful!)', 'success');
-      } else {
-        throw new Error('No text returned from AI');
-      }
+      setTranslatedText(resultText);
+      showToast('ဘာသာပြန်ဆိုမှု အောင်မြင်ပါသည်။ (Translation successful!)', 'success');
     } catch (err: any) {
       console.error('Translation failed:', err);
       showToast('ဘာသာပြန်ဆိုမှု မအောင်မြင်ပါ။ (Translation failed. Please check your connection.)', 'error');
@@ -980,18 +931,20 @@ export default function App() {
             }}
           />
         ) : !isAccessGranted ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <div className="w-20 h-20 bg-brand-purple/10 text-brand-purple rounded-3xl flex items-center justify-center mb-6">
+          <div className="flex flex-col items-center justify-center py-20 text-center px-4">
+            <div className="w-20 h-20 glass-card bg-brand-purple/10 text-brand-purple rounded-[24px] flex items-center justify-center mb-8 shadow-2xl shadow-brand-purple/20">
               <Lock size={40} />
             </div>
             
-            <div className="w-full max-w-md space-y-6">
-              <h2 className="text-xl sm:text-2xl font-bold mb-2 text-slate-900 dark:text-white">Vlogs By Saw - Narration Engine</h2>
-              <p className="text-slate-600 dark:text-slate-300 mb-6 sm:mb-8 text-sm sm:text-base">
-                Please enter your unique User ID (Access Code) to start generating professional Myanmar voiceovers.
-              </p>
+            <div className="w-full max-w-md space-y-8 glass-card p-8 rounded-[32px]">
+              <div>
+                <h2 className="text-2xl sm:text-3xl font-bold mb-3 text-slate-900 dark:text-white tracking-tight">Narration Engine</h2>
+                <p className="text-slate-600 dark:text-slate-400 text-sm sm:text-base leading-relaxed">
+                  Please enter your unique User ID (Access Code) to start generating professional Myanmar voiceovers.
+                </p>
+              </div>
               
-              <form onSubmit={handleLogin} className="space-y-4">
+              <form onSubmit={handleLogin} className="space-y-5">
                 <div className="relative">
                   <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
                   <input
@@ -1057,30 +1010,30 @@ export default function App() {
         ) : (
           <div className="space-y-8">
             {/* Tab Navigation */}
-            <div className="flex items-center gap-2 sm:gap-4 bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-1 rounded-2xl w-fit mx-auto shadow-sm">
+            <div className="flex items-center gap-1 sm:gap-2 glass-card p-1.5 rounded-[20px] w-fit mx-auto shadow-2xl">
               <button
                 onClick={() => setActiveTab('generate')}
-                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'generate' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
+                className={`px-4 sm:px-6 py-2.5 rounded-[14px] text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'generate' ? 'bg-brand-purple text-white shadow-lg shadow-brand-purple/30' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
               >
-                <Wand2 size={18} /> Generator
+                <Wand2 size={18} /> <span className="hidden xs:inline">Generator</span>
               </button>
               <button
                 onClick={() => setActiveTab('translator')}
-                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'translator' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
+                className={`px-4 sm:px-6 py-2.5 rounded-[14px] text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'translator' ? 'bg-brand-purple text-white shadow-lg shadow-brand-purple/30' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
               >
-                <Languages size={18} /> Translator
+                <Languages size={18} /> <span className="hidden xs:inline">Translator</span>
               </button>
               <button
                 onClick={() => setActiveTab('history')}
-                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'history' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
+                className={`px-4 sm:px-6 py-2.5 rounded-[14px] text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'history' ? 'bg-brand-purple text-white shadow-lg shadow-brand-purple/30' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
               >
-                <History size={18} /> History
+                <History size={18} /> <span className="hidden xs:inline">History</span>
               </button>
               <button
                 onClick={() => setActiveTab('tools')}
-                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 relative ${activeTab === 'tools' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
+                className={`px-4 sm:px-6 py-2.5 rounded-[14px] text-xs sm:text-sm font-bold transition-all flex items-center gap-2 relative ${activeTab === 'tools' ? 'bg-brand-purple text-white shadow-lg shadow-brand-purple/30' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
               >
-                <Wrench size={18} /> Tools
+                <Wrench size={18} /> <span className="hidden xs:inline">Tools</span>
               </button>
             </div>
 
@@ -1182,59 +1135,65 @@ export default function App() {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -20 }}
-                  className="max-w-5xl mx-auto space-y-8"
+                  className="max-w-6xl mx-auto space-y-8"
                 >
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 sm:gap-10">
                     {/* Source Text */}
-                    <div className="bg-white/50 backdrop-blur dark:bg-slate-900 rounded-[32px] p-8 shadow-2xl border border-slate-200 dark:border-slate-800 transition-colors duration-300">
-                      <h3 className="text-xl font-bold mb-6 flex items-center gap-3 text-slate-900 dark:text-white">
-                        <FileText className="text-brand-purple" /> Source Text
-                      </h3>
+                    <div className="glass-card rounded-[32px] p-8 sm:p-10 shadow-2xl transition-all duration-300">
+                      <div className="flex items-center gap-4 mb-8">
+                        <div className="p-2.5 bg-brand-purple/10 rounded-xl text-brand-purple">
+                          <FileText size={24} />
+                        </div>
+                        <h3 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">Source Text</h3>
+                      </div>
                       <textarea
                         value={sourceText}
                         onChange={(e) => setSourceText(e.target.value)}
                         placeholder="Enter text to translate (English, Thai, etc.)..."
-                        className="w-full h-64 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl px-6 py-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all resize-none font-medium placeholder:text-slate-400"
+                        className="w-full h-80 bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-[24px] px-6 py-5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all resize-none font-medium placeholder:text-slate-400 leading-relaxed"
                       />
                       <button
                         onClick={handleTranslate}
                         disabled={isTranslating || !sourceText.trim()}
-                        className={`w-full mt-6 py-4 rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center gap-3 transition-all active:scale-[0.98] ${
+                        className={`w-full mt-8 py-5 rounded-[20px] font-bold text-lg shadow-xl flex items-center justify-center gap-3 transition-all active:scale-[0.98] ${
                           isTranslating || !sourceText.trim()
                             ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
-                            : 'bg-brand-purple hover:bg-brand-purple/90 text-white shadow-brand-purple/20'
+                            : 'bg-brand-purple hover:bg-brand-purple/90 text-white shadow-lg shadow-brand-purple/30'
                         }`}
                       >
                         {isTranslating ? (
-                          <RefreshCw size={20} className="animate-spin" />
+                          <RefreshCw size={22} className="animate-spin" />
                         ) : (
-                          <Languages size={20} />
+                          <Languages size={22} />
                         )}
                         {isTranslating ? 'Translating...' : 'Translate to Burmese'}
                       </button>
                     </div>
-
+ 
                     {/* Burmese Result */}
-                    <div className="bg-white/50 backdrop-blur dark:bg-slate-900 rounded-[32px] p-8 shadow-2xl border border-slate-200 dark:border-slate-800 transition-colors duration-300">
-                      <h3 className="text-xl font-bold mb-6 flex items-center gap-3 text-slate-900 dark:text-white">
-                        <Languages className="text-brand-purple" /> Burmese Result
-                      </h3>
+                    <div className="glass-card rounded-[32px] p-8 sm:p-10 shadow-2xl transition-all duration-300">
+                      <div className="flex items-center gap-4 mb-8">
+                        <div className="p-2.5 bg-brand-purple/10 rounded-xl text-brand-purple">
+                          <Languages size={24} />
+                        </div>
+                        <h3 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">Burmese Result</h3>
+                      </div>
                       <textarea
                         value={translatedText}
                         readOnly
                         placeholder="Burmese translation will appear here..."
-                        className="w-full h-64 bg-slate-100 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 rounded-2xl px-6 py-4 text-slate-900 dark:text-white focus:outline-none transition-all resize-none font-medium placeholder:text-slate-400"
+                        className="w-full h-80 bg-slate-100/50 dark:bg-slate-800/20 border border-slate-200 dark:border-slate-800 rounded-[24px] px-6 py-5 text-slate-900 dark:text-white focus:outline-none transition-all resize-none font-medium placeholder:text-slate-400 leading-relaxed"
                       />
                       <button
                         onClick={sendToGenerator}
                         disabled={!translatedText.trim()}
-                        className={`w-full mt-6 py-4 rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center gap-3 transition-all active:scale-[0.98] ${
+                        className={`w-full mt-8 py-5 rounded-[20px] font-bold text-lg shadow-xl flex items-center justify-center gap-3 transition-all active:scale-[0.98] ${
                           !translatedText.trim()
                             ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
-                            : 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:opacity-90'
+                            : 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:opacity-90 shadow-lg'
                         }`}
                       >
-                        <ArrowRight size={20} /> Send to Generator
+                        <ArrowRight size={22} /> Send to Generator
                       </button>
                     </div>
                   </div>
@@ -1247,89 +1206,98 @@ export default function App() {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -20 }}
-                  className="max-w-5xl mx-auto space-y-6"
+                  className="max-w-6xl mx-auto space-y-8"
                 >
-                  <div className="bg-white/50 backdrop-blur dark:bg-slate-900 rounded-2xl p-8 shadow-2xl border border-slate-200 dark:border-slate-800 transition-colors duration-300">
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
+                  <div className="glass-card rounded-[32px] p-8 sm:p-10 shadow-2xl transition-all duration-300">
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-8 mb-10">
                       <div>
-                        <h2 className="text-2xl font-bold flex items-center gap-3 text-slate-900 dark:text-white">
-                          <History className="text-brand-purple" /> Generation History
+                        <h2 className="text-3xl font-bold flex items-center gap-4 text-slate-900 dark:text-white tracking-tight">
+                          <div className="p-2.5 bg-brand-purple/10 rounded-xl text-brand-purple">
+                            <History size={28} />
+                          </div>
+                          Generation History
                         </h2>
-                        <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Manage and re-download your previous generations</p>
+                        <p className="text-slate-500 dark:text-slate-400 text-sm mt-2 font-medium">Manage and re-download your previous professional narrations</p>
                       </div>
                       
-                      <div className="relative flex-1 max-w-md">
+                      <div className="relative flex-1 max-w-lg">
                         <input
                           type="text"
                           placeholder="Search history by text..."
                           value={historySearch}
                           onChange={(e) => setHistorySearch(e.target.value)}
-                          className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl px-6 py-3 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all pr-12 placeholder:text-slate-400"
+                          className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-[20px] px-6 py-4 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all pr-14 placeholder:text-slate-400 font-medium shadow-sm"
                         />
-                        <Wand2 size={18} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-600" />
+                        <div className="absolute right-4 top-1/2 -translate-y-1/2 p-2 bg-brand-purple/10 rounded-xl text-brand-purple">
+                          <Search size={18} />
+                        </div>
                       </div>
                     </div>
 
                     {isHistoryLoading ? (
-                      <div className="flex flex-col items-center justify-center py-20 gap-4">
-                        <div className="w-10 h-10 border-4 border-brand-purple/20 border-t-brand-purple rounded-full animate-spin" />
-                        <p className="text-slate-500 dark:text-slate-400 font-medium">Loading history...</p>
+                      <div className="flex flex-col items-center justify-center py-24 gap-6">
+                        <div className="relative">
+                          <div className="w-14 h-14 border-4 border-brand-purple/20 border-t-brand-purple rounded-full animate-spin" />
+                          <History size={20} className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-brand-purple animate-pulse" />
+                        </div>
+                        <p className="text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest text-xs">Loading your history...</p>
                       </div>
                     ) : filteredHistory.length === 0 ? (
-                      <div className="text-center py-24 bg-slate-50 dark:bg-slate-950 rounded-3xl border border-dashed border-slate-200 dark:border-slate-800">
-                        <div className="w-16 h-16 bg-white dark:bg-white/5 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-400 dark:text-slate-600">
-                          <History size={32} />
+                      <div className="text-center py-32 bg-slate-50/50 dark:bg-slate-950/50 rounded-[32px] border border-dashed border-slate-200 dark:border-slate-800">
+                        <div className="w-20 h-20 bg-white dark:bg-white/5 rounded-full flex items-center justify-center mx-auto mb-6 text-slate-400 dark:text-slate-600 shadow-inner">
+                          <History size={40} />
                         </div>
-                        <h3 className="text-lg font-bold text-slate-900 dark:text-slate-400">No results found</h3>
-                        <p className="text-slate-500 dark:text-slate-600 text-sm mt-1">Try adjusting your search or generate something new!</p>
+                        <h3 className="text-xl font-bold text-slate-900 dark:text-slate-300">No results found</h3>
+                        <p className="text-slate-500 dark:text-slate-500 text-sm mt-2 max-w-xs mx-auto leading-relaxed">Try adjusting your search or start generating professional voiceovers now!</p>
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 gap-4">
+                      <div className="grid grid-cols-1 gap-6">
                         {filteredHistory.map((item) => (
-                          <div key={item.id} className="group bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 transition-all hover:bg-slate-100 dark:hover:bg-slate-900 hover:border-brand-purple/30">
-                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                              <div className="flex-1 min-w-0 space-y-3">
-                                <div className="flex items-center gap-3">
-                                  <span className="px-2 py-0.5 bg-brand-purple/20 text-brand-purple rounded text-[10px] font-bold uppercase tracking-wider">
+                          <div key={item.id} className="group bg-white/40 dark:bg-slate-900/40 border border-slate-200/50 dark:border-slate-800/50 rounded-[24px] p-6 sm:p-8 transition-all hover:bg-white/60 dark:hover:bg-slate-900/60 hover:border-brand-purple/40 hover:shadow-xl hover:-translate-y-1">
+                            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-8">
+                              <div className="flex-1 min-w-0 space-y-4">
+                                <div className="flex items-center gap-4">
+                                  <span className="px-3 py-1 bg-brand-purple/10 text-brand-purple rounded-full text-[10px] font-bold uppercase tracking-[0.15em] border border-brand-purple/20">
                                     {item.config.voiceId}
                                   </span>
-                                  <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+                                  <div className="flex items-center gap-2 text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest">
+                                    <Clock size={12} />
                                     {new Date(item.createdAt).toLocaleString()}
-                                  </span>
+                                  </div>
                                 </div>
-                                <p className="text-sm font-medium text-slate-900 dark:text-slate-200 line-clamp-2 leading-relaxed">
+                                <p className="text-base font-medium text-slate-900 dark:text-slate-200 line-clamp-2 leading-relaxed">
                                   {item.text}
                                 </p>
                               </div>
                               
-                              <div className="flex items-center gap-2 shrink-0">
+                              <div className="flex items-center gap-3 shrink-0">
                                 <button 
                                   onClick={() => playFromHistory(item)}
-                                  className="flex items-center gap-2 px-4 py-2 bg-brand-purple text-white rounded-xl text-xs font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20"
+                                  className="flex items-center gap-3 px-6 py-3 bg-brand-purple text-white rounded-[16px] text-sm font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/30 active:scale-95"
                                 >
-                                  <Play size={14} fill="currentColor" /> Play
+                                  <Play size={16} fill="currentColor" /> Play
                                 </button>
-                                <div className="h-8 w-[1px] bg-white/10 mx-1" />
+                                <div className="h-10 w-[1px] bg-slate-200 dark:bg-slate-800 mx-1" />
                                 <button 
                                   onClick={() => handleDownloadAudio(item.audioStorageUrl || '', `narration-${item.id}.mp3`)}
-                                  className="p-2.5 bg-blue-500/10 text-blue-500 rounded-xl hover:bg-blue-500 hover:text-white transition-all border border-blue-500/20"
+                                  className="p-3 bg-blue-500/10 text-blue-500 rounded-[14px] hover:bg-blue-500 hover:text-white transition-all border border-blue-500/20 shadow-sm"
                                   title="Download MP3"
                                 >
-                                  <Music size={16} />
+                                  <Music size={18} />
                                 </button>
                                 <button 
                                   onClick={() => handleDownloadSRT(item.srtStorageUrl || item.srtContent || '', `subtitles-${item.id}.srt`)}
-                                  className="p-2.5 bg-amber-500/10 text-amber-500 rounded-xl hover:bg-amber-500 hover:text-white transition-all border border-amber-500/20"
+                                  className="p-3 bg-amber-500/10 text-amber-500 rounded-[14px] hover:bg-amber-500 hover:text-white transition-all border border-amber-500/20 shadow-sm"
                                   title="Download SRT"
                                 >
-                                  <FileText size={16} />
+                                  <FileText size={18} />
                                 </button>
                                 <button 
                                   onClick={() => handleDeleteHistory(item.id)}
-                                  className="p-2.5 bg-red-500/10 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-all border border-red-500/20"
+                                  className="p-3 bg-rose-500/10 text-rose-500 rounded-[14px] hover:bg-rose-500 hover:text-white transition-all border border-rose-500/20 shadow-sm"
                                   title="Delete"
                                 >
-                                  <Trash2 size={16} />
+                                  <Trash2 size={18} />
                                 </button>
                               </div>
                             </div>
@@ -1347,38 +1315,48 @@ export default function App() {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -20 }}
-                  className="max-w-4xl mx-auto space-y-8"
+                  className="max-w-5xl mx-auto space-y-8"
                 >
                   {/* Profile Card */}
-                  <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-8 shadow-2xl transition-colors duration-300">
-                    <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 sm:gap-6 mb-6 sm:mb-8 text-center sm:text-left">
-                      <div className="w-16 h-16 sm:w-20 sm:h-20 bg-brand-purple/20 text-brand-purple rounded-2xl flex items-center justify-center text-2xl sm:text-3xl font-bold shadow-inner border border-brand-purple/20 shrink-0">
+                  <div className="glass-card rounded-[32px] p-8 sm:p-12 shadow-2xl transition-all duration-300">
+                    <div className="flex flex-col lg:flex-row items-center lg:items-start gap-8 lg:gap-10 text-center lg:text-left">
+                      <div className="w-24 h-24 sm:w-32 sm:h-32 bg-gradient-to-br from-brand-purple to-purple-700 text-white rounded-[32px] flex items-center justify-center text-4xl sm:text-5xl font-bold shadow-2xl shadow-brand-purple/30 border border-white/10 shrink-0">
                         {accessCode?.charAt(0).toUpperCase() || 'V'}
                       </div>
-                      <div className="flex-1 w-full">
-                        <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-3 mb-2">
-                          <h3 className="text-lg sm:text-2xl font-bold text-slate-900 dark:text-white truncate max-w-full">User ID: {accessCode}</h3>
-                          <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[9px] sm:text-[10px] font-bold uppercase tracking-wider border bg-emerald-500/20 text-emerald-500 border-emerald-500/30">
-                            <CheckCircle2 size={10} className="sm:w-3 sm:h-3" /> Authorized Access
+                      <div className="flex-1 w-full space-y-4">
+                        <div className="flex flex-col lg:flex-row items-center gap-4">
+                          <h3 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white tracking-tight">User ID: {accessCode}</h3>
+                          <span className="flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] sm:text-[11px] font-bold uppercase tracking-[0.15em] border bg-emerald-500/10 text-emerald-500 border-emerald-500/20 shadow-sm">
+                            <CheckCircle2 size={14} /> Authorized Access
                           </span>
                         </div>
-                        <p className="text-slate-500 dark:text-slate-400 text-xs sm:text-sm flex items-center justify-center sm:justify-start gap-2">
-                          <Clock size={12} className="sm:w-3.5 sm:h-3.5" /> Session active via Access Code
-                        </p>
+                        <div className="flex flex-wrap items-center justify-center lg:justify-start gap-6 text-slate-500 dark:text-slate-400">
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            <Clock size={16} className="text-brand-purple" />
+                            Session active
+                          </div>
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            <ShieldCheck size={16} className="text-brand-purple" />
+                            Premium Account
+                          </div>
+                        </div>
+                        
+                        <div className="pt-6 flex flex-col sm:flex-row gap-4">
+                          <button
+                            onClick={handleLogout}
+                            className="px-8 py-4 bg-rose-500/10 text-rose-500 border border-rose-500/20 rounded-[16px] font-bold text-sm hover:bg-rose-500 hover:text-white transition-all flex items-center justify-center gap-3 shadow-sm"
+                          >
+                            <LogOut size={18} /> Sign Out
+                          </button>
+                        </div>
                       </div>
-                      <button
-                        onClick={handleLogout}
-                        className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 rounded-xl font-bold text-xs hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/20 transition-all flex items-center justify-center gap-2"
-                      >
-                        <LogOut size={14} /> Sign Out
-                      </button>
                     </div>
                   </div>
 
                   {/* Gemini API Key Section */}
                   <div 
                     onClick={() => setIsApiKeyModalOpen(true)}
-                    className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-8 shadow-2xl transition-colors duration-300 cursor-pointer hover:border-brand-purple/30 group"
+                    className="glass-card rounded-[24px] p-6 sm:p-8 shadow-2xl transition-all duration-300 cursor-pointer hover:border-brand-purple/30 group"
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div className="flex items-center gap-3">
