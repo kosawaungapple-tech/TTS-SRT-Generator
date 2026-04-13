@@ -764,9 +764,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
 
   return (
     <>
-      <div className="max-w-6xl mx-auto space-y-8 p-4">
+      <div className="max-w-6xl mx-auto space-y-8 p-4 relative">
+      <div className="absolute top-0 right-0 w-64 h-64 bg-brand-purple/5 blur-[100px] -z-10" />
+      
       {/* Header */}
-      <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-8 shadow-2xl transition-colors duration-300">
+      <div className="premium-glass rounded-[32px] p-5 sm:p-8 shadow-2xl transition-all duration-300 neon-glow-indigo">
         <div className="flex flex-col sm:flex-row items-center justify-between gap-6 text-center sm:text-left">
           <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
             <div className="w-14 h-14 sm:w-16 sm:h-16 bg-brand-purple/20 text-brand-purple rounded-2xl flex items-center justify-center shadow-inner border border-brand-purple/20 shrink-0">
@@ -821,7 +823,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         {/* Create Form */}
         <div className="lg:col-span-4">
-          <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl sticky top-8 transition-colors duration-300">
+          <div className="premium-glass rounded-[32px] p-5 sm:p-6 shadow-2xl sticky top-8 transition-all duration-300 border border-white/5">
             <div className="flex items-center gap-3 mb-6">
               <UserPlus className="text-brand-purple" size={20} />
               <h3 className="text-lg font-bold text-slate-900 dark:text-white">Create New User ID</h3>
@@ -927,7 +929,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
 
         {/* List Table */}
         <div className="lg:col-span-8">
-          <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl transition-colors duration-300">
+          <div className="premium-glass rounded-[32px] p-5 sm:p-6 shadow-2xl transition-all duration-300 border border-white/5">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
               <div className="flex items-center gap-3">
                 <Key className="text-brand-purple" size={20} />
@@ -1201,7 +1203,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
       {activeTab === 'system' && (
         <div className="max-w-4xl mx-auto w-full space-y-8">
           {/* API Key Rotation & Switch */}
-          <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl transition-colors duration-300">
+          <div className="premium-glass rounded-[32px] p-6 sm:p-8 shadow-2xl transition-all duration-300 border border-white/5">
             <div className="flex items-center gap-3 mb-8">
               <div className="w-10 h-10 bg-brand-purple/20 text-brand-purple rounded-xl flex items-center justify-center border border-brand-purple/20">
                 <Key size={20} />
@@ -1452,7 +1454,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
 
       {activeTab === 'rules' && (
         <div className="max-w-4xl mx-auto w-full">
-          <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl transition-colors duration-300">
+          <div className="premium-glass rounded-[32px] p-6 sm:p-8 shadow-2xl transition-all duration-300 border border-white/5">
             <div className="flex items-center justify-between mb-8">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-brand-purple/20 text-brand-purple rounded-xl flex items-center justify-center border border-brand-purple/20">

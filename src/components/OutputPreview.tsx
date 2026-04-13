@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Headphones, Download, Play, Pause, FileText, Music, Volume2, VolumeX, RefreshCw } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { Headphones, Download, Play, Pause, FileText, Music, Volume2, VolumeX, RefreshCw, Clock, Plus, Minus, Sparkles } from 'lucide-react';
 import { AudioResult } from '../types';
 
 interface OutputPreviewProps {
@@ -22,6 +23,8 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   const [duration, setDuration] = useState(0);
   const [playerVolume, setPlayerVolume] = useState(globalVolume !== undefined ? globalVolume / 100 : 0.8);
   const [isMuted, setIsMuted] = useState(false);
+  const [currentSrt, setCurrentSrt] = useState('');
+  const [syncMs, setSyncMs] = useState<number>(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
@@ -33,6 +36,8 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
     if (audioRef.current && result) {
       const audio = audioRef.current;
       audio.load();
+      setCurrentSrt(result.srtContent);
+      setSyncMs(0);
 
       const updateTime = () => setCurrentTime(audio.currentTime);
       const updateDuration = () => setDuration(audio.duration);
@@ -94,12 +99,17 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
       let barHeight;
       let x = 0;
 
+      // Add a subtle pulsing effect based on overall volume
+      const average = dataArray.reduce((a, b) => a + b, 0) / bufferLength;
+      const pulseScale = 1 + (average / 255) * 0.2;
+
       for (let i = 0; i < bufferLength; i++) {
-        barHeight = (dataArray[i] / 255) * canvas.height;
+        barHeight = (dataArray[i] / 255) * canvas.height * pulseScale;
 
         const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
         gradient.addColorStop(0, '#8B5CF6'); // brand-purple
-        gradient.addColorStop(1, '#3B82F6'); // blue-500
+        gradient.addColorStop(0.5, '#6366F1'); // neon-indigo
+        gradient.addColorStop(1, '#D946EF'); // neon-magenta
 
         ctx.fillStyle = gradient;
         
@@ -156,6 +166,43 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
     }
   };
 
+  const timeToMs = (timeStr: string): number => {
+    const [hms, ms] = timeStr.split(',');
+    const [h, m, s] = hms.split(':').map(Number);
+    return h * 3600000 + m * 60000 + s * 1000 + Number(ms);
+  };
+
+  const msToTime = (ms: number): string => {
+    if (ms < 0) ms = 0;
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor((ms % 3600000) / 60000);
+    const s = Math.floor((ms % 60000) / 1000);
+    const mmm = Math.floor(ms % 1000);
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')},${mmm.toString().padStart(3, '0')}`;
+  };
+
+  const adjustSync = (ms: number) => {
+    if (!result) return;
+    
+    const blocks = result.srtContent.trim().split(/\n\s*\n/);
+    const adjustedBlocks = blocks.map(block => {
+      const lines = block.split('\n');
+      if (lines.length < 3) return block;
+      
+      const timeLine = lines[1];
+      const [startStr, endStr] = timeLine.split(' --> ');
+      
+      const newStart = msToTime(timeToMs(startStr) + ms);
+      const newEnd = msToTime(timeToMs(endStr) + ms);
+      
+      lines[1] = `${newStart} --> ${newEnd}`;
+      return lines.join('\n');
+    });
+
+    setCurrentSrt(adjustedBlocks.join('\n\n') + '\n\n');
+    setSyncMs(prev => prev + ms);
+  };
+
   const downloadFile = (content: string | Blob, fileName: string) => {
     let blob: Blob;
     if (typeof content === 'string') {
@@ -206,16 +253,19 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   }
 
   return (
-    <div className="glass-card rounded-[32px] p-8 sm:p-12 shadow-2xl space-y-10 transition-all duration-300">
+    <div className="premium-glass rounded-[32px] p-8 sm:p-12 shadow-2xl space-y-10 transition-all duration-300 relative overflow-hidden">
+      <div className="absolute top-0 right-0 w-64 h-64 bg-brand-purple/10 blur-[100px] -z-10" />
+      <div className="absolute bottom-0 left-0 w-64 h-64 bg-neon-magenta/10 blur-[100px] -z-10" />
+
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
         <h2 className="text-2xl sm:text-3xl font-bold flex items-center gap-4 text-slate-900 dark:text-white tracking-tight">
-          <div className="p-2.5 bg-brand-purple/10 rounded-xl text-brand-purple">
-            <Music size={28} />
+          <div className="p-2.5 bg-brand-purple/10 rounded-xl text-brand-purple animate-pulse-soft">
+            <Sparkles size={28} />
           </div>
-          Output Preview
+          AI Narrator Studio
         </h2>
-        <div className="px-5 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-full text-[10px] font-bold uppercase tracking-[0.15em] w-fit shadow-sm">
-          Ready to Download
+        <div className="px-5 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-full text-[10px] font-bold uppercase tracking-[0.15em] w-fit shadow-sm neon-glow-indigo">
+          Premium Output
         </div>
       </div>
 
@@ -316,13 +366,93 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
         <div className="space-y-6">
           {/* Subtitle Preview Box */}
           <div className="space-y-3">
-            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-              <FileText size={14} /> Subtitle Preview (SRT)
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                <FileText size={14} /> Subtitle Preview (SRT)
+              </h3>
+              {syncMs !== 0 && (
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${syncMs > 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
+                  Sync: {syncMs > 0 ? '+' : ''}{syncMs}ms
+                </span>
+              )}
+            </div>
             <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 h-40 overflow-y-auto custom-scrollbar shadow-inner">
               <pre className="text-[11px] sm:text-xs font-mono text-slate-600 dark:text-slate-400 whitespace-pre-wrap break-keep leading-[1.6]">
-                {result.srtContent}
+                {currentSrt}
               </pre>
+            </div>
+          </div>
+
+          {/* Sync Adjustment Tool */}
+          <div className="premium-glass border border-white/10 dark:border-white/5 rounded-[24px] p-6 space-y-4 neon-glow-indigo relative overflow-hidden">
+            <div className="absolute inset-0 bg-gradient-to-br from-neon-indigo/5 to-transparent pointer-events-none" />
+            
+            <div className="flex items-center justify-between relative z-10">
+              <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                <Clock size={14} className="text-neon-indigo" /> Sync Adjustment
+              </h4>
+              <button 
+                onClick={() => {
+                  setCurrentSrt(result.srtContent);
+                  setSyncMs(0);
+                }}
+                className="text-[10px] font-bold text-neon-indigo hover:text-neon-magenta transition-colors uppercase tracking-wider"
+              >
+                Reset Sync
+              </button>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center gap-4 relative z-10">
+              <div className="flex items-center gap-2 bg-white/50 dark:bg-slate-900/50 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2.5 w-full sm:w-auto shadow-inner">
+                <input 
+                  type="number" 
+                  id="sync-input"
+                  placeholder="ms"
+                  className="bg-transparent text-sm font-bold w-20 focus:outline-none text-slate-900 dark:text-white"
+                  defaultValue={100}
+                />
+                <span className="text-[10px] font-bold text-slate-400">MS</span>
+              </div>
+
+              <div className="flex items-center gap-3 w-full sm:w-auto">
+                <motion.button 
+                  whileHover={{ scale: 1.05, borderColor: '#D946EF' }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => {
+                    const val = parseInt((document.getElementById('sync-input') as HTMLInputElement).value) || 0;
+                    adjustSync(-val);
+                  }}
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 metallic-btn text-rose-500 rounded-xl text-xs font-bold transition-all border border-rose-500/20"
+                >
+                  <Minus size={14} /> Shift Back
+                </motion.button>
+                <motion.button 
+                  whileHover={{ scale: 1.05, borderColor: '#D946EF' }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => {
+                    const val = parseInt((document.getElementById('sync-input') as HTMLInputElement).value) || 0;
+                    adjustSync(val);
+                  }}
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 metallic-btn text-emerald-500 rounded-xl text-xs font-bold transition-all border border-emerald-500/20"
+                >
+                  <Plus size={14} /> Shift Forward
+                </motion.button>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 pt-1 relative z-10">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-2">Presets:</span>
+              {[ -1000, -500, 500, 1000 ].map(ms => (
+                <motion.button
+                  key={ms}
+                  whileHover={{ scale: 1.1, borderColor: '#D946EF', backgroundColor: 'rgba(217, 70, 239, 0.1)' }}
+                  whileTap={{ scale: 0.9 }}
+                  onClick={() => adjustSync(ms)}
+                  className="px-3 py-1.5 metallic-btn text-slate-600 dark:text-slate-300 rounded-lg text-[10px] font-bold transition-all border border-slate-200 dark:border-white/5"
+                >
+                  {ms > 0 ? '+' : ''}{ms/1000}s
+                </motion.button>
+              ))}
             </div>
           </div>
 
@@ -337,7 +467,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
                 Download MP3
               </button>
               <button
-                onClick={() => downloadFile(result.srtContent, 'vlogs-by-saw-subs.srt')}
+                onClick={() => downloadFile(currentSrt, 'vlogs-by-saw-subs.srt')}
                 className="flex items-center justify-center gap-3 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all border border-slate-200 dark:border-slate-700 group"
               >
                 <FileText size={20} className="group-hover:scale-110 transition-transform" />

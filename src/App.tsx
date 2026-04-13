@@ -998,7 +998,11 @@ export default function App() {
   }
 
   return (
-    <div className={`min-h-screen flex flex-col transition-colors duration-300 ${isDarkMode ? 'dark bg-[#020617] text-white' : 'bg-white text-slate-900'}`}>
+    <div className={`min-h-screen flex flex-col transition-colors duration-500 relative overflow-hidden ${isDarkMode ? 'dark bg-[#020617] text-white' : 'bg-slate-50 text-slate-900'}`}>
+      {/* Premium Background Glows */}
+      <div className="fixed top-[-10%] left-[-10%] w-[40%] h-[40%] bg-brand-purple/10 blur-[120px] rounded-full -z-10 animate-pulse-soft" />
+      <div className="fixed bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-neon-magenta/10 blur-[120px] rounded-full -z-10 animate-pulse-soft" />
+      
       <Header 
         isDarkMode={isDarkMode} 
         toggleTheme={() => setIsDarkMode(!isDarkMode)} 
@@ -1028,10 +1032,11 @@ export default function App() {
               <Lock size={40} />
             </div>
             
-            <div className="w-full max-w-md space-y-8 glass-card p-8 rounded-[32px]">
+            <div className="w-full max-w-md space-y-8 premium-glass p-10 rounded-[40px] shadow-2xl neon-glow-indigo relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-brand-purple/10 blur-[60px] -z-10" />
               <div>
-                <h2 className="text-2xl sm:text-3xl font-bold mb-3 text-slate-900 dark:text-white tracking-tight">Narration Engine</h2>
-                <p className="text-slate-600 dark:text-slate-400 text-sm sm:text-base leading-relaxed">
+                <h2 className="text-3xl sm:text-4xl font-bold mb-4 text-slate-900 dark:text-white tracking-tight">Narration Engine</h2>
+                <p className="text-slate-600 dark:text-slate-400 text-sm sm:text-base leading-relaxed font-medium">
                   Please enter your unique User ID (Access Code) to start generating professional Myanmar voiceovers.
                 </p>
               </div>
@@ -1047,7 +1052,7 @@ export default function App() {
                       if (isStepTwo) setIsStepTwo(false);
                     }}
                     placeholder="Enter Access Code..."
-                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                    className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/30 transition-all shadow-inner"
                   />
                 </div>
 
@@ -1065,7 +1070,7 @@ export default function App() {
                         value={passwordInput}
                         onChange={(e) => setPasswordInput(e.target.value)}
                         placeholder="Enter Password..."
-                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                        className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/30 transition-all shadow-inner"
                         required
                         autoFocus
                       />
@@ -1079,10 +1084,12 @@ export default function App() {
                   </div>
                 )}
                 
-                <button
+                <motion.button
+                  whileHover={{ scale: 1.02, boxShadow: '0 0 20px rgba(139, 92, 246, 0.4)' }}
+                  whileTap={{ scale: 0.98 }}
                   type="submit"
                   disabled={isVerifyingCode || !accessCodeInput.trim() || !isAuthReady}
-                  className="w-full py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg hover:bg-brand-purple/90 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-brand-purple/20"
+                  className="w-full py-4 bg-brand-purple text-white rounded-[20px] font-bold text-lg hover:bg-brand-purple/90 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-brand-purple/30 metallic-btn"
                 >
                   {isVerifyingCode || !isAuthReady ? (
                     <div className="flex items-center gap-2">
@@ -1095,7 +1102,7 @@ export default function App() {
                       <ArrowRight size={20} />
                     </>
                   )}
-                </button>
+                </motion.button>
               </form>
             </div>
           </div>

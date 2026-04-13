@@ -8,11 +8,11 @@ interface WelcomePageProps {
 
 export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnter }) => {
   return (
-    <div className="min-h-screen bg-gradient-to-br from-black via-slate-950 to-purple-950 text-white flex flex-col items-center justify-center p-6 overflow-hidden relative">
+    <div className="min-h-screen bg-[#020617] text-white flex flex-col items-center justify-center p-6 overflow-hidden relative">
       {/* Animated Background Elements */}
       <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none">
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-purple-600/20 rounded-full blur-[120px] animate-pulse" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-brand-purple/20 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '1s' }} />
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-purple-600/10 rounded-full blur-[120px] animate-pulse-soft" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-brand-purple/10 rounded-full blur-[120px] animate-pulse-soft" style={{ animationDelay: '1s' }} />
       </div>
 
       <div className="max-w-4xl w-full z-10 flex flex-col items-center text-center py-12">
@@ -86,7 +86,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnter }) => {
             whileHover={{ scale: 1.05, boxShadow: "0 0 30px rgba(168,85,247,0.6)" }}
             whileTap={{ scale: 0.95 }}
             onClick={onEnter}
-            className="group relative bg-brand-purple hover:bg-purple-500 text-white w-full max-w-[320px] md:max-w-md py-4 md:py-5 rounded-2xl font-black text-lg md:text-xl tracking-widest uppercase flex items-center justify-center gap-3 transition-all duration-300 shadow-[0_0_20px_rgba(168,85,247,0.3)]"
+            className="group relative bg-brand-purple hover:bg-purple-500 text-white w-full max-w-[320px] md:max-w-md py-4 md:py-5 rounded-2xl font-black text-lg md:text-xl tracking-widest uppercase flex items-center justify-center gap-3 transition-all duration-300 shadow-[0_0_20px_rgba(168,85,247,0.3)] metallic-btn"
           >
             စတင်အသုံးပြုမည်
             <ChevronRight className="group-hover:translate-x-1 transition-transform" />
@@ -110,9 +110,9 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnter }) => {
 };
 
 const FeatureCard: React.FC<{ icon: React.ReactNode; title: string }> = ({ icon, title }) => (
-  <div className="bg-white/5 backdrop-blur-sm border border-white/10 p-6 md:p-10 rounded-[24px] md:rounded-[32px] hover:bg-white/10 transition-all duration-300 group flex flex-col items-center text-center h-full shadow-lg">
-    <div className="bg-purple-500/10 w-14 h-14 md:w-20 md:h-20 rounded-2xl flex items-center justify-center mb-6 md:mb-8 group-hover:scale-110 transition-transform shadow-xl shadow-purple-500/5">
-      {icon}
+  <div className="premium-glass p-6 md:p-10 rounded-[24px] md:rounded-[32px] hover:scale-105 transition-all duration-500 group flex flex-col items-center text-center h-full shadow-2xl neon-glow-indigo border border-white/5">
+    <div className="bg-purple-500/10 w-14 h-14 md:w-20 md:h-20 rounded-2xl flex items-center justify-center mb-6 md:mb-8 group-hover:bg-purple-500/20 transition-all shadow-xl shadow-purple-500/5">
+      {React.cloneElement(icon as React.ReactElement, { size: 40 })}
     </div>
     <h3 className="text-lg md:text-2xl font-black text-white leading-tight tracking-tight">{title}</h3>
   </div>

@@ -54,14 +54,14 @@ export const Header: React.FC<HeaderProps> = ({
             window.dispatchEvent(new PopStateEvent('popstate'));
           }}
         >
-          <div className="w-9 h-9 sm:w-11 sm:h-11 bg-brand-purple rounded-[14px] sm:rounded-[16px] flex items-center justify-center shadow-lg shadow-brand-purple/30 group-hover:scale-105 transition-transform">
+          <div className="w-9 h-9 sm:w-11 sm:h-11 bg-brand-purple rounded-[14px] sm:rounded-[16px] flex items-center justify-center shadow-lg shadow-brand-purple/30 group-hover:scale-105 transition-transform animate-shine">
             <Mic2 className="text-white w-5 h-5 sm:w-6 sm:h-6" />
           </div>
           <div className="flex flex-col">
             <h1 className="text-base sm:text-xl font-bold tracking-tight text-slate-900 dark:text-white leading-none">
               Vlogs By Saw
             </h1>
-            <p className="text-[9px] sm:text-[10px] uppercase tracking-[0.2em] text-brand-purple font-bold mt-1 opacity-80">
+            <p className="text-[9px] sm:text-[10px] uppercase tracking-[0.2em] bg-clip-text text-transparent bg-gradient-to-r from-brand-purple to-neon-magenta font-bold mt-1 opacity-90">
               Narration Engine
             </p>
           </div>

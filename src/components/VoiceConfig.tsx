@@ -38,7 +38,8 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, isD
   }, [config.model, filteredVoices]);
 
   return (
-    <div className="glass-card rounded-[32px] p-8 sm:p-10 shadow-2xl transition-all duration-300">
+    <div className="premium-glass rounded-[32px] p-8 sm:p-10 shadow-2xl transition-all duration-300 relative overflow-hidden">
+      <div className="absolute top-0 right-0 w-64 h-64 bg-brand-purple/5 blur-[100px] -z-10" />
       <div className="space-y-10">
         {/* Voice Selection */}
         <div className="group">
@@ -52,7 +53,7 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, isD
             <select
               value={config.voiceId}
               onChange={(e) => handleChange('voiceId', e.target.value)}
-              className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-[20px] px-6 py-4 text-slate-900 dark:text-white appearance-none focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all cursor-pointer font-bold shadow-sm"
+              className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] px-6 py-4 text-slate-900 dark:text-white appearance-none focus:outline-none focus:ring-2 focus:ring-brand-purple/30 transition-all cursor-pointer font-bold shadow-inner"
             >
               {filteredVoices.map((voice) => (
                 <option key={voice.id} value={voice.id} className="bg-white dark:bg-slate-950 text-slate-900 dark:text-white">
@@ -80,7 +81,7 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, isD
               value={config.styleInstruction || ''}
               onChange={(e) => handleChange('styleInstruction', e.target.value)}
               placeholder="ဥပမာ - Angry, Excited, Professional..."
-              className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-[20px] px-6 py-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all font-bold placeholder:text-slate-400 shadow-sm"
+              className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] px-6 py-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/30 transition-all font-bold placeholder:text-slate-400 shadow-inner"
             />
             <div className="flex flex-wrap gap-2">
               {QUICK_STYLES.map((style) => (

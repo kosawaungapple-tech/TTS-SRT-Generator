@@ -113,20 +113,22 @@ export const ContentInput: React.FC<ContentInputProps> = ({
   const status = getStatusLabel();
 
   return (
-    <div className="glass-card rounded-[24px] p-6 sm:p-8 shadow-2xl transition-all duration-300 relative overflow-hidden">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 mb-6">
+    <div className="premium-glass rounded-[32px] p-8 sm:p-12 shadow-2xl transition-all duration-300 relative overflow-hidden">
+      <div className="absolute top-0 left-0 w-64 h-64 bg-brand-purple/5 blur-[100px] -z-10" />
+      
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 mb-8">
         <div className="flex flex-col gap-1">
-          <h2 className="text-xl font-bold flex items-center gap-3 text-slate-900 dark:text-white">
-            <div className="p-2 bg-brand-purple/10 rounded-lg text-brand-purple">
-              <Clipboard size={20} />
+          <h2 className="text-2xl font-bold flex items-center gap-4 text-slate-900 dark:text-white tracking-tight">
+            <div className="p-2.5 bg-brand-purple/10 rounded-xl text-brand-purple">
+              <Clipboard size={24} />
             </div>
-            Content Input
-            <span className="text-[10px] bg-brand-purple/20 text-brand-purple px-2.5 py-1 rounded-full font-bold tracking-wider">
-              MY / EN / ZH
+            Content Studio
+            <span className="text-[10px] bg-brand-purple/20 text-brand-purple px-3 py-1 rounded-full font-bold tracking-[0.15em] uppercase">
+              AI Powered
             </span>
           </h2>
-          <div className="flex items-center gap-2 px-1 mt-1">
-            <div className={`w-2 h-2 rounded-full ${status.dot} animate-pulse`} />
+          <div className="flex items-center gap-2 px-1 mt-2">
+            <div className={`w-2 h-2 rounded-full ${status.dot} animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]`} />
             <span className={`text-[10px] font-bold uppercase tracking-widest ${status.color}`}>
               {status.label}
             </span>
@@ -134,10 +136,12 @@ export const ContentInput: React.FC<ContentInputProps> = ({
         </div>
         
         <div className="flex flex-wrap items-center gap-3">
-          <button
+          <motion.button
+            whileHover={{ scale: 1.05, boxShadow: '0 0 20px rgba(139, 92, 246, 0.4)' }}
+            whileTap={{ scale: 0.95 }}
             onClick={() => handleRewrite(0)}
             disabled={isRewriting || !text.trim() || currentStatus === 'cooling'}
-            className="flex items-center gap-2 px-5 py-2.5 bg-brand-purple text-white rounded-[14px] text-xs font-bold hover:bg-brand-purple/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-brand-purple/30 active:scale-95 min-w-[140px] justify-center"
+            className="flex items-center gap-2 px-6 py-3 bg-brand-purple text-white rounded-xl text-xs font-bold hover:bg-brand-purple/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-brand-purple/30 min-w-[160px] justify-center metallic-btn"
           >
             {isRewriting ? (
               <RefreshCw size={16} className="animate-spin" />
@@ -147,7 +151,7 @@ export const ContentInput: React.FC<ContentInputProps> = ({
             {isRewriting 
               ? (currentStatus === 'cooling' ? `Cooling down... (${currentCountdown}s)` : 'Rewriting...') 
               : 'Rewrite with AI'}
-          </button>
+          </motion.button>
 
           <div className="h-6 w-[1px] bg-slate-200 dark:bg-slate-800 hidden sm:block mx-1" />
 
@@ -168,12 +172,14 @@ export const ContentInput: React.FC<ContentInputProps> = ({
         </div>
       </div>
 
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="စာသားများကို ဤနေရာတွင် ရိုက်ထည့်ပါ... (Enter text here...)"
-        className="w-full h-72 bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-[20px] p-6 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 resize-none custom-scrollbar transition-all duration-300 font-medium leading-relaxed"
-      />
+      <div className="relative group/textarea">
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="စာသားများကို ဤနေရာတွင် ရိုက်ထည့်ပါ... (Enter text here...)"
+          className="w-full h-72 bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[24px] p-6 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/30 focus:border-brand-purple/50 resize-none custom-scrollbar transition-all duration-300 font-medium leading-relaxed shadow-inner"
+        />
+      </div>
 
       <div className="mt-4 flex items-center justify-between">
         <div className="flex-1">
@@ -181,13 +187,13 @@ export const ContentInput: React.FC<ContentInputProps> = ({
             <motion.div 
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
-              className="text-[11px] font-bold text-rose-500 bg-rose-500/10 px-4 py-2 rounded-xl border border-rose-500/20"
+              className="text-[11px] font-bold text-rose-500 bg-rose-500/10 px-4 py-2 rounded-xl border border-rose-500/20 neon-glow-magenta"
             >
               Your API Key has reached its temporary limit. The system will resume shortly.
             </motion.div>
           )}
         </div>
-        <div className="px-3 py-1 bg-slate-100 dark:bg-white/5 rounded-full border border-slate-200 dark:border-white/5 ml-4">
+        <div className="px-4 py-1.5 bg-white/50 dark:bg-white/5 rounded-full border border-slate-200 dark:border-white/10 ml-4 shadow-sm">
           <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold font-mono uppercase tracking-widest">
             {text.length} characters
           </span>
