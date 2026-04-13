@@ -9,18 +9,13 @@ export const VOICE_OPTIONS: VoiceOption[] = [
 ];
 
 export const MODEL_OPTIONS = [
-  { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash' },
-  { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro' },
-  { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash' },
+  { id: 'gemini-2.5-flash-preview-tts', name: 'Gemini 2.5 Flash (Latest)' },
 ];
 
 // Define which voices are supported by which models
 const STABLE_VOICES = ['zephyr', 'kore', 'puck', 'charon', 'fenrir'];
 
 export const MODEL_VOICE_MAPPING: Record<string, string[]> = {
-  'gemini-1.5-flash': STABLE_VOICES,
-  'gemini-1.5-pro': STABLE_VOICES,
-  'gemini-2.0-flash-exp': STABLE_VOICES,
   'gemini-2.5-flash-preview-tts': STABLE_VOICES,
 };
 

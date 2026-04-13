@@ -23,10 +23,7 @@ import {
   EyeOff,
   Save,
   Languages,
-  Edit3,
-  Wand2,
-  ChevronDown,
-  Info
+  Edit3
 } from 'lucide-react';
 import { AuthorizedUser, User as RegisteredUser, SystemConfig, PronunciationRule, GlobalSettings } from '../types';
 import { db, collection, onSnapshot, query, orderBy, setDoc, doc, deleteDoc, updateDoc, handleFirestoreError, OperationType, getDoc, auth, googleProvider, signInWithPopup } from '../firebase';
@@ -73,8 +70,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
     firebase_auth_domain: '',
     firebase_app_id: '',
     telegram_bot_token: '',
-    telegram_chat_id: '',
-    gemini_model_id: 'gemini-1.5-flash'
+    telegram_chat_id: ''
   });
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings>({
     allow_admin_keys: false,
@@ -1360,30 +1356,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
               <div className="space-y-6">
                 <div className="flex items-center gap-2 pb-2 border-b border-slate-200 dark:border-white/5">
                   <RefreshCw size={16} className="text-brand-purple" />
-                  <h4 className="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wider">AI Model & Testing</h4>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Active Gemini Model ID</label>
-                  <div className="relative group">
-                    <Wand2 className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-purple group-focus-within:scale-110 transition-transform pointer-events-none" size={18} />
-                    <select
-                      value={systemConfig.gemini_model_id || 'gemini-1.5-flash'}
-                      onChange={(e) => setSystemConfig({ ...systemConfig, gemini_model_id: e.target.value })}
-                      className="w-full bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 rounded-2xl pl-12 pr-10 py-4 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all appearance-none cursor-pointer font-bold shadow-inner"
-                    >
-                      <option value="gemini-1.5-flash">Gemini 1.5 Flash (Stable)</option>
-                      <option value="gemini-1.5-pro">Gemini 1.5 Pro (High Quality)</option>
-                      <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (Experimental)</option>
-                    </select>
-                    <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 group-hover:text-brand-purple transition-colors">
-                      <ChevronDown size={18} />
-                    </div>
-                  </div>
-                  <p className="text-[10px] text-slate-500 italic px-1 flex items-center gap-1.5">
-                    <Info size={10} />
-                    Select the active model to be used for Rewrite, Translator, and TTS features.
-                  </p>
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wider">Debug & Testing</h4>
                 </div>
                 
                 <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-900/50 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">

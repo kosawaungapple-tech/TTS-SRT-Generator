@@ -124,7 +124,7 @@ export default function App() {
 
     setIsTranslating(true);
     try {
-      const modelId = systemConfig?.gemini_model_id || 'gemini-1.5-flash';
+      const modelId = 'gemini-1.5-flash';
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
       
       const prompt = `Translate the provided text into natural, professional, storytelling Burmese. Use a tone suitable for video narration. Original: ${sourceText}`;
@@ -139,7 +139,7 @@ export default function App() {
 
       console.log(`Translating with model: ${modelId}...`);
 
-      const response = await fetch(endpoint, {
+      let response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -147,12 +147,26 @@ export default function App() {
         body: JSON.stringify(payload)
       });
 
+      // FALLBACK MODEL LOGIC: If gemini-1.5-flash fails, try gemini-1.5-flash-latest
+      if (!response.ok && response.status === 404) {
+        console.warn('Primary translation model failed (404), trying fallback: gemini-1.5-flash-latest');
+        const fallbackModel = 'gemini-1.5-flash-latest';
+        const fallbackEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent?key=${apiKey}`;
+        response = await fetch(fallbackEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload)
+        });
+      }
+
       if (!response.ok) {
         const status = response.status;
         console.error(`Translation failed with status: ${status}`);
         const errorData = await response.json().catch(() => ({}));
         console.error('Error details:', errorData);
-        throw new Error(`Translation failed (Status: ${status}). ${errorData.error?.message || 'Please check your connection.'}`);
+        throw new Error(`API Error: ${status}`);
       }
 
       const data = await response.json();
@@ -760,11 +774,7 @@ export default function App() {
       });
 
       console.log("App: Text processed, calling TTS service...");
-      const ttsConfig = {
-        ...config,
-        model: systemConfig?.gemini_model_id || config.model
-      };
-      const audioResult = await ttsService.generateTTS(processedText, ttsConfig, isMock);
+      const audioResult = await ttsService.generateTTS(processedText, config, isMock);
       
       if (audioResult.isSimulation) {
         console.warn("App: Received simulation result (fallback triggered)");
@@ -1091,7 +1101,6 @@ export default function App() {
                       isDarkMode={isDarkMode} 
                       getApiKey={getEffectiveApiKey}
                       showToast={showToast}
-                      geminiModelId={systemConfig?.gemini_model_id}
                     />
                     
                     {/* Default Pronunciation Rules Table */}

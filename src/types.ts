@@ -39,7 +39,6 @@ export interface SystemConfig {
   firebase_app_id: string;
   telegram_bot_token: string;
   telegram_chat_id: string;
-  gemini_model_id?: string;
   mock_mode?: boolean;
   updatedAt?: any;
 }

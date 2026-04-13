@@ -7,10 +7,9 @@ interface ContentInputProps {
   isDarkMode: boolean;
   getApiKey: () => string | null;
   showToast: (message: string, type: 'success' | 'error') => void;
-  geminiModelId?: string;
 }
 
-export const ContentInput: React.FC<ContentInputProps> = ({ text, setText, isDarkMode, getApiKey, showToast, geminiModelId }) => {
+export const ContentInput: React.FC<ContentInputProps> = ({ text, setText, isDarkMode, getApiKey, showToast }) => {
   const [isRewriting, setIsRewriting] = useState(false);
 
   const handlePaste = async () => {
@@ -41,8 +40,8 @@ export const ContentInput: React.FC<ContentInputProps> = ({ text, setText, isDar
 
     setIsRewriting(true);
     try {
-      // CLONE TTS MODEL ID: Using dynamic model ID from admin settings or fallback
-      const modelId = geminiModelId || 'gemini-1.5-flash';
+      // CLONE TTS MODEL ID: Using gemini-1.5-flash as the primary stable model
+      const modelId = 'gemini-1.5-flash';
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
       
       const prompt = `You are a professional Burmese content creator. Paraphrase the following text to be unique, engaging, and copyright-safe. Use a natural storytelling tone. Original text: ${text}`;
@@ -57,13 +56,27 @@ export const ContentInput: React.FC<ContentInputProps> = ({ text, setText, isDar
 
       console.log(`Rewriting with model: ${modelId}...`);
       
-      const response = await fetch(endpoint, {
+      let response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(payload)
       });
+
+      // FALLBACK MODEL LOGIC: If gemini-1.5-flash fails, try gemini-1.5-flash-latest
+      if (!response.ok && response.status === 404) {
+        console.warn('Primary model failed (404), trying fallback: gemini-1.5-flash-latest');
+        const fallbackModel = 'gemini-1.5-flash-latest';
+        const fallbackEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent?key=${apiKey}`;
+        response = await fetch(fallbackEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload)
+        });
+      }
 
       if (!response.ok) {
         const status = response.status;
@@ -85,9 +98,7 @@ export const ContentInput: React.FC<ContentInputProps> = ({ text, setText, isDar
       }
     } catch (err: any) {
       console.error('Rewriting failed:', err);
-      // Ensure we show the actual error message from the API if available
-      const errorMessage = err.message || 'Rewrite failed. Please check your connection.';
-      showToast(errorMessage, 'error');
+      showToast(err.message || 'Rewrite failed. Please check your connection.', 'error');
     } finally {
       setIsRewriting(false);
     }
