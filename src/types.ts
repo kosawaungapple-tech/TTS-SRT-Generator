@@ -27,6 +27,9 @@ export interface AuthorizedUser {
 export interface GlobalSettings {
   global_system_key?: string;
   api_keys?: string[]; // List of rotated API keys
+  primary_key?: string;
+  secondary_key?: string;
+  backup_key?: string;
   allow_admin_keys: boolean; // Toggle to allow users to use admin keys
   total_generations: number;
   mock_mode?: boolean;

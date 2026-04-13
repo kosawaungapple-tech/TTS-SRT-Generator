@@ -1,14 +1,22 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Headphones, Download, Play, Pause, FileText, Music, Volume2, VolumeX } from 'lucide-react';
+import { Headphones, Download, Play, Pause, FileText, Music, Volume2, VolumeX, RefreshCw } from 'lucide-react';
 import { AudioResult } from '../types';
 
 interface OutputPreviewProps {
   result: AudioResult | null;
   isLoading: boolean;
   globalVolume?: number;
+  engineStatus?: 'ready' | 'cooling' | 'limit';
+  retryCountdown?: number;
 }
 
-export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading, globalVolume }) => {
+export const OutputPreview: React.FC<OutputPreviewProps> = ({ 
+  result, 
+  isLoading, 
+  globalVolume,
+  engineStatus = 'ready',
+  retryCountdown = 0
+}) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -172,21 +180,25 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading,
 
   if (isLoading) {
     return (
-      <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-12 shadow-xl flex flex-col items-center justify-center text-center transition-colors duration-300">
-        <div className="w-16 h-16 border-4 border-brand-purple/20 border-t-brand-purple rounded-full animate-spin mb-4" />
-        <p className="text-slate-500 dark:text-slate-400">Generating your voiceover...</p>
+      <div className="glass-card rounded-[32px] p-12 sm:p-20 shadow-2xl flex flex-col items-center justify-center text-center transition-all duration-300">
+        <div className="relative">
+          <div className="w-20 h-20 border-4 border-brand-purple/20 border-t-brand-purple rounded-full animate-spin mb-6" />
+          <RefreshCw size={24} className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-brand-purple animate-pulse" />
+        </div>
+        <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Generating Audio...</h3>
+        <p className="text-slate-500 dark:text-slate-400 max-w-xs">Our AI engine is crafting your professional Myanmar voiceover.</p>
       </div>
     );
   }
 
   if (!result) {
     return (
-      <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-12 shadow-xl flex flex-col items-center justify-center text-center transition-colors duration-300">
-        <div className="w-20 h-20 bg-slate-50 dark:bg-slate-900 rounded-full flex items-center justify-center text-slate-400 dark:text-slate-600 mb-6 border border-slate-200 dark:border-slate-800">
-          <Headphones size={40} />
+      <div className="glass-card rounded-[32px] p-12 sm:p-20 shadow-2xl flex flex-col items-center justify-center text-center transition-all duration-300 group">
+        <div className="w-24 h-24 bg-slate-50 dark:bg-slate-900/50 rounded-[32px] flex items-center justify-center text-slate-400 dark:text-slate-600 mb-8 border border-slate-200 dark:border-slate-800 group-hover:scale-110 transition-transform duration-500 shadow-inner">
+          <Headphones size={48} />
         </div>
-        <h3 className="text-lg font-semibold mb-2 text-slate-900 dark:text-white">Output Preview</h3>
-        <p className="text-slate-500 dark:text-slate-400 text-sm max-w-xs">
+        <h3 className="text-2xl font-bold mb-3 text-slate-900 dark:text-white tracking-tight">Output Preview</h3>
+        <p className="text-slate-500 dark:text-slate-400 text-sm sm:text-base max-w-xs leading-relaxed">
           Generated audio and subtitles will appear here after you click generate.
         </p>
       </div>
@@ -194,13 +206,15 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading,
   }
 
   return (
-    <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-[32px] p-8 sm:p-10 shadow-xl space-y-8 transition-colors duration-300">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <h2 className="text-2xl font-bold flex items-center gap-3 text-slate-900 dark:text-white">
-          <Music className="text-brand-purple" size={24} />
+    <div className="glass-card rounded-[32px] p-8 sm:p-12 shadow-2xl space-y-10 transition-all duration-300">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
+        <h2 className="text-2xl sm:text-3xl font-bold flex items-center gap-4 text-slate-900 dark:text-white tracking-tight">
+          <div className="p-2.5 bg-brand-purple/10 rounded-xl text-brand-purple">
+            <Music size={28} />
+          </div>
           Output Preview
         </h2>
-        <div className="px-4 py-1.5 bg-brand-purple/10 text-brand-purple rounded-full text-xs font-bold uppercase tracking-wider w-fit">
+        <div className="px-5 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-full text-[10px] font-bold uppercase tracking-[0.15em] w-fit shadow-sm">
           Ready to Download
         </div>
       </div>
@@ -306,28 +320,47 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({ result, isLoading,
               <FileText size={14} /> Subtitle Preview (SRT)
             </h3>
             <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 h-40 overflow-y-auto custom-scrollbar shadow-inner">
-              <pre className="text-[11px] sm:text-xs font-mono text-slate-600 dark:text-slate-400 whitespace-pre-wrap leading-relaxed">
+              <pre className="text-[11px] sm:text-xs font-mono text-slate-600 dark:text-slate-400 whitespace-pre-wrap break-keep leading-[1.6]">
                 {result.srtContent}
               </pre>
             </div>
           </div>
 
-          {/* Download Buttons */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <button
-              onClick={() => fetch(result.audioUrl).then(r => r.blob()).then(b => downloadFile(b, 'vlogs-by-saw-audio.mp3'))}
-              className="flex items-center justify-center gap-3 py-4 bg-brand-purple/10 text-brand-purple rounded-2xl font-bold hover:bg-brand-purple hover:text-white transition-all border border-brand-purple/20 group"
-            >
-              <Music size={20} className="group-hover:scale-110 transition-transform" />
-              Download MP3
-            </button>
-            <button
-              onClick={() => downloadFile(result.srtContent, 'vlogs-by-saw-subs.srt')}
-              className="flex items-center justify-center gap-3 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all border border-slate-200 dark:border-slate-700 group"
-            >
-              <FileText size={20} className="group-hover:scale-110 transition-transform" />
-              Download SRT
-            </button>
+          {/* Download Buttons & Status */}
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <button
+                onClick={() => fetch(result.audioUrl).then(r => r.blob()).then(b => downloadFile(b, 'vlogs-by-saw-audio.mp3'))}
+                className="flex items-center justify-center gap-3 py-4 bg-brand-purple/10 text-brand-purple rounded-2xl font-bold hover:bg-brand-purple hover:text-white transition-all border border-brand-purple/20 group"
+              >
+                <Music size={20} className="group-hover:scale-110 transition-transform" />
+                Download MP3
+              </button>
+              <button
+                onClick={() => downloadFile(result.srtContent, 'vlogs-by-saw-subs.srt')}
+                className="flex items-center justify-center gap-3 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all border border-slate-200 dark:border-slate-700 group"
+              >
+                <FileText size={20} className="group-hover:scale-110 transition-transform" />
+                Download SRT
+              </button>
+            </div>
+
+            {/* Subtle Engine Status Dot */}
+            <div className="flex items-center justify-center gap-4 py-2">
+              <div className="flex items-center gap-2 px-3 py-1 bg-slate-100/50 dark:bg-white/5 rounded-full border border-slate-200/50 dark:border-white/5">
+                <div className={`w-2 h-2 rounded-full animate-pulse ${
+                  engineStatus === 'ready' ? 'bg-emerald-500' : 
+                  engineStatus === 'cooling' ? 'bg-amber-500' : 'bg-rose-500'
+                }`} />
+                <span className={`text-[10px] font-bold uppercase tracking-widest ${
+                  engineStatus === 'ready' ? 'text-emerald-500' : 
+                  engineStatus === 'cooling' ? 'text-amber-500' : 'text-rose-500'
+                }`}>
+                  {engineStatus === 'ready' ? 'Engine: Ready' : 
+                   engineStatus === 'cooling' ? `Cooling Down (${retryCountdown}s)` : 'Limit Reached'}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
       </div>

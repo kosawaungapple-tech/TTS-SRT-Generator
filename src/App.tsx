@@ -54,6 +54,8 @@ export default function App() {
     api_keys: ['']
   });
   const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
+  const [engineStatus, setEngineStatus] = useState<'ready' | 'cooling' | 'limit'>('ready');
+  const [retryCountdown, setRetryCountdown] = useState(0);
 
   const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -75,10 +77,21 @@ export default function App() {
     }
     
     // 2. Fallback to Global System Keys (if enabled)
-    if (globalSettings.allow_admin_keys && globalSettings.api_keys && globalSettings.api_keys.length > 0) {
-      const validKeys = globalSettings.api_keys.filter(k => k.trim() !== '');
+    if (globalSettings.allow_admin_keys) {
+      const keys = [
+        globalSettings.primary_key || '',
+        globalSettings.secondary_key || '',
+        globalSettings.backup_key || ''
+      ].filter(k => k.trim());
+
+      if (keys.length > 0) {
+        console.log("App: Using Rotated Admin API Keys (Primary/Secondary/Backup)");
+        return keys.join(',');
+      }
+
+      const validKeys = (globalSettings.api_keys || []).filter(k => k.trim() !== '');
       if (validKeys.length > 0) {
-        console.log("App: Using Rotated Admin API Keys");
+        console.log("App: Using Rotated Admin API Keys (Legacy Array)");
         return validKeys.join(',');
       }
     }
@@ -123,18 +136,57 @@ export default function App() {
     }
 
     setIsTranslating(true);
-    try {
-      const gemini = new GeminiTTSService(apiKey);
-      const resultText = await gemini.translateContent(sourceText);
+    setEngineStatus('ready');
 
-      setTranslatedText(resultText);
-      showToast('ဘာသာပြန်ဆိုမှု အောင်မြင်ပါသည်။ (Translation successful!)', 'success');
-    } catch (err: any) {
-      console.error('Translation failed:', err);
-      showToast('ဘာသာပြန်ဆိုမှု မအောင်မြင်ပါ။ (Translation failed. Please check your connection.)', 'error');
-    } finally {
-      setIsTranslating(false);
-    }
+    const runTranslation = async (retryAttempt = 0): Promise<void> => {
+      try {
+        const gemini = new GeminiTTSService(apiKey);
+        const resultText = await gemini.translateContent(sourceText);
+
+        setTranslatedText(resultText);
+        setEngineStatus('ready');
+        showToast('ဘာသာပြန်ဆိုမှု အောင်မြင်ပါသည်။ (Translation successful!)', 'success');
+      } catch (err: any) {
+        console.error('Translation failed:', err);
+        const isRateLimit = err.message === 'RATE_LIMIT_EXHAUSTED' || 
+                          (err.status === 429) || 
+                          (err.message && err.message.includes('429'));
+
+        if (isRateLimit && retryAttempt < 1) {
+          setEngineStatus('cooling');
+          setRetryCountdown(10);
+          
+          const timer = setInterval(() => {
+            setRetryCountdown(prev => {
+              if (prev <= 1) {
+                clearInterval(timer);
+                return 0;
+              }
+              return prev - 1;
+            });
+          }, 1000);
+
+          setTimeout(() => {
+            runTranslation(retryAttempt + 1);
+          }, 10000);
+          return;
+        }
+
+        if (isRateLimit) {
+          setEngineStatus('limit');
+          showToast('Your API Key has reached its temporary limit. The system will resume shortly.', 'error');
+        } else {
+          showToast('ဘာသာပြန်ဆိုမှု မအောင်မြင်ပါ။ (Translation failed. Please check your connection.)', 'error');
+        }
+      } finally {
+        if (retryAttempt >= 0) {
+          // Keep translating true during cooling
+        }
+      }
+    };
+
+    await runTranslation();
+    setIsTranslating(false);
   };
 
   const sendToGenerator = () => {
@@ -692,97 +744,137 @@ export default function App() {
     setIsLoading(true);
     setError(null);
     setResult(null);
+    setEngineStatus('ready');
 
     console.log("App: Starting voiceover generation process with key...");
 
-    try {
-      const isMock = systemConfig?.mock_mode || false;
-      const ttsService = new GeminiTTSService(effectiveKey);
-      
-      console.log("App: Applying pronunciation rules...");
-      // Apply pronunciation rules sequentially: Default -> Global Admin -> User Custom
-      let processedText = text;
-      
-      // 1. Default Rules
-      DEFAULT_RULES.forEach(rule => {
-        const regex = new RegExp(rule.original, 'gi');
-        processedText = processedText.replace(regex, rule.replacement);
-      });
-
-      // 2. Global Admin Rules
-      globalRules.forEach(rule => {
-        const regex = new RegExp(rule.original, 'gi');
-        processedText = processedText.replace(regex, rule.replacement);
-      });
-      
-      // 3. User Custom Rules
-      customRules.split('\n').forEach((line) => {
-        const parts = line.split('->').map(p => p.trim());
-        if (parts.length === 2) {
-          const regex = new RegExp(parts[0], 'gi');
-          processedText = processedText.replace(regex, parts[1]);
-        }
-      });
-
-      console.log("App: Text processed, calling TTS service...");
-      const audioResult = await ttsService.generateTTS(processedText, config, isMock);
-      
-      if (audioResult.isSimulation) {
-        console.warn("App: Received simulation result (fallback triggered)");
-        setError("Note: Real API call failed or timed out. Showing simulation result for testing.");
-      } else {
-        console.log("App: TTS generation successful, updating state...");
-      }
-      
-      setResult(audioResult);
-
-      // Save to History (Asynchronous if enabled)
-      if (saveToHistory && accessCode && !audioResult.isSimulation) {
-        console.log("App: Saving to history (Asynchronous)...");
-        // We don't await this to ensure immediate result display
-        const saveHistory = async () => {
-          try {
-            // 1. Upload Audio to Storage
-            const audioFileName = `audio/${accessCode}/${Date.now()}.wav`;
-            const audioRef = ref(storage, audioFileName);
-            await uploadString(audioRef, audioResult.audioData, 'base64');
-            const audioStorageUrl = await getDownloadURL(audioRef);
-
-            // 2. Upload SRT to Storage
-            const srtFileName = `srt/${accessCode}/${Date.now()}.srt`;
-            const srtRef = ref(storage, srtFileName);
-            await uploadString(srtRef, audioResult.srtContent);
-            const srtStorageUrl = await getDownloadURL(srtRef);
-
-            // 3. Save to Firestore
-            await addDoc(collection(db, 'history'), {
-              userId: accessCode,
-              text: text.length > 1000 ? text.substring(0, 1000) + '...' : text,
-              audioStorageUrl: audioStorageUrl,
-              srtStorageUrl: srtStorageUrl,
-              createdAt: new Date().toISOString(),
-              config: config
-            });
-            
-            // Update total generations
-            await updateDoc(doc(db, 'settings', 'global'), {
-              total_generations: (globalSettings.total_generations || 0) + 1
-            });
-            console.log("App: History saved successfully in background");
-          } catch (storageErr) {
-            console.error('Error saving to history in background:', storageErr);
-          }
-        };
+    const runGeneration = async (retryAttempt = 0): Promise<void> => {
+      try {
+        const isMock = systemConfig?.mock_mode || false;
+        const ttsService = new GeminiTTSService(effectiveKey);
         
-        saveHistory();
+        console.log("App: Applying pronunciation rules...");
+        // Apply pronunciation rules sequentially: Default -> Global Admin -> User Custom
+        let processedText = text;
+        
+        // 1. Default Rules
+        DEFAULT_RULES.forEach(rule => {
+          const regex = new RegExp(rule.original, 'gi');
+          processedText = processedText.replace(regex, rule.replacement);
+        });
+
+        // 2. Global Admin Rules
+        globalRules.forEach(rule => {
+          const regex = new RegExp(rule.original, 'gi');
+          processedText = processedText.replace(regex, rule.replacement);
+        });
+        
+        // 3. User Custom Rules
+        customRules.split('\n').forEach((line) => {
+          const parts = line.split('->').map(p => p.trim());
+          if (parts.length === 2) {
+            const regex = new RegExp(parts[0], 'gi');
+            processedText = processedText.replace(regex, parts[1]);
+          }
+        });
+
+        console.log("App: Text processed, calling TTS service...");
+        const audioResult = await ttsService.generateTTS(processedText, config, isMock);
+        
+        if (audioResult.isSimulation) {
+          console.warn("App: Received simulation result (fallback triggered)");
+          setError("Note: Real API call failed or timed out. Showing simulation result for testing.");
+        } else {
+          console.log("App: TTS generation successful, updating state...");
+        }
+        
+        setResult(audioResult);
+        setEngineStatus('ready');
+
+        // Save to History (Asynchronous if enabled)
+        if (saveToHistory && accessCode && !audioResult.isSimulation) {
+          console.log("App: Saving to history (Asynchronous)...");
+          // We don't await this to ensure immediate result display
+          const saveHistory = async () => {
+            try {
+              // 1. Upload Audio to Storage
+              const audioFileName = `audio/${accessCode}/${Date.now()}.wav`;
+              const audioRef = ref(storage, audioFileName);
+              await uploadString(audioRef, audioResult.audioData, 'base64');
+              const audioStorageUrl = await getDownloadURL(audioRef);
+
+              // 2. Upload SRT to Storage
+              const srtFileName = `srt/${accessCode}/${Date.now()}.srt`;
+              const srtRef = ref(storage, srtFileName);
+              await uploadString(srtRef, audioResult.srtContent);
+              const srtStorageUrl = await getDownloadURL(srtRef);
+
+              // 3. Save to Firestore
+              await addDoc(collection(db, 'history'), {
+                userId: accessCode,
+                text: text.length > 1000 ? text.substring(0, 1000) + '...' : text,
+                audioStorageUrl: audioStorageUrl,
+                srtStorageUrl: srtStorageUrl,
+                createdAt: new Date().toISOString(),
+                config: config
+              });
+              
+              // Update total generations
+              await updateDoc(doc(db, 'settings', 'global'), {
+                total_generations: (globalSettings.total_generations || 0) + 1
+              });
+              console.log("App: History saved successfully in background");
+            } catch (storageErr) {
+              console.error('Error saving to history in background:', storageErr);
+            }
+          };
+          
+          saveHistory();
+        }
+      } catch (err: any) {
+        console.error("App: Generation failed with error:", err);
+        const isRateLimit = err.message === 'RATE_LIMIT_EXHAUSTED' || 
+                          (err.status === 429) || 
+                          (err.message && err.message.includes('429'));
+
+        if (isRateLimit && retryAttempt < 1) {
+          setEngineStatus('cooling');
+          setRetryCountdown(10);
+          
+          // Start countdown
+          const timer = setInterval(() => {
+            setRetryCountdown(prev => {
+              if (prev <= 1) {
+                clearInterval(timer);
+                return 0;
+              }
+              return prev - 1;
+            });
+          }, 1000);
+
+          // Auto-retry after 10 seconds
+          setTimeout(() => {
+            runGeneration(retryAttempt + 1);
+          }, 10000);
+          return;
+        }
+
+        if (isRateLimit) {
+          setEngineStatus('limit');
+          setError("Your API Key has reached its temporary limit. The system will resume shortly.");
+        } else {
+          setError(err.message || 'An unexpected error occurred.');
+          showToast('Generation failed. Please check your API key and connection.', 'error');
+        }
+      } finally {
+        if (retryAttempt >= 0) { // Only set loading false if we're not waiting for retry
+          // Actually, we want to keep loading true during cooling
+        }
       }
-    } catch (err: any) {
-      console.error("App: Generation failed with error:", err);
-      setError(err.message || 'An unexpected error occurred.');
-    } finally {
-      console.log("App: Generation process finished (Cleaning up loading state)");
-      setIsLoading(false);
-    }
+    };
+
+    await runGeneration();
+    setIsLoading(false);
   };
 
   const handleDeleteHistory = async (id: string) => {
@@ -1054,6 +1146,8 @@ export default function App() {
                       isDarkMode={isDarkMode} 
                       getApiKey={getEffectiveApiKey}
                       showToast={showToast}
+                      engineStatus={engineStatus}
+                      retryCountdown={retryCountdown}
                     />
                     
                     {/* Default Pronunciation Rules Table */}
@@ -1071,6 +1165,8 @@ export default function App() {
                       result={result} 
                       isLoading={isLoading} 
                       globalVolume={config.volume}
+                      engineStatus={engineStatus}
+                      retryCountdown={retryCountdown}
                     />
 
                     {error && (
@@ -1423,6 +1519,11 @@ export default function App() {
         defaultValue={modal.defaultValue}
         inputType={modal.inputType}
       />
+      <footer className="py-12 flex justify-center px-6">
+        <p className="text-slate-500 font-mono text-[10px] md:text-xs tracking-[0.2em] uppercase text-center max-w-xs md:max-w-none leading-relaxed opacity-60">
+          © 2026 Vlogs By Saw <span className="mx-2 hidden md:inline">•</span> <br className="md:hidden" /> Premium AI Narration
+        </p>
+      </footer>
     </div>
   );
 }

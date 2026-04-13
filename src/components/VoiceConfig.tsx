@@ -38,19 +38,21 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, isD
   }, [config.model, filteredVoices]);
 
   return (
-    <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-[32px] p-8 shadow-2xl transition-colors duration-300">
-      <div className="space-y-8">
+    <div className="glass-card rounded-[32px] p-8 sm:p-10 shadow-2xl transition-all duration-300">
+      <div className="space-y-10">
         {/* Voice Selection */}
         <div className="group">
-          <label className="flex items-center gap-2 text-lg font-medium text-slate-700 dark:text-slate-100 mb-4 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
-            <Volume2 size={20} className="text-brand-purple" />
+          <label className="flex items-center gap-3 text-lg font-bold text-slate-800 dark:text-slate-100 mb-5 group-hover:text-brand-purple transition-colors">
+            <div className="p-2 bg-brand-purple/10 rounded-lg">
+              <Volume2 size={20} className="text-brand-purple" />
+            </div>
             အသံရွေးချယ်ရန်
           </label>
           <div className="relative">
             <select
               value={config.voiceId}
               onChange={(e) => handleChange('voiceId', e.target.value)}
-              className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl px-6 py-4 text-slate-900 dark:text-white appearance-none focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all cursor-pointer font-medium"
+              className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-[20px] px-6 py-4 text-slate-900 dark:text-white appearance-none focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all cursor-pointer font-bold shadow-sm"
             >
               {filteredVoices.map((voice) => (
                 <option key={voice.id} value={voice.id} className="bg-white dark:bg-slate-950 text-slate-900 dark:text-white">
@@ -58,7 +60,7 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, isD
                 </option>
               ))}
             </select>
-            <div className="absolute right-6 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
+            <div className="absolute right-6 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
               <ChevronDown size={20} />
             </div>
           </div>
@@ -66,27 +68,29 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, isD
 
         {/* Style Instructions */}
         <div className="group">
-          <label className="flex items-center gap-2 text-lg font-medium text-slate-700 dark:text-slate-100 mb-4 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
-            <Wand2 size={20} className="text-brand-purple" />
+          <label className="flex items-center gap-3 text-lg font-bold text-slate-800 dark:text-slate-100 mb-5 group-hover:text-brand-purple transition-colors">
+            <div className="p-2 bg-brand-purple/10 rounded-lg">
+              <Wand2 size={20} className="text-brand-purple" />
+            </div>
             Style Instructions
           </label>
-          <div className="space-y-4">
+          <div className="space-y-5">
             <input
               type="text"
               value={config.styleInstruction || ''}
               onChange={(e) => handleChange('styleInstruction', e.target.value)}
               placeholder="ဥပမာ - Angry, Excited, Professional..."
-              className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl px-6 py-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all font-medium placeholder:text-slate-400"
+              className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-[20px] px-6 py-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all font-bold placeholder:text-slate-400 shadow-sm"
             />
             <div className="flex flex-wrap gap-2">
               {QUICK_STYLES.map((style) => (
                 <button
                   key={style.label}
                   onClick={() => handleChange('styleInstruction', style.value)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all border ${
                     config.styleInstruction === style.value
-                      ? 'bg-brand-purple text-white shadow-lg'
-                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                      ? 'bg-brand-purple text-white border-brand-purple shadow-lg shadow-brand-purple/30'
+                      : 'bg-white/50 dark:bg-slate-800/50 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-brand-purple/50 hover:text-brand-purple'
                   }`}
                 >
                   {style.label}
@@ -96,42 +100,44 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, isD
           </div>
         </div>
 
-        <Slider
-          label="အမြန်နှုန်း"
-          value={config.speed}
-          min={0.25}
-          max={4.0}
-          step={0.05}
-          suffix="x"
-          onChange={(v) => handleChange('speed', v)}
-          isDarkMode={isDarkMode}
-        />
-        <Slider
-          label="အသံအနိမ့်အမြင့်"
-          value={config.pitch}
-          min={-20.0}
-          max={20.0}
-          step={0.5}
-          suffix=""
-          onChange={(v) => handleChange('pitch', v)}
-          isDarkMode={isDarkMode}
-        />
-        <div className="flex items-center gap-2 px-4 py-2 bg-brand-purple/5 border border-brand-purple/10 rounded-xl">
-          <Info size={14} className="text-brand-purple shrink-0" />
-          <p className="text-[10px] text-slate-500 dark:text-slate-400">
-            Changes will apply to the next generation.
-          </p>
+        <div className="space-y-8">
+          <Slider
+            label="အမြန်နှုန်း"
+            value={config.speed}
+            min={0.25}
+            max={4.0}
+            step={0.05}
+            suffix="x"
+            onChange={(v) => handleChange('speed', v)}
+            isDarkMode={isDarkMode}
+          />
+          <Slider
+            label="အသံအနိမ့်အမြင့်"
+            value={config.pitch}
+            min={-20.0}
+            max={20.0}
+            step={0.5}
+            suffix=""
+            onChange={(v) => handleChange('pitch', v)}
+            isDarkMode={isDarkMode}
+          />
+          <div className="flex items-center gap-3 px-5 py-3 bg-brand-purple/5 border border-brand-purple/10 rounded-2xl">
+            <Info size={16} className="text-brand-purple shrink-0" />
+            <p className="text-[11px] text-slate-600 dark:text-slate-400 font-medium leading-relaxed">
+              Changes will apply to the next generation.
+            </p>
+          </div>
+          <Slider
+            label="အသံပမာဏ"
+            value={config.volume}
+            min={0}
+            max={100}
+            step={1}
+            suffix="%"
+            onChange={(v) => handleChange('volume', v)}
+            isDarkMode={isDarkMode}
+          />
         </div>
-        <Slider
-          label="အသံပမာဏ"
-          value={config.volume}
-          min={0}
-          max={100}
-          step={1}
-          suffix="%"
-          onChange={(v) => handleChange('volume', v)}
-          isDarkMode={isDarkMode}
-        />
       </div>
     </div>
   );
@@ -151,12 +157,14 @@ interface SliderProps {
 const Slider: React.FC<SliderProps> = ({ label, value, min, max, step, suffix, onChange, isDarkMode }) => {
   return (
     <div className="group">
-      <div className="flex justify-between items-center mb-4">
-        <span className="text-lg font-medium text-slate-700 dark:text-slate-100 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">{label}</span>
-        <span className="text-lg font-medium text-brand-purple">
-          {value > 0 && (label === 'Pitch' || label === 'အသံအနိမ့်အမြင့်') ? `+${value}` : value}
-          {suffix}
-        </span>
+      <div className="flex justify-between items-center mb-5">
+        <span className="text-base font-bold text-slate-700 dark:text-slate-200 group-hover:text-brand-purple transition-colors">{label}</span>
+        <div className="px-3 py-1 bg-brand-purple/10 rounded-lg">
+          <span className="text-sm font-bold text-brand-purple">
+            {value > 0 && (label === 'Pitch' || label === 'အသံအနိမ့်အမြင့်') ? `+${value}` : value}
+            {suffix}
+          </span>
+        </div>
       </div>
       <div className="relative flex items-center">
         <input

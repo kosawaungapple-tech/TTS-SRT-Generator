@@ -32,7 +32,8 @@ export const DEFAULT_RULES = [
 
 export const GEMINI_MODELS = {
   VERIFY: 'gemini-3-flash-preview',
-  LIVE: 'gemini-2.5-flash-native-audio-preview-12-2025',
+  LIVE: 'gemini-3.1-flash-live-preview',
   TTS: 'gemini-2.5-flash-preview-tts',
-  REWRITE: 'gemini-1.5-flash',
+  REWRITE: 'gemini-3-flash-preview',
+  TRANSLATE: 'gemini-3-flash-preview',
 };

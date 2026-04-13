@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { AuthorizedUser, User as RegisteredUser, SystemConfig, PronunciationRule, GlobalSettings } from '../types';
 import { db, collection, onSnapshot, query, orderBy, setDoc, doc, deleteDoc, updateDoc, handleFirestoreError, OperationType, getDoc, auth, googleProvider, signInWithPopup } from '../firebase';
+import { GeminiTTSService } from '../services/geminiService';
 import { Toast, ToastType } from './Toast';
 import { Modal, ModalType } from './Modal';
 
@@ -403,9 +404,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
   const handleSaveGlobalSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSavingKeys(true);
+    
+    // Sync api_keys array with individual keys for backward compatibility
+    const keys = [
+      globalSettings.primary_key || '',
+      globalSettings.secondary_key || '',
+      globalSettings.backup_key || ''
+    ].filter(k => k.trim());
+
     try {
       await setDoc(doc(db, 'settings', 'global'), {
         ...globalSettings,
+        api_keys: keys,
         updatedAt: new Date().toISOString()
       });
       setToast({
@@ -1218,16 +1228,62 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isAuthReady, onA
                   </button>
                 </div>
 
-                <div className="space-y-4">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Google AI Studio API Keys (One per line)</label>
-                  <textarea
-                    value={globalSettings.api_keys?.join('\n')}
-                    onChange={(e) => setGlobalSettings({ ...globalSettings, api_keys: e.target.value.split('\n') })}
-                    placeholder="Paste your API keys here, one per line..."
-                    className="w-full h-32 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm font-mono text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all resize-none"
-                  />
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 gap-4">
+                    {/* Primary Key */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between px-1">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Primary API Key</label>
+                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase ${new GeminiTTSService().getActiveKeyIndex() === 0 ? 'text-brand-purple bg-brand-purple/10' : 'text-slate-400 bg-slate-100 dark:bg-slate-800'}`}>
+                          {new GeminiTTSService().getActiveKeyIndex() === 0 ? 'Active' : 'Standby'}
+                        </span>
+                      </div>
+                      <input
+                        type={showSecrets ? "text" : "password"}
+                        value={globalSettings.primary_key || ''}
+                        onChange={(e) => setGlobalSettings({ ...globalSettings, primary_key: e.target.value })}
+                        placeholder="Enter Primary Gemini API Key..."
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm font-mono text-slate-900 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                      />
+                    </div>
+
+                    {/* Secondary Key */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between px-1">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Secondary API Key</label>
+                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase ${new GeminiTTSService().getActiveKeyIndex() === 1 ? 'text-brand-purple bg-brand-purple/10' : 'text-slate-400 bg-slate-100 dark:bg-slate-800'}`}>
+                          {new GeminiTTSService().getActiveKeyIndex() === 1 ? 'Active' : 'Backup 1'}
+                        </span>
+                      </div>
+                      <input
+                        type={showSecrets ? "text" : "password"}
+                        value={globalSettings.secondary_key || ''}
+                        onChange={(e) => setGlobalSettings({ ...globalSettings, secondary_key: e.target.value })}
+                        placeholder="Enter Secondary Gemini API Key..."
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm font-mono text-slate-900 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                      />
+                    </div>
+
+                    {/* Backup Key */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between px-1">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Backup API Key</label>
+                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase ${new GeminiTTSService().getActiveKeyIndex() === 2 ? 'text-brand-purple bg-brand-purple/10' : 'text-slate-400 bg-slate-100 dark:bg-slate-800'}`}>
+                          {new GeminiTTSService().getActiveKeyIndex() === 2 ? 'Active' : 'Backup 2'}
+                        </span>
+                      </div>
+                      <input
+                        type={showSecrets ? "text" : "password"}
+                        value={globalSettings.backup_key || ''}
+                        onChange={(e) => setGlobalSettings({ ...globalSettings, backup_key: e.target.value })}
+                        placeholder="Enter Backup Gemini API Key..."
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm font-mono text-slate-900 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                      />
+                    </div>
+                  </div>
+
                   <p className="text-[10px] text-slate-500 italic px-1">
-                    The system will automatically switch to the next key if a 429 (Rate Limit) error occurs.
+                    The system will automatically rotate through these keys if a Rate Limit (429) occurs.
                   </p>
                 </div>
 

@@ -56,7 +56,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
         onSave(apiKey.trim());
         setTimeout(() => {
           onClose();
-        }, 1500);
+        }, 2000);
       } else {
         setValidationStatus('error');
         setErrorMessage('API Key မှားယွင်းနေပါသည်။ ပြန်စစ်ပေးပါ (Invalid API Key. Please check again).');
@@ -157,7 +157,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
                   {validationStatus === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
                   <span className="text-sm font-bold">
                     {validationStatus === 'success' 
-                      ? 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ Website ကို ပြန်ဖွင့်ပါမည်။ (Settings saved. Reloading page...)' 
+                      ? 'Key Verified (Status: Active) - ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ (Settings saved!)' 
                       : errorMessage}
                   </span>
                 </motion.div>
