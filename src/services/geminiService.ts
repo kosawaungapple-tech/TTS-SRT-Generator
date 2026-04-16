@@ -33,7 +33,7 @@ export class GeminiTTSService {
     this.ai = new GoogleGenAI({ apiKey: this.apiKeys[GeminiTTSService.currentKeyIndex] || this.apiKeys[0], apiVersion: 'v1beta' });
   }
 
-  public getActiveKeyIndex(): number {
+  public static getActiveKeyIndex(): number {
     return GeminiTTSService.currentKeyIndex;
   }
 
@@ -152,6 +152,17 @@ export class GeminiTTSService {
       ? `Command: ${config.styleInstruction.trim()}. Now, read the following text: ` 
       : "Narrate the following text in a natural, clear, and cinematic voice. ";
 
+    const targetDuration = config.targetDuration;
+    const totalTargetSeconds = targetDuration ? (targetDuration.minutes * 60 + targetDuration.seconds) : 0;
+    
+    const durationConstraint = totalTargetSeconds > 0
+      ? `You are a speed-controlled narrator. Current text MUST be narrated to fit EXACTLY into ${totalTargetSeconds} seconds. 
+         If the text is too long, you MUST speak faster. If it's too short, you MUST add pauses. 
+         DO NOT exceed the limit by even one second. 
+         You are a professional voice actor. You MUST time your speech to finish EXACTLY at ${targetDuration?.minutes} minutes and ${targetDuration?.seconds} seconds (${totalTargetSeconds} seconds). Do not finish early, do not finish late. 
+         Adjust the narration speed and word count accordingly to hit the target duration with 100% precision.`
+      : "";
+
     const payload = {
       model: config.model || GEMINI_MODELS.TTS,
       contents: [{ parts: [{ text: `${styleCmd}
@@ -160,6 +171,7 @@ export class GeminiTTSService {
       Speaking rate: ${speed.toFixed(2)}x. 
       Pitch: ${pitch.toFixed(1)}. 
       Volume: ${volume}%.
+      ${durationConstraint}
       Ensure word-for-word accuracy and do not summarize: ${text}` }] }],
       config: {
         responseModalities: [Modality.AUDIO],
@@ -206,7 +218,8 @@ export class GeminiTTSService {
         // 16-bit mono = 2 bytes per sample
         const actualDuration = bytes.length / (sampleRate * 2);
         
-        const subtitles = this.generateMockSRT(text, actualDuration);
+        const effectiveDuration = totalTargetSeconds > 0 ? totalTargetSeconds : actualDuration;
+        const subtitles = this.generateMockSRT(text, effectiveDuration);
         const srtContent = subtitles.map(s => 
           `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}`
         ).join('\n\n') + '\n\n';
@@ -299,7 +312,7 @@ export class GeminiTTSService {
       throw new Error("No API Key available for translation");
     }
 
-    const prompt = `Translate the provided text into natural, professional, storytelling Burmese. Use a tone suitable for video narration. Original: ${text}`;
+    const prompt = `Translate the provided text into Natural, Cinematic, and Professional storytelling Burmese. Use a tone suitable for high-end video narration. Ensure the phrasing is concise and readable for subtitles. Original: ${text}`;
 
     let attempts = 0;
     const maxAttempts = this.apiKeys.length;
@@ -333,6 +346,54 @@ export class GeminiTTSService {
       }
     }
     throw new Error("Failed to translate content after all attempts");
+  }
+
+  async transcribeVideo(videoBase64: string, mimeType: string): Promise<string> {
+    console.log("GeminiTTSService: Transcribing video...");
+    
+    if (!this.apiKeys[GeminiTTSService.currentKeyIndex]) {
+      throw new Error("No API Key available for transcription");
+    }
+
+    const prompt = "Listen to this video carefully. Transcribe every word spoken. Output the result in a clean script format. Do not include timestamps, just the spoken text.";
+
+    let attempts = 0;
+    const maxAttempts = this.apiKeys.length;
+
+    while (attempts < maxAttempts) {
+      try {
+        const response = await this.ai.models.generateContent({
+          model: GEMINI_MODELS.REWRITE,
+          contents: {
+            parts: [
+              { inlineData: { data: videoBase64, mimeType } },
+              { text: prompt }
+            ]
+          },
+        });
+
+        const resultText = response.text;
+        if (!resultText) {
+          throw new Error("No text returned from Gemini");
+        }
+
+        return resultText.trim();
+      } catch (err: any) {
+        const isRateLimit = err.status === 429 || (err.message && err.message.includes('429'));
+        
+        if (isRateLimit && attempts < maxAttempts - 1) {
+          this.rotateKey();
+          attempts++;
+          continue;
+        }
+
+        if (isRateLimit && attempts >= maxAttempts - 1) {
+          throw new Error("RATE_LIMIT_EXHAUSTED");
+        }
+        throw err;
+      }
+    }
+    throw new Error("Failed to transcribe video after all attempts");
   }
 
   static parseSRT(srt: string): SRTSubtitle[] {
@@ -393,16 +454,22 @@ export class GeminiTTSService {
       const chunk = chunks[i];
       // Calculate weight based on character length
       const weight = chunk.length / totalChars;
-      const duration = weight * effectiveDuration;
+      let duration = weight * effectiveDuration;
+      
+      // Ensure the last subtitle ends EXACTLY at the effectiveDuration
+      let endTime = currentTime + duration;
+      if (i === chunks.length - 1) {
+        endTime = effectiveDuration;
+      }
       
       subtitles.push({
         index: i + 1,
         startTime: formatTime(currentTime),
-        endTime: formatTime(currentTime + duration),
+        endTime: formatTime(endTime),
         text: chunk
       });
       
-      currentTime += duration;
+      currentTime = endTime;
     }
 
     return subtitles;

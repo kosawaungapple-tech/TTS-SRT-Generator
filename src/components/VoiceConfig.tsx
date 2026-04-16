@@ -2,6 +2,7 @@ import React, { useMemo, useEffect } from 'react';
 import { Zap, ChevronDown, Volume2, Info, Wand2 } from 'lucide-react';
 import { TTSConfig } from '../types';
 import { VOICE_OPTIONS, MODEL_OPTIONS, MODEL_VOICE_MAPPING } from '../constants';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface VoiceConfigProps {
   config: TTSConfig;
@@ -9,16 +10,18 @@ interface VoiceConfigProps {
   isDarkMode: boolean;
 }
 
-const QUICK_STYLES = [
-  { label: 'Warm', value: 'Warm and friendly' },
-  { label: 'Professional', value: 'Professional and authoritative' },
-  { label: 'Excited', value: 'Excited and energetic' },
-  { label: 'Angry', value: 'Angry and intense' },
-  { label: 'Sad', value: 'Sad and emotional' },
-  { label: 'Whisper', value: 'Whispering and soft' },
-];
-
 export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, isDarkMode }) => {
+  const { t } = useLanguage();
+  
+  const QUICK_STYLES = [
+    { label: t('voiceConfig.styles.warm'), value: 'Warm and friendly' },
+    { label: t('voiceConfig.styles.professional'), value: 'Professional and authoritative' },
+    { label: t('voiceConfig.styles.excited'), value: 'Excited and energetic' },
+    { label: t('voiceConfig.styles.angry'), value: 'Angry and intense' },
+    { label: t('voiceConfig.styles.sad'), value: 'Sad and emotional' },
+    { label: t('voiceConfig.styles.whisper'), value: 'Whispering and soft' },
+  ];
+
   const handleChange = (key: keyof TTSConfig, value: any) => {
     setConfig({ ...config, [key]: value });
   };
@@ -47,7 +50,7 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, isD
             <div className="p-2 bg-brand-purple/10 rounded-lg">
               <Volume2 size={20} className="text-brand-purple" />
             </div>
-            အသံရွေးချယ်ရန်
+            {t('voiceConfig.voice')}
           </label>
           <div className="relative">
             <select
@@ -73,14 +76,14 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, isD
             <div className="p-2 bg-brand-purple/10 rounded-lg">
               <Wand2 size={20} className="text-brand-purple" />
             </div>
-            Style Instructions
+            {t('voiceConfig.style')}
           </label>
           <div className="space-y-5">
             <input
               type="text"
               value={config.styleInstruction || ''}
               onChange={(e) => handleChange('styleInstruction', e.target.value)}
-              placeholder="ဥပမာ - Angry, Excited, Professional..."
+              placeholder={t('voiceConfig.stylePlaceholder')}
               className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] px-6 py-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/30 transition-all font-bold placeholder:text-slate-400 shadow-inner"
             />
             <div className="flex flex-wrap gap-2">
@@ -103,17 +106,7 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, isD
 
         <div className="space-y-8">
           <Slider
-            label="အမြန်နှုန်း"
-            value={config.speed}
-            min={0.25}
-            max={4.0}
-            step={0.05}
-            suffix="x"
-            onChange={(v) => handleChange('speed', v)}
-            isDarkMode={isDarkMode}
-          />
-          <Slider
-            label="အသံအနိမ့်အမြင့်"
+            label={t('voiceConfig.pitch')}
             value={config.pitch}
             min={-20.0}
             max={20.0}
@@ -125,11 +118,11 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, isD
           <div className="flex items-center gap-3 px-5 py-3 bg-brand-purple/5 border border-brand-purple/10 rounded-2xl">
             <Info size={16} className="text-brand-purple shrink-0" />
             <p className="text-[11px] text-slate-600 dark:text-slate-400 font-medium leading-relaxed">
-              Changes will apply to the next generation.
+              {t('voiceConfig.changesApplyNext')}
             </p>
           </div>
           <Slider
-            label="အသံပမာဏ"
+            label={t('voiceConfig.volume')}
             value={config.volume}
             min={0}
             max={100}

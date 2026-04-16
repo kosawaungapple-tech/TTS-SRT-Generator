@@ -24,6 +24,20 @@ export interface AuthorizedUser {
   createdBy?: string;
 }
 
+export interface VBSUserControl {
+  vbsId: string;
+  dailyUsage: number;
+  lastUsedDate: string;
+  isUnlimited: boolean;
+  isBlocked: boolean;
+  membershipStatus?: 'standard' | 'premium';
+  customLimit?: number;
+  expiryDate?: string; // ISO date string or YYYY-MM-DD
+  updatedAt: any;
+  lastLoginAt?: string;
+  dailyTasks?: number;
+}
+
 export interface GlobalSettings {
   global_system_key?: string;
   api_keys?: string[]; // List of rotated API keys
@@ -33,6 +47,8 @@ export interface GlobalSettings {
   allow_admin_keys: boolean; // Toggle to allow users to use admin keys
   total_generations: number;
   mock_mode?: boolean;
+  transcription_daily_limit?: number;
+  transcription_public_access?: boolean;
 }
 
 export interface SystemConfig {
@@ -84,6 +100,10 @@ export interface TTSConfig {
   pitch: number;
   volume: number;
   styleInstruction?: string;
+  targetDuration?: {
+    minutes: number;
+    seconds: number;
+  };
 }
 
 export interface AudioResult {
@@ -91,4 +111,12 @@ export interface AudioResult {
   audioData: string; // base64 for download/upload
   srtContent: string;
   subtitles: SRTSubtitle[];
+}
+
+export interface ActivityLog {
+  id?: string;
+  vbsId: string;
+  type: 'login' | 'tts' | 'transcription' | 'translation' | 'recap';
+  details: string;
+  createdAt: string; // ISO string
 }

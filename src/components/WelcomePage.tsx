@@ -2,11 +2,15 @@ import React from 'react';
 import { motion } from 'motion/react';
 import { Mic, Zap, Languages, Play, ChevronRight } from 'lucide-react';
 
+import { useLanguage } from '../contexts/LanguageContext';
+
 interface WelcomePageProps {
   onEnter: () => void;
 }
 
 export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnter }) => {
+  const { t } = useLanguage();
+
   return (
     <div className="min-h-screen bg-[#020617] text-white flex flex-col items-center justify-center p-6 overflow-hidden relative">
       {/* Animated Background Elements */}
@@ -37,14 +41,13 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnter }) => {
           className="flex flex-col gap-4 md:gap-6 mb-8 md:mb-12 px-4"
         >
           <h1 className="text-3xl md:text-6xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-b from-white via-white to-purple-400 leading-tight">
-            Vlogs By Saw AI အသံဖန်တီးမှု စနစ်
+            {t('welcome.title')}
           </h1>
           <p className="text-base md:text-xl font-bold text-purple-300 tracking-wide">
-            Burmese Storytelling, TTS နှင့် Video Recap များအတွက် အကောင်းဆုံး AI နည်းပညာ။
+            {t('welcome.subtitle')}
           </p>
           <p className="text-slate-400 max-w-2xl mx-auto text-sm md:text-lg">
-            Experience high-quality narration with cutting-edge AI technology. 
-            မြန်မာစကားပြော အသံဖန်တီးမှုများအတွက် အထူးပြုလုပ်ထားပါသည်။
+            {t('welcome.description')}
           </p>
         </motion.div>
 
@@ -58,19 +61,19 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnter }) => {
           <div className="w-full flex-1">
             <FeatureCard 
               icon={<Mic className="text-purple-400" />}
-              title="သဘာဝကျသော အသံများ"
+              title={t('welcome.feature1Title')}
             />
           </div>
           <div className="w-full flex-1">
             <FeatureCard 
               icon={<Languages className="text-purple-400" />}
-              title="ကျွမ်းကျင်စွာ ဘာသာပြန်ဆိုမှု"
+              title={t('welcome.feature2Title')}
             />
           </div>
           <div className="w-full flex-1">
             <FeatureCard 
               icon={<Zap className="text-purple-400" />}
-              title="၄ ဆ ပိုမိုမြန်ဆန်သော လုပ်ဆောင်ချက်"
+              title={t('welcome.feature3Title')}
             />
           </div>
         </motion.div>
@@ -88,7 +91,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnter }) => {
             onClick={onEnter}
             className="group relative bg-brand-purple hover:bg-purple-500 text-white w-full max-w-[320px] md:max-w-md py-4 md:py-5 rounded-2xl font-black text-lg md:text-xl tracking-widest uppercase flex items-center justify-center gap-3 transition-all duration-300 shadow-[0_0_20px_rgba(168,85,247,0.3)] metallic-btn"
           >
-            စတင်အသုံးပြုမည်
+            {t('welcome.startBtn')}
             <ChevronRight className="group-hover:translate-x-1 transition-transform" />
           </motion.button>
         </motion.div>

@@ -63,6 +63,22 @@
       },
       "required": ["id", "isActive", "createdAt", "role"]
     },
+    "VBSUserControl": {
+      "title": "VBS User Control",
+      "description": "Granular control for individual VBS User IDs.",
+      "type": "object",
+      "properties": {
+        "vbsId": { "type": "string" },
+        "dailyUsage": { "type": "number" },
+        "lastUsedDate": { "type": "string" },
+        "isUnlimited": { "type": "boolean" },
+        "isBlocked": { "type": "boolean" },
+        "membershipStatus": { "type": "string", "enum": ["standard", "premium"] },
+        "expiryDate": { "type": "string", "format": "date" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["vbsId", "dailyUsage", "lastUsedDate", "isUnlimited", "isBlocked"]
+    },
     "GlobalSettings": {
       "title": "Global Settings",
       "description": "System-wide settings for API keys and monitoring.",
@@ -108,6 +124,10 @@
     "/vlogs_users/{accessCode}": {
       "schema": "AuthorizedUser",
       "description": "Authorized Access Codes for the system."
+    },
+    "/user_controls/{vbsId}": {
+      "schema": "VBSUserControl",
+      "description": "Granular control for individual VBS User IDs."
     },
     "/system_config/main": {
       "schema": "SystemConfig",

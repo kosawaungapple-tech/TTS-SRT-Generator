@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Wand2, Key, Settings, User, LogIn, LogOut, ShieldCheck, ShieldAlert, Shield, CheckCircle2, XCircle, History, Wrench, Plus, Trash2, Download, Play, Music, FileText, Eye, EyeOff, Cloud, RefreshCw, Zap, X, ExternalLink, Calendar, Clock, Mail, Wifi, Save, Lock, Info, ArrowRight, ChevronRight, Languages, Search } from 'lucide-react';
+import { AlertCircle, Wand2, Key, Settings, User, LogIn, LogOut, ShieldCheck, ShieldAlert, Shield, CheckCircle2, XCircle, History, Wrench, Plus, Trash2, Download, Play, Music, FileText, Eye, EyeOff, Cloud, RefreshCw, Zap, X, ExternalLink, Calendar, Clock, Mail, Wifi, Save, Lock, Info, ArrowRight, ChevronRight, Languages, Search, FileVideo, Clipboard } from 'lucide-react';
 import { WelcomePage } from './components/WelcomePage';
 import { Header } from './components/Header';
 import { ApiKeyModal } from './components/ApiKeyModal';
@@ -10,16 +10,21 @@ import { VoiceConfig } from './components/VoiceConfig';
 import { OutputPreview } from './components/OutputPreview';
 import { MiniAudioPlayer } from './components/MiniAudioPlayer';
 import { AdminDashboard } from './components/AdminDashboard';
+import { VideoTranscriber } from './components/VideoTranscriber';
 import { Modal, ModalType } from './components/Modal';
 import { GeminiTTSService } from './services/geminiService';
-import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, AuthorizedUser, SystemConfig } from './types';
+import { logActivity } from './services/activityService';
+import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, AuthorizedUser, SystemConfig, VBSUserControl } from './types';
 import { DEFAULT_RULES } from './constants';
+import { useLanguage } from './contexts/LanguageContext';
 import { pcmToWav } from './utils/audioUtils';
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDoc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadString, getDownloadURL } from './firebase';
 
-type Tab = 'generate' | 'translator' | 'history' | 'tools' | 'admin' | 'vbs-admin';
+type Tab = 'generate' | 'translator' | 'transcriber' | 'history' | 'tools' | 'admin' | 'vbs-admin';
 
 export default function App() {
+  const { language, t } = useLanguage();
+
   const [activeTab, setActiveTab] = useState<Tab>('generate');
   const [hasEntered, setHasEntered] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
@@ -33,6 +38,10 @@ export default function App() {
     pitch: 0,
     volume: 80,
     styleInstruction: '',
+    targetDuration: {
+      minutes: 1,
+      seconds: 46
+    }
   });
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<AudioResult | null>(null);
@@ -56,6 +65,51 @@ export default function App() {
   const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
   const [engineStatus, setEngineStatus] = useState<'ready' | 'cooling' | 'limit'>('ready');
   const [retryCountdown, setRetryCountdown] = useState(0);
+  const [isConfigLoading, setIsConfigLoading] = useState(false); // Default to false to bypass loading screen if env vars missing
+  const [isAdminRoute, setIsAdminRoute] = useState(window.location.pathname === '/vbs-admin');
+  const [isAdminConfigRoute, setIsAdminConfigRoute] = useState(window.location.pathname === '/vbs-admin-config');
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
+
+  const [vbsId, setVbsId] = useState<string | null>(localStorage.getItem('VBS_USER_ID'));
+  const [userControl, setUserControl] = useState<VBSUserControl | null>(null);
+
+  useEffect(() => {
+    if (!vbsId) {
+      const newId = `VBS-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+      localStorage.setItem('VBS_USER_ID', newId);
+      setVbsId(newId);
+    }
+  }, [vbsId]);
+
+  // Use this for global notifications or debug
+  useEffect(() => {
+    if (vbsId && isAuthReady && auth.currentUser) {
+      const unsubscribe = onSnapshot(doc(db, 'user_controls', vbsId), (docSnap) => {
+        if (docSnap.exists()) {
+          setUserControl(docSnap.data() as VBSUserControl);
+        } else {
+          const initialControl: VBSUserControl = {
+            vbsId,
+            dailyUsage: 0,
+            lastUsedDate: new Date().toDateString(),
+            isUnlimited: false,
+            isBlocked: false,
+            membershipStatus: 'standard',
+            updatedAt: new Date()
+          };
+          setDoc(doc(db, 'user_controls', vbsId), initialControl).catch(err => {
+            console.error("Failed to initialize user control:", err);
+          });
+          setUserControl(initialControl);
+        }
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, `user_controls/${vbsId}`);
+      });
+      return () => unsubscribe();
+    }
+  }, [vbsId, isAuthReady]);
 
   const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -115,12 +169,6 @@ export default function App() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historySearch, setHistorySearch] = useState('');
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
-  const [isConfigLoading, setIsConfigLoading] = useState(false); // Default to false to bypass loading screen if env vars missing
-  const [isAdminRoute, setIsAdminRoute] = useState(window.location.pathname === '/vbs-admin');
-  const [isAuthReady, setIsAuthReady] = useState(false);
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const [userId, setUserId] = useState<string | null>(null);
-
   // Translator State
   const [sourceText, setSourceText] = useState('');
   const [translatedText, setTranslatedText] = useState('');
@@ -138,6 +186,10 @@ export default function App() {
     setIsTranslating(true);
     setEngineStatus('ready');
 
+    if (accessCode) {
+      logActivity(accessCode, 'translation', `Translated text: ${sourceText.substring(0, 50)}${sourceText.length > 50 ? '...' : ''}`);
+    }
+
     const runTranslation = async (retryAttempt = 0): Promise<void> => {
       try {
         const gemini = new GeminiTTSService(apiKey);
@@ -145,7 +197,7 @@ export default function App() {
 
         setTranslatedText(resultText);
         setEngineStatus('ready');
-        showToast('ဘာသာပြန်ဆိုမှု အောင်မြင်ပါသည်။ (Translation successful!)', 'success');
+        showToast(t('translator.translatedSuccess'), 'success');
       } catch (err: any) {
         console.error('Translation failed:', err);
         const isRateLimit = err.message === 'RATE_LIMIT_EXHAUSTED' || 
@@ -174,9 +226,9 @@ export default function App() {
 
         if (isRateLimit) {
           setEngineStatus('limit');
-          showToast('Your API Key has reached its temporary limit. The system will resume shortly.', 'error');
+          showToast(t('errors.rateLimit'), 'error');
         } else {
-          showToast('ဘာသာပြန်ဆိုမှု မအောင်မြင်ပါ။ (Translation failed. Please check your connection.)', 'error');
+          showToast(t('translator.translatedFailed'), 'error');
         }
       } finally {
         if (retryAttempt >= 0) {
@@ -193,7 +245,7 @@ export default function App() {
     if (!translatedText.trim()) return;
     setText(translatedText);
     setActiveTab('generate');
-    showToast('စာသားကို Generator သို့ ပို့လိုက်ပါပြီ။ (Sent to Generator!)', 'success');
+    showToast(t('translator.sentToGenerator'), 'success');
   };
 
   // Auth & Access State (Custom)
@@ -223,6 +275,14 @@ export default function App() {
     message: '',
     type: 'alert',
   });
+
+  // Sync vbsId with accessCode if user is logged in
+  useEffect(() => {
+    if (isAccessGranted && accessCode && vbsId !== accessCode) {
+      setVbsId(accessCode);
+      localStorage.setItem('VBS_USER_ID', accessCode);
+    }
+  }, [isAccessGranted, accessCode, vbsId]);
 
   const openModal = (config: Partial<Omit<typeof modal, 'isOpen'>> & { title: string; message: string }) => {
     setModal({
@@ -260,8 +320,9 @@ export default function App() {
 
   useEffect(() => {
     const handleLocationChange = () => {
-      const isRoute = window.location.pathname === '/vbs-admin';
-      setIsAdminRoute(isRoute);
+      const path = window.location.pathname;
+      setIsAdminRoute(path === '/vbs-admin');
+      setIsAdminConfigRoute(path === '/vbs-admin-config');
     };
     
     handleLocationChange();
@@ -293,6 +354,8 @@ export default function App() {
 
   // Check for existing session
   useEffect(() => {
+    if (!isAuthReady || !auth.currentUser) return;
+
     const granted = localStorage.getItem('vbs_access_granted') === 'true';
     const code = localStorage.getItem('vbs_access_code');
     if (granted && code) {
@@ -344,7 +407,7 @@ export default function App() {
 
   // Listen for Global Settings
   useEffect(() => {
-    if (!isAccessGranted || !isAuthReady) return;
+    if (!isAccessGranted || !isAuthReady || !auth.currentUser) return;
     
     const unsubscribe = onSnapshot(doc(db, 'settings', 'global'), (snapshot) => {
       if (snapshot.exists()) {
@@ -362,7 +425,7 @@ export default function App() {
 
   // Listen for System Config
   useEffect(() => {
-    if (!isAccessGranted || !isAuthReady) return;
+    if (!isAccessGranted || !isAuthReady || !auth.currentUser) return;
     
     const unsubscribe = onSnapshot(doc(db, 'system_config', 'main'), (snapshot) => {
       if (snapshot.exists()) {
@@ -395,7 +458,7 @@ export default function App() {
 
   // Fetch History
   useEffect(() => {
-    if (isAccessGranted && isAuthReady && accessCode && activeTab === 'history') {
+    if (isAccessGranted && isAuthReady && auth.currentUser && accessCode && activeTab === 'history') {
       setIsHistoryLoading(true);
       const q = query(collection(db, 'history'), where('userId', '==', accessCode), orderBy('createdAt', 'desc'));
       const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -412,7 +475,7 @@ export default function App() {
 
   // Seed default admin if collection is empty
   useEffect(() => {
-    if (!isAuthReady) return;
+    if (!isAuthReady || !auth.currentUser) return;
     const seedDefaultAdmin = async () => {
       try {
         // Seed SAW-ADMIN-2026
@@ -476,6 +539,9 @@ export default function App() {
         try {
           setIsAccessGranted(true);
           setAccessCode(code);
+          // Sync vbsId with accessCode for admin
+          setVbsId(code);
+          localStorage.setItem('VBS_USER_ID', code);
           setProfile({
             id: 'saw_vlogs_2026',
             note: 'Admin Saw',
@@ -491,7 +557,7 @@ export default function App() {
           setTimeout(() => {
             setToast(null);
             window.history.pushState({}, '', '/vbs-admin');
-            window.dispatchEvent(new PopStateEvent('popstate'));
+            window.dispatchEvent(new Event('popstate'));
           }, 1500);
         } catch (err) {
           console.error('Admin login error:', err);
@@ -528,7 +594,7 @@ export default function App() {
       // Check password if it exists in DB
       if (codeData.password && codeData.password.trim() !== '' && codeData.password !== passwordInput.trim()) {
         console.warn('Invalid password for access code');
-        setError('Invalid Password for this Access Code.');
+        setError(t('auth.invalidPassword'));
         return;
       }
 
@@ -537,7 +603,7 @@ export default function App() {
         const expiry = new Date(codeData.expiryDate);
         if (expiry < new Date()) {
           console.warn('Access Code has expired');
-          setError('Your account has expired. Please contact Admin Saw for renewal.');
+          setError(t('auth.expired'));
           return;
         }
       }
@@ -545,13 +611,16 @@ export default function App() {
       // Requirement 3: If document exists AND isActive is true, grant access immediately
       if (!codeData.isActive) {
         console.warn('Access Code is inactive');
-        setError('This Access Code has been deactivated.');
+        setError(t('auth.deactivated'));
         return;
       }
 
       // Success
       setIsAccessGranted(true);
       setAccessCode(code);
+      // Sync vbsId with accessCode for regular user
+      setVbsId(code);
+      localStorage.setItem('VBS_USER_ID', code);
       setProfile(codeData);
       
       // Sync API Key from Firestore to LocalStorage if present
@@ -559,6 +628,9 @@ export default function App() {
         localStorage.setItem('VLOGS_BY_SAW_API_KEY', codeData.api_key_stored);
         setLocalApiKey(codeData.api_key_stored);
       }
+      
+      // Log successful login
+      logActivity(code, 'login', 'User logged into the platform');
       
       // Requirement 3: Save user session to localStorage
       localStorage.setItem('vbs_access_granted', 'true');
@@ -728,6 +800,12 @@ export default function App() {
     // Direct Fetching from LocalStorage as requested - Strict Validation
     const effectiveKey = getEffectiveApiKey();
     
+    const totalTargetSeconds = (config.targetDuration?.minutes || 0) * 60 + (config.targetDuration?.seconds || 0);
+    if (totalTargetSeconds <= 0) {
+      setError('Please set a target duration of at least 1 second.');
+      return;
+    }
+    
     if (!effectiveKey) {
       console.warn("App: Generation blocked - No API Key found. Opening settings modal.");
       openModal({
@@ -790,6 +868,11 @@ export default function App() {
         
         setResult(audioResult);
         setEngineStatus('ready');
+
+        // Log successful TTS process
+        if (accessCode && !audioResult.isSimulation) {
+          logActivity(accessCode, 'tts', `Generated prompt: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`);
+        }
 
         // Save to History (Asynchronous if enabled)
         if (saveToHistory && accessCode && !audioResult.isSimulation) {
@@ -993,6 +1076,115 @@ export default function App() {
     }
   };
 
+  const isVbsAdmin = profile?.role === 'admin' || accessCode === 'saw_vlogs_2026';
+
+  const isExpired = useMemo(() => {
+    if (!userControl?.expiryDate || isVbsAdmin) return false;
+    try {
+      const expiry = new Date(userControl.expiryDate);
+      if (isNaN(expiry.getTime())) return false;
+      expiry.setHours(23, 59, 59, 999);
+      return expiry.getTime() < Date.now();
+    } catch (e) {
+      console.error("Date calculation error:", e);
+      return false;
+    }
+  }, [userControl?.expiryDate, isVbsAdmin]);
+
+  const daysUntilExpiry = useMemo(() => {
+    if (!userControl?.expiryDate || isVbsAdmin) return null;
+    try {
+      const expiry = new Date(userControl.expiryDate);
+      if (isNaN(expiry.getTime())) return null;
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      expiry.setHours(0, 0, 0, 0);
+      const diffTime = expiry.getTime() - today.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      return diffDays;
+    } catch (e) {
+      console.error("Days until expiry calculation error:", e);
+      return null;
+    }
+  }, [userControl?.expiryDate, isVbsAdmin]);
+
+  const isPremium = isVbsAdmin || (userControl?.membershipStatus === 'premium' && !isExpired);
+
+  useEffect(() => {
+    if (isExpired && userControl?.isUnlimited) {
+      // Automatically show toast if they just expired
+      showToast("သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ။ Admin ထံ ဆက်သွယ်ပါ။", "error");
+    }
+  }, [isExpired, userControl?.isUnlimited]);
+
+  // Auto-scroll to Output Preview when generation is complete
+  useEffect(() => {
+    if (!isLoading && result && activeTab === 'generate') {
+      const timer = setTimeout(() => {
+        const element = document.getElementById('output-preview-container');
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [isLoading, result, activeTab]);
+
+  const NavTab = ({ id, icon, label, tooltip, onClick, active, locked = false }: {
+    id: Tab;
+    icon: React.ReactNode;
+    label: string;
+    tooltip: string;
+    onClick: () => void;
+    active: boolean;
+    locked?: boolean;
+  }) => {
+    const [isHovered, setIsHovered] = useState(false);
+    
+    return (
+      <div className="relative">
+        <button
+          onClick={onClick}
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
+          className={`px-3 sm:px-6 py-2.5 sm:py-3 rounded-[16px] sm:rounded-[18px] text-xs sm:text-sm font-bold transition-all flex items-center gap-2 relative group ${
+            active 
+              ? 'bg-brand-purple text-white shadow-[0_0_20px_rgba(139,92,246,0.6)] scale-[1.02] sm:scale-[1.05] z-10' 
+              : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-white/5 dark:hover:bg-white/5'
+          }`}
+        >
+          <div className={`${active ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]' : 'group-hover:scale-110 transition-transform'}`}>
+            {locked && !active ? <Lock size={16} className="text-rose-400" /> : icon}
+          </div>
+          <span className={`${active ? 'inline' : 'hidden sm:inline'} text-[10px] sm:text-xs tracking-tight whitespace-nowrap`}>
+            {label}
+          </span>
+          
+          {active && (
+            <div className="absolute inset-0 bg-brand-purple/20 blur-xl rounded-full -z-10" />
+          )}
+        </button>
+
+        <AnimatePresence>
+          {isHovered && (
+            <motion.div
+              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 10, scale: 0.95 }}
+              className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl border border-white/20 bg-white/10 backdrop-blur-md dark:bg-black/20 text-[10px] font-bold text-slate-800 dark:text-white whitespace-nowrap shadow-2xl z-50 pointer-events-none"
+            >
+              <div className="flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-brand-purple animate-pulse" />
+                {tooltip}
+              </div>
+              <div className="absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent border-t-white/10" />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  };
+
   if (!hasEntered) {
     return <WelcomePage onEnter={() => setHasEntered(true)} />;
   }
@@ -1015,16 +1207,33 @@ export default function App() {
       <main className="flex-1 container mx-auto px-4 sm:px-6 py-6 sm:py-8 overflow-x-hidden">
         {isConfigLoading ? (
           <div className="flex flex-col items-center justify-center py-40">
-            <RefreshCw size={48} className="text-brand-purple animate-spin mb-4" />
-            <p className="text-slate-500 font-medium">Initializing Narration Engine...</p>
+            <div className="flex items-center justify-center gap-1.5 h-12 mb-6">
+              {[...Array(8)].map((_, i) => (
+                <motion.div
+                  key={i}
+                  className="w-1.5 bg-brand-purple rounded-full"
+                  animate={{
+                    height: [16, 40, 16],
+                    opacity: [0.5, 1, 0.5],
+                  }}
+                  transition={{
+                    duration: 0.8,
+                    repeat: Infinity,
+                    delay: i * 0.1,
+                  }}
+                />
+              ))}
+            </div>
+            <p className="text-slate-500 font-bold uppercase tracking-widest text-xs animate-pulse">Initializing Narration Engine...</p>
           </div>
-        ) : isAdminRoute ? (
+        ) : (isAdminRoute || isAdminConfigRoute) ? (
           <AdminDashboard 
             isAuthReady={isAuthReady} 
             onAdminLogin={(code) => {
               setIsAccessGranted(true);
               setAccessCode(code);
             }}
+            configOnly={isAdminConfigRoute}
           />
         ) : !isAccessGranted ? (
           <div className="flex flex-col items-center justify-center py-20 text-center px-4">
@@ -1034,106 +1243,129 @@ export default function App() {
             
             <div className="w-full max-w-md space-y-8 premium-glass p-10 rounded-[40px] shadow-2xl neon-glow-indigo relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-brand-purple/10 blur-[60px] -z-10" />
-              <div>
-                <h2 className="text-3xl sm:text-4xl font-bold mb-4 text-slate-900 dark:text-white tracking-tight">Narration Engine</h2>
-                <p className="text-slate-600 dark:text-slate-400 text-sm sm:text-base leading-relaxed font-medium">
-                  Please enter your unique User ID (Access Code) to start generating professional Myanmar voiceovers.
-                </p>
-              </div>
-              
-              <form onSubmit={handleLogin} className="space-y-5">
-                <div className="relative">
-                  <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
-                  <input
-                    type="text"
-                    value={accessCodeInput}
-                    onChange={(e) => {
-                      setAccessCodeInput(e.target.value);
-                      if (isStepTwo) setIsStepTwo(false);
-                    }}
-                    placeholder="Enter Access Code..."
-                    className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/30 transition-all shadow-inner"
-                  />
-                </div>
+          <div>
+            <h2 className="text-3xl sm:text-4xl font-bold mb-4 text-slate-900 dark:text-white tracking-tight">{t('auth.title')}</h2>
+            <p className="text-slate-600 dark:text-slate-400 text-sm sm:text-base leading-relaxed font-medium">
+              {t('auth.subtitle')}
+            </p>
+          </div>
+          
+          <form onSubmit={handleLogin} className="space-y-5">
+            <div className="relative">
+              <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
+              <input
+                type="text"
+                value={accessCodeInput}
+                onChange={(e) => {
+                  setAccessCodeInput(e.target.value);
+                  if (isStepTwo) setIsStepTwo(false);
+                }}
+                placeholder={t('auth.placeholder')}
+                className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/30 transition-all shadow-inner"
+              />
+            </div>
 
-                <AnimatePresence>
-                  {isStepTwo && (
-                    <motion.div 
-                      initial={{ opacity: 0, height: 0, marginTop: 0 }}
-                      animate={{ opacity: 1, height: 'auto', marginTop: 16 }}
-                      exit={{ opacity: 0, height: 0, marginTop: 0 }}
-                      className="relative overflow-hidden"
-                    >
-                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
-                      <input
-                        type="password"
-                        value={passwordInput}
-                        onChange={(e) => setPasswordInput(e.target.value)}
-                        placeholder="Enter Password..."
-                        className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/30 transition-all shadow-inner"
-                        required
-                        autoFocus
-                      />
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-                
-                {error && (
-                  <div className="text-red-500 text-sm font-medium flex items-center justify-center gap-2">
-                    <AlertCircle size={16} /> {error}
-                  </div>
-                )}
-                
-                <motion.button
-                  whileHover={{ scale: 1.02, boxShadow: '0 0 20px rgba(139, 92, 246, 0.4)' }}
-                  whileTap={{ scale: 0.98 }}
-                  type="submit"
-                  disabled={isVerifyingCode || !accessCodeInput.trim() || !isAuthReady}
-                  className="w-full py-4 bg-brand-purple text-white rounded-[20px] font-bold text-lg hover:bg-brand-purple/90 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-brand-purple/30 metallic-btn"
+            <AnimatePresence>
+              {isStepTwo && (
+                <motion.div 
+                  initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                  animate={{ opacity: 1, height: 'auto', marginTop: 16 }}
+                  exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                  className="relative overflow-hidden"
                 >
-                  {isVerifyingCode || !isAuthReady ? (
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-                      {!isAuthReady && <span className="text-sm">Connecting...</span>}
-                    </div>
-                  ) : (
-                    <>
-                      {isStepTwo ? 'Verify Access' : 'Continue'} 
-                      <ArrowRight size={20} />
-                    </>
-                  )}
-                </motion.button>
+                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
+                  <input
+                    type="password"
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                    placeholder={t('auth.passwordPlaceholder')}
+                    className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/30 transition-all shadow-inner"
+                    required
+                    autoFocus
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+            
+            {error && (
+              <div className="text-red-500 text-sm font-medium flex items-center justify-center gap-2">
+                <AlertCircle size={16} /> {error}
+              </div>
+            )}
+            
+            <motion.button
+              whileHover={{ scale: 1.02, boxShadow: '0 0 20px rgba(139, 92, 246, 0.4)' }}
+              whileTap={{ scale: 0.98 }}
+              type="submit"
+              disabled={isVerifyingCode || !accessCodeInput.trim() || !isAuthReady}
+              className="w-full py-4 bg-brand-purple text-white rounded-[20px] font-bold text-lg hover:bg-brand-purple/90 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-brand-purple/30 metallic-btn"
+            >
+              {isVerifyingCode || !isAuthReady ? (
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                  {!isAuthReady && <span className="text-sm">{t('auth.connecting')}</span>}
+                </div>
+              ) : (
+                <>
+                  {isStepTwo ? t('auth.verify') : t('auth.continue')} 
+                  <ArrowRight size={20} />
+                </>
+              )}
+            </motion.button>
               </form>
             </div>
           </div>
         ) : (
           <div className="space-y-8">
             {/* Tab Navigation */}
-            <div className="flex items-center gap-1 sm:gap-2 glass-card p-1.5 rounded-[20px] w-fit mx-auto shadow-2xl">
-              <button
+            <div className="flex items-center gap-1 sm:gap-2 glass-card p-1.5 rounded-[22px] w-fit mx-auto shadow-2xl relative z-40">
+              <NavTab
+                id="generate"
+                active={activeTab === 'generate'}
                 onClick={() => setActiveTab('generate')}
-                className={`px-4 sm:px-6 py-2.5 rounded-[14px] text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'generate' ? 'bg-brand-purple text-white shadow-lg shadow-brand-purple/30' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
-              >
-                <Wand2 size={18} /> <span className="hidden xs:inline">Generator</span>
-              </button>
-              <button
+                icon={<Wand2 size={18} />}
+                label={t('nav.generate')}
+                tooltip={t('tooltips.generate')}
+              />
+              <NavTab
+                id="translator"
+                active={activeTab === 'translator'}
                 onClick={() => setActiveTab('translator')}
-                className={`px-4 sm:px-6 py-2.5 rounded-[14px] text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'translator' ? 'bg-brand-purple text-white shadow-lg shadow-brand-purple/30' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
-              >
-                <Languages size={18} /> <span className="hidden xs:inline">Translator</span>
-              </button>
-              <button
+                icon={<Languages size={18} />}
+                label={t('nav.translator')}
+                tooltip={t('tooltips.translator')}
+              />
+              <NavTab
+                id="transcriber"
+                active={activeTab === 'transcriber'}
+                onClick={() => {
+                  if (!isPremium) {
+                    showToast(t('video.premiumRequired'), "error");
+                    return;
+                  }
+                  setActiveTab('transcriber');
+                }}
+                icon={<FileVideo size={18} />}
+                label={t('nav.transcriber')}
+                tooltip={isPremium ? t('tooltips.premiumActive') : t('tooltips.transcriber')}
+                locked={!isPremium}
+              />
+              <NavTab
+                id="history"
+                active={activeTab === 'history'}
                 onClick={() => setActiveTab('history')}
-                className={`px-4 sm:px-6 py-2.5 rounded-[14px] text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'history' ? 'bg-brand-purple text-white shadow-lg shadow-brand-purple/30' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
-              >
-                <History size={18} /> <span className="hidden xs:inline">History</span>
-              </button>
-              <button
+                icon={<History size={18} />}
+                label={t('nav.history')}
+                tooltip={t('tooltips.history')}
+              />
+              <NavTab
+                id="tools"
+                active={activeTab === 'tools'}
                 onClick={() => setActiveTab('tools')}
-                className={`px-4 sm:px-6 py-2.5 rounded-[14px] text-xs sm:text-sm font-bold transition-all flex items-center gap-2 relative ${activeTab === 'tools' ? 'bg-brand-purple text-white shadow-lg shadow-brand-purple/30' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
-              >
-                <Wrench size={18} /> <span className="hidden xs:inline">Tools</span>
-              </button>
+                icon={<Settings size={18} />}
+                label={t('nav.settings')}
+                tooltip={t('tooltips.settings')}
+              />
             </div>
 
             <AnimatePresence mode="wait">
@@ -1168,14 +1400,6 @@ export default function App() {
                       showCustomRules={false}
                     />
 
-                    <OutputPreview 
-                      result={result} 
-                      isLoading={isLoading} 
-                      globalVolume={config.volume}
-                      engineStatus={engineStatus}
-                      retryCountdown={retryCountdown}
-                    />
-
                     {error && (
                       <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-start gap-3 text-red-500">
                         <AlertCircle size={20} className="shrink-0 mt-0.5" />
@@ -1208,13 +1432,77 @@ export default function App() {
                         </button>
                       </div>
 
+                      {/* Target Duration Input */}
+                      <div className="premium-glass rounded-[24px] p-6 border border-white/5 space-y-4 shadow-xl">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                            <Clock size={14} className="text-brand-purple" /> ဗီဒီယိုကြာချိန် သတ်မှတ်ရန်
+                          </label>
+                          {(text.length > ((config.targetDuration?.minutes || 0) * 60 + (config.targetDuration?.seconds || 0)) * 15) && (
+                            <motion.span 
+                              initial={{ opacity: 0, scale: 0.9 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              className="text-[10px] font-bold text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20"
+                            >
+                              AI will condense long text
+                            </motion.span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-4">
+                          <div className="flex-1 bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-xl p-3 flex flex-col items-center gap-1 shadow-inner group transition-all focus-within:ring-2 focus-within:ring-brand-purple/30">
+                            <input 
+                              type="number" 
+                              min="0"
+                              max="59"
+                              value={config.targetDuration?.minutes || 0}
+                              onChange={(e) => setConfig({
+                                ...config, 
+                                targetDuration: { ...config.targetDuration!, minutes: parseInt(e.target.value) || 0 }
+                              })}
+                              className="bg-transparent text-2xl font-mono font-bold text-center w-full focus:outline-none text-slate-900 dark:text-white"
+                            />
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">မိနစ်</span>
+                          </div>
+                          <div className="text-2xl font-bold text-slate-300 dark:text-slate-700">:</div>
+                          <div className="flex-1 bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-xl p-3 flex flex-col items-center gap-1 shadow-inner group transition-all focus-within:ring-2 focus-within:ring-brand-purple/30">
+                            <input 
+                              type="number" 
+                              min="0"
+                              max="59"
+                              value={config.targetDuration?.seconds || 0}
+                              onChange={(e) => setConfig({
+                                ...config, 
+                                targetDuration: { ...config.targetDuration!, seconds: parseInt(e.target.value) || 0 }
+                              })}
+                              className="bg-transparent text-2xl font-mono font-bold text-center w-full focus:outline-none text-slate-900 dark:text-white"
+                            />
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">စက္ကန့်</span>
+                          </div>
+                        </div>
+                      </div>
+
                       <button
                         onClick={handleGenerate}
                         disabled={isLoading}
                         className={`w-full py-6 rounded-[24px] font-bold text-xl shadow-2xl flex items-center justify-center gap-4 transition-all active:scale-[0.98] bg-brand-purple hover:bg-brand-purple/90 text-white shadow-brand-purple/40`}
                       >
                         {isLoading ? (
-                          <div className="w-8 h-8 border-4 border-white/20 border-t-white rounded-full animate-spin" />
+                          <div className="flex items-center gap-1 h-6">
+                            {[...Array(4)].map((_, i) => (
+                              <motion.div
+                                key={i}
+                                className="w-1.5 bg-white rounded-full"
+                                animate={{
+                                  height: [10, 24, 10],
+                                }}
+                                transition={{
+                                  duration: 0.6,
+                                  repeat: Infinity,
+                                  delay: i * 0.1,
+                                }}
+                              />
+                            ))}
+                          </div>
                         ) : (
                           <Zap size={28} fill="currentColor" />
                         )}
@@ -1228,7 +1516,95 @@ export default function App() {
                         </div>
                       </button>
                     </div>
+
+                    {/* AI Result Area - Hidden until generated */}
+                    <AnimatePresence>
+                      {(isLoading || (result && activeTab === 'generate')) && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 40, scale: 0.98 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          exit={{ opacity: 0, y: 20 }}
+                          transition={{ 
+                            type: "spring", 
+                            stiffness: 100, 
+                            damping: 20,
+                            duration: 0.6 
+                          }}
+                          id="output-preview-container"
+                          className="mt-8"
+                        >
+                          <OutputPreview 
+                            result={result} 
+                            isLoading={isLoading} 
+                            globalVolume={config.volume}
+                            engineStatus={engineStatus}
+                            retryCountdown={retryCountdown}
+                            targetDuration={config.targetDuration}
+                            showToast={showToast}
+                          />
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
+                </motion.div>
+              )}
+
+              {activeTab === 'transcriber' && (
+                <motion.div
+                  key="transcriber"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="max-w-4xl mx-auto"
+                >
+                  {!isPremium ? (
+                    <div className="glass-card rounded-[32px] p-12 text-center space-y-6 max-w-2xl mx-auto border border-white/5">
+                      <div className="w-20 h-20 bg-rose-500/10 text-rose-500 rounded-3xl flex items-center justify-center mx-auto mb-4 border border-rose-500/20">
+                        <Lock size={40} />
+                      </div>
+                      <h3 className="text-2xl font-bold text-slate-900 dark:text-white">
+                        {isExpired ? "သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ" : "ဤသည်မှာ Premium Feature ဖြစ်ပါသည်။"}
+                      </h3>
+                      <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
+                        {isExpired 
+                          ? "သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ။ အသုံးပြုလိုပါက Admin ထံ ဆက်သွယ်၍ သက်တမ်းတိုးပါ။" 
+                          : `အသုံးပြုလိုပါက သင်၏ User ID [${vbsId}] ကို Admin ထံပေးပို့၍ ခွင့်ပြုချက်တောင်းခံပါ။`}
+                      </p>
+                      <div className="pt-4">
+                        <button 
+                          onClick={() => setActiveTab('tools')}
+                          className="px-8 py-3 bg-brand-purple text-white rounded-xl font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20"
+                        >
+                          Admin ကို ဆက်သွယ်ရန်
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <VideoTranscriber 
+                      onTranscriptionComplete={(transcribedText, duration) => {
+                        setText(transcribedText);
+                        if (duration) {
+                          const mins = Math.floor(duration / 60);
+                          const secs = Math.floor(duration % 60);
+                          setConfig(prev => ({
+                            ...prev,
+                            targetDuration: {
+                              minutes: mins,
+                              seconds: secs
+                            }
+                          }));
+                        }
+                        setActiveTab('generate');
+                        setTimeout(() => {
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }, 100);
+                      }}
+                      getApiKey={getEffectiveApiKey}
+                      showToast={showToast}
+                      isAdmin={isVbsAdmin}
+                      userControl={userControl}
+                    />
+                  )}
                 </motion.div>
               )}
 
@@ -1249,12 +1625,42 @@ export default function App() {
                         </div>
                         <h3 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">Source Text</h3>
                       </div>
-                      <textarea
-                        value={sourceText}
-                        onChange={(e) => setSourceText(e.target.value)}
-                        placeholder="Enter text to translate (English, Thai, etc.)..."
-                        className="w-full h-80 bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-[24px] px-6 py-5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all resize-none font-medium placeholder:text-slate-400 leading-relaxed"
-                      />
+                      <div className="relative group/textarea">
+                        <textarea
+                          value={sourceText}
+                          onChange={(e) => setSourceText(e.target.value)}
+                          placeholder="Enter text to translate (English, Thai, etc.)..."
+                          className="w-full h-80 bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-[24px] px-6 py-5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all resize-none font-medium placeholder:text-slate-400 leading-relaxed"
+                        />
+                        <div className="absolute top-4 right-4 flex gap-2">
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(sourceText);
+                              showToast('စာသားကို ကူးယူပြီးပါပြီ ✨', 'success');
+                            }}
+                            disabled={!sourceText}
+                            className="p-2.5 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-white/10 rounded-xl text-slate-500 hover:text-brand-purple hover:border-brand-purple/50 transition-all shadow-sm disabled:opacity-30"
+                            title="Copy"
+                          >
+                            <Clipboard size={18} />
+                          </button>
+                          <button
+                            onClick={async () => {
+                              try {
+                                const clipboardText = await navigator.clipboard.readText();
+                                setSourceText(sourceText + clipboardText);
+                                showToast('စာသားကို ထည့်သွင်းပြီးပါပြီ 📋', 'success');
+                              } catch (err) {
+                                console.error('Failed to read clipboard');
+                              }
+                            }}
+                            className="p-2.5 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-white/10 rounded-xl text-slate-500 hover:text-brand-purple hover:border-brand-purple/50 transition-all shadow-sm"
+                            title="Paste"
+                          >
+                            <Clipboard size={18} className="rotate-180" />
+                          </button>
+                        </div>
+                      </div>
                       <button
                         onClick={handleTranslate}
                         disabled={isTranslating || !sourceText.trim()}
@@ -1265,7 +1671,22 @@ export default function App() {
                         }`}
                       >
                         {isTranslating ? (
-                          <RefreshCw size={22} className="animate-spin" />
+                          <div className="flex items-center gap-0.5 h-5">
+                            {[...Array(3)].map((_, i) => (
+                              <motion.div
+                                key={i}
+                                className="w-1 bg-white rounded-full"
+                                animate={{
+                                  height: [6, 14, 6],
+                                }}
+                                transition={{
+                                  duration: 0.6,
+                                  repeat: Infinity,
+                                  delay: i * 0.1,
+                                }}
+                              />
+                            ))}
+                          </div>
                         ) : (
                           <Languages size={22} />
                         )}
@@ -1281,12 +1702,27 @@ export default function App() {
                         </div>
                         <h3 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">Burmese Result</h3>
                       </div>
-                      <textarea
-                        value={translatedText}
-                        readOnly
-                        placeholder="Burmese translation will appear here..."
-                        className="w-full h-80 bg-slate-100/50 dark:bg-slate-800/20 border border-slate-200 dark:border-slate-800 rounded-[24px] px-6 py-5 text-slate-900 dark:text-white focus:outline-none transition-all resize-none font-medium placeholder:text-slate-400 leading-relaxed"
-                      />
+                      <div className="relative group/textarea">
+                        <textarea
+                          value={translatedText}
+                          readOnly
+                          placeholder="Burmese translation will appear here..."
+                          className="w-full h-80 bg-slate-100/50 dark:bg-slate-800/20 border border-slate-200 dark:border-slate-800 rounded-[24px] px-6 py-5 text-slate-900 dark:text-white focus:outline-none transition-all resize-none font-medium placeholder:text-slate-400 leading-relaxed"
+                        />
+                        <div className="absolute top-4 right-4">
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(translatedText);
+                              showToast('စာသားကို ကူးယူပြီးပါပြီ ✨', 'success');
+                            }}
+                            disabled={!translatedText}
+                            className="p-2.5 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-white/10 rounded-xl text-slate-500 hover:text-brand-purple hover:border-brand-purple/50 transition-all shadow-sm disabled:opacity-30"
+                            title="Copy"
+                          >
+                            <Clipboard size={18} />
+                          </button>
+                        </div>
+                      </div>
                       <button
                         onClick={sendToGenerator}
                         disabled={!translatedText.trim()}
@@ -1318,15 +1754,15 @@ export default function App() {
                           <div className="p-2.5 bg-brand-purple/10 rounded-xl text-brand-purple">
                             <History size={28} />
                           </div>
-                          Generation History
+                          {t('history.title')}
                         </h2>
-                        <p className="text-slate-500 dark:text-slate-400 text-sm mt-2 font-medium">Manage and re-download your previous professional narrations</p>
+                        <p className="text-slate-500 dark:text-slate-400 text-sm mt-2 font-medium">{t('history.subtitle')}</p>
                       </div>
                       
                       <div className="relative flex-1 max-w-lg">
                         <input
                           type="text"
-                          placeholder="Search history by text..."
+                          placeholder={t('history.search')}
                           value={historySearch}
                           onChange={(e) => setHistorySearch(e.target.value)}
                           className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-[20px] px-6 py-4 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all pr-14 placeholder:text-slate-400 font-medium shadow-sm"
@@ -1343,15 +1779,15 @@ export default function App() {
                           <div className="w-14 h-14 border-4 border-brand-purple/20 border-t-brand-purple rounded-full animate-spin" />
                           <History size={20} className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-brand-purple animate-pulse" />
                         </div>
-                        <p className="text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest text-xs">Loading your history...</p>
+                        <p className="text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest text-xs">{t('history.loading')}</p>
                       </div>
                     ) : filteredHistory.length === 0 ? (
                       <div className="text-center py-32 bg-slate-50/50 dark:bg-slate-950/50 rounded-[32px] border border-dashed border-slate-200 dark:border-slate-800">
                         <div className="w-20 h-20 bg-white dark:bg-white/5 rounded-full flex items-center justify-center mx-auto mb-6 text-slate-400 dark:text-slate-600 shadow-inner">
                           <History size={40} />
                         </div>
-                        <h3 className="text-xl font-bold text-slate-900 dark:text-slate-300">No results found</h3>
-                        <p className="text-slate-500 dark:text-slate-500 text-sm mt-2 max-w-xs mx-auto leading-relaxed">Try adjusting your search or start generating professional voiceovers now!</p>
+                        <h3 className="text-xl font-bold text-slate-900 dark:text-slate-300">{t('history.noResults')}</h3>
+                        <p className="text-slate-500 dark:text-slate-500 text-sm mt-2 max-w-xs mx-auto leading-relaxed">{t('history.adjustSearch')}</p>
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 gap-6">
@@ -1375,30 +1811,40 @@ export default function App() {
                               
                               <div className="flex items-center gap-3 shrink-0">
                                 <button 
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(item.text);
+                                    showToast(t('generate.copySuccess'), 'success');
+                                  }}
+                                  className="p-3 bg-slate-100 dark:bg-white/5 text-slate-500 rounded-[14px] hover:bg-brand-purple hover:text-white transition-all border border-slate-200 dark:border-white/10 shadow-sm"
+                                  title={t('history.copyText')}
+                                >
+                                  <Clipboard size={18} />
+                                </button>
+                                <button 
                                   onClick={() => playFromHistory(item)}
                                   className="flex items-center gap-3 px-6 py-3 bg-brand-purple text-white rounded-[16px] text-sm font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/30 active:scale-95"
                                 >
-                                  <Play size={16} fill="currentColor" /> Play
+                                  <Play size={16} fill="currentColor" /> {t('history.play')}
                                 </button>
                                 <div className="h-10 w-[1px] bg-slate-200 dark:bg-slate-800 mx-1" />
                                 <button 
                                   onClick={() => handleDownloadAudio(item.audioStorageUrl || '', `narration-${item.id}.mp3`)}
                                   className="p-3 bg-blue-500/10 text-blue-500 rounded-[14px] hover:bg-blue-500 hover:text-white transition-all border border-blue-500/20 shadow-sm"
-                                  title="Download MP3"
+                                  title={t('output.downloadMp3')}
                                 >
                                   <Music size={18} />
                                 </button>
                                 <button 
                                   onClick={() => handleDownloadSRT(item.srtStorageUrl || item.srtContent || '', `subtitles-${item.id}.srt`)}
                                   className="p-3 bg-amber-500/10 text-amber-500 rounded-[14px] hover:bg-amber-500 hover:text-white transition-all border border-amber-500/20 shadow-sm"
-                                  title="Download SRT"
+                                  title={t('output.downloadSrt')}
                                 >
                                   <FileText size={18} />
                                 </button>
                                 <button 
                                   onClick={() => handleDeleteHistory(item.id)}
                                   className="p-3 bg-rose-500/10 text-rose-500 rounded-[14px] hover:bg-rose-500 hover:text-white transition-all border border-rose-500/20 shadow-sm"
-                                  title="Delete"
+                                  title={t('common.delete')}
                                 >
                                   <Trash2 size={18} />
                                 </button>
@@ -1440,7 +1886,31 @@ export default function App() {
                           </div>
                           <div className="flex items-center gap-2 text-sm font-medium">
                             <ShieldCheck size={16} className="text-brand-purple" />
-                            Premium Account
+                            {isPremium ? 'အဆင့်မြင့် (Premium) အသုံးပြုသူ' : 'သာမန် (Standard) အသုံးပြုသူ'}
+                          </div>
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            <Calendar size={16} className="text-brand-purple" />
+                            {isVbsAdmin ? (
+                              "သက်တမ်း: Lifetime Premium"
+                            ) : (userControl?.membershipStatus === 'premium' || userControl?.isUnlimited) ? (
+                              <div className="flex items-center gap-2">
+                                <span>အကောင့်သက်တမ်းကုန်ဆုံးရက်: {userControl.expiryDate ? (
+                                  (() => {
+                                    try {
+                                      const d = new Date(userControl.expiryDate);
+                                      return isNaN(d.getTime()) ? 'မာစတာအကောင့် (Master)' : d.toLocaleDateString('en-GB');
+                                    } catch(e) { return 'မာစတာအကောင့် (Master)'; }
+                                  })()
+                                ) : 'မာစတာအကောင့် (Master)'}</span>
+                                {daysUntilExpiry !== null && daysUntilExpiry <= 3 && daysUntilExpiry >= 0 && (
+                                  <span className="px-2 py-0.5 bg-amber-500/10 text-amber-500 rounded-md text-[10px] font-bold animate-pulse border border-amber-500/20">
+                                    {daysUntilExpiry === 0 ? "ယနေ့ ကုန်ဆုံးပါမည်" : `${daysUntilExpiry} ရက်သာ လိုပါတော့သည်`}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              "သက်တမ်း: Standard User"
+                            )}
                           </div>
                         </div>
                         
@@ -1495,6 +1965,7 @@ export default function App() {
         onSave={handleSaveApiKeyFromModal}
         onClear={handleClearApiKey}
         initialKey={localApiKey || ''}
+        vbsId={vbsId}
       />
       <AnimatePresence>
         {toast && (

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Sun, Moon, Settings, Mic2, User, ChevronDown, LogOut, ShieldCheck, Calendar, UserCircle } from 'lucide-react';
+import { Sun, Moon, Settings, Mic2, User, ChevronDown, LogOut, ShieldCheck, Calendar, UserCircle, Globe } from 'lucide-react';
 import { AuthorizedUser } from '../types';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface HeaderProps {
   isDarkMode: boolean;
@@ -23,6 +24,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const { language, setLanguage, t } = useLanguage();
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -38,7 +40,7 @@ export const Header: React.FC<HeaderProps> = ({
     if (!dateStr) return 'N/A';
     try {
       const date = new Date(dateStr);
-      return date.toLocaleDateString('en-GB'); // DD/MM/YYYY
+      return date.toLocaleDateString(language === 'mm' ? 'my-MM' : 'en-GB'); 
     } catch (e) {
       return dateStr;
     }
@@ -62,16 +64,29 @@ export const Header: React.FC<HeaderProps> = ({
               Vlogs By Saw
             </h1>
             <p className="text-[9px] sm:text-[10px] uppercase tracking-[0.2em] bg-clip-text text-transparent bg-gradient-to-r from-brand-purple to-neon-magenta font-bold mt-1 opacity-90">
-              Narration Engine
+              {t('auth.title')}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2 sm:gap-4">
           <button
+            onClick={() => setLanguage(language === 'mm' ? 'en' : 'mm')}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-[12px] border transition-all text-[11px] font-bold uppercase tracking-wider ${
+              language === 'mm' 
+                ? 'bg-amber-500/10 text-amber-500 border-amber-500/20' 
+                : 'bg-blue-500/10 text-blue-500 border-blue-500/20'
+            }`}
+            title="Switch Language"
+          >
+            <Globe size={14} />
+            {language === 'mm' ? 'Burmese (MM)' : 'English (EN)'}
+          </button>
+
+          <button
             onClick={toggleTheme}
             className="p-2 sm:p-2.5 rounded-[12px] hover:bg-slate-100 dark:hover:bg-white/5 transition-all text-slate-500 dark:text-slate-400 border border-transparent hover:border-slate-200 dark:hover:border-white/10"
-            title="Toggle Theme"
+            title={language === 'mm' ? 'Theme ပြောင်းရန်' : 'Toggle Theme'}
           >
             {isDarkMode ? <Sun size={18} className="sm:w-5 sm:h-5 text-amber-400" /> : <Moon size={18} className="sm:w-5 sm:h-5 text-slate-700" />}
           </button>
@@ -85,7 +100,7 @@ export const Header: React.FC<HeaderProps> = ({
                   }}
                   className="px-3 py-1.5 sm:px-4 sm:py-2 bg-brand-purple/10 dark:bg-brand-purple/20 text-brand-purple border border-brand-purple/20 dark:border-brand-purple/30 rounded-[12px] text-[10px] font-bold uppercase tracking-wider hover:bg-brand-purple hover:text-white transition-all shadow-sm"
                 >
-                  Admin
+                  {t('nav.admin')}
                 </button>
               )}
               
@@ -111,11 +126,11 @@ export const Header: React.FC<HeaderProps> = ({
                         </div>
                         <div className="overflow-hidden">
                           <h3 className="font-bold text-slate-900 dark:text-white truncate">
-                            {profile?.note || profile?.label || 'Saw User'}
+                            {profile?.note || profile?.label || (language === 'mm' ? 'Saw အသုံးပြုသူ' : 'Saw User')}
                           </h3>
                           <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-emerald-500">
                             <ShieldCheck size={12} />
-                            အကောင့်အခြေအနေ: Active
+                            {language === 'mm' ? 'အကောင့်အခြေအနေ: Active' : 'Account Status: Active'}
                           </div>
                         </div>
                       </div>
@@ -125,7 +140,7 @@ export const Header: React.FC<HeaderProps> = ({
                         <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-white/5 border border-slate-100 dark:border-white/5">
                           <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                             <Calendar size={14} />
-                            သက်တမ်းကုန်ဆုံးရက်
+                            {t('admin.expiry')}
                           </div>
                           <div className="text-xs font-bold text-slate-900 dark:text-white">
                             {formatDate(profile?.expiryDate)}
@@ -143,7 +158,7 @@ export const Header: React.FC<HeaderProps> = ({
                           className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-medium text-rose-500 hover:bg-rose-500/10 transition-colors text-left"
                         >
                           <LogOut size={16} />
-                          Sign Out
+                          {t('settings.logout')}
                         </button>
                       </div>
                     </div>

@@ -1,0 +1,300 @@
+
+export type Language = 'mm' | 'en';
+
+export const translations = {
+  // Navigation Tabs
+  nav: {
+    generate: { en: "Generate Voice", mm: "အသံထုတ်ယူခြင်း" },
+    translator: { en: "AI Translator", mm: "ဘာသာပြန်" },
+    transcriber: { en: "Recap Video", mm: "Recap ဗီဒီယို" },
+    history: { en: "History", mm: "မှတ်တမ်း" },
+    settings: { en: "Settings", mm: "ပြင်ဆင်ချက်" },
+    admin: { en: "Admin", mm: "စီမံခန့်ခွဲသူ" }
+  },
+  
+  // Tooltips
+  tooltips: {
+    generate: { en: "Audio Extraction / AI Narration", mm: "AI အသံထုတ်ယူခြင်း နှင့် ဇာတ်လမ်းပြောပြခြင်း" },
+    translator: { en: "AI Translation Tool", mm: "AI ဘာသာပြန်ကိရိယာ" },
+    transcriber: { en: "Video-to-Text Recap Transcription", mm: "Recap ဗီဒီယိုမှ စာသားသို့ ပြောင်းလဲခြင်း" },
+    history: { en: "Your Generation History", mm: "ယခင်ပြုလုပ်ထားသော မှတ်တမ်းများ" },
+    settings: { en: "Account & App Settings", mm: "အကောင့်နှင့် အက်ပ်ပြင်ဆင်ချက်များ" },
+    premiumActive: { en: "Premium Access Active ✨", mm: "Premium အဆင့်မြင့်ရယူနိုင်ပါသည် ✨" }
+  },
+
+  // Auth / Welcome
+  auth: {
+    title: { en: "Narration Engine", mm: "Narration Engine" },
+    subtitle: { en: "Please enter your unique User ID (Access Code) to start generating professional Myanmar voiceovers.", mm: "အရည်အသွေးမြင့် မြန်မာဘာသာ အသံနောက်ခံများ ဖန်တီးရန် သင်၏ User ID (Access Code) ကို ရိုက်ထည့်ပါ။" },
+    placeholder: { en: "Enter Access Code...", mm: "Access Code ကို ရိုက်ထည့်ပါ..." },
+    passwordPlaceholder: { en: "Enter Password...", mm: "လျှို့ဝှက်နံပါတ် ရိုက်ထည့်ပါ..." },
+    continue: { en: "Continue", mm: "ရှေ့ဆက်မည်" },
+    verify: { en: "Verify Access", mm: "အတည်ပြုမည်" },
+    connecting: { en: "Connecting...", mm: "ချိတ်ဆက်နေသည်..." },
+    invalidCode: { en: "Invalid Access Code.", mm: "Access Code မမှန်ကန်ပါ။" },
+    invalidPassword: { en: "Invalid Password.", mm: "လျှို့ဝှက်နံပါတ် မမှန်ကန်ပါ။" },
+    expired: { en: "Your account has expired. Please contact Admin Saw for renewal.", mm: "သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ။ အဆင့်မြှင့်ရန် Admin ထံ ဆက်သွယ်ပါ။" },
+    deactivated: { en: "This Access Code has been deactivated.", mm: "ဤ Access Code ကို ပိတ်ထားပါသည်။" }
+  },
+
+  // Content Studio / Generate Tab
+  generate: {
+    inputTitle: { en: "Narration Script", mm: "ဇာတ်လမ်းစာသား" },
+    inputPlaceholder: { en: "Type or paste your story content here...", mm: "ဇာတ်လမ်းစာသားများကို ဤနေရာတွင် ရိုက်ထည့်ပါ သို့မဟုတ် ကူးထည့်ပါ..." },
+    generateBtn: { en: "Generate Voiceover", mm: "AI အသံထုတ်ယူမည်" },
+    generating: { en: "Generating...", mm: "ထုတ်ယူနေပါသည်..." },
+    saveToHistory: { en: "Save to History", mm: "မှတ်တမ်းသိမ်းဆည်းမည်" },
+    saveToHistoryDesc: { en: "Keep a record of this generation for later access", mm: "နောင်ပြန်လည်အသုံးပြုနိုင်ရန် ဤမှတ်တမ်းကို သိမ်းဆည်းထားမည်" },
+    targetDuration: { en: "Target Duration", mm: "ဗီဒီယိုကြာချိန် သတ်မှတ်ရန်" },
+    durationCondense: { en: "AI will condense long text", mm: "စာသားရှည်နေသဖြင့် AI မှ လိုအပ်သလို ညှိပေးမည်" },
+    minutes: { en: "Min", mm: "မိနစ်" },
+    seconds: { en: "Sec", mm: "စက္ကန့်" },
+    contentStudio: { en: "Content Studio", mm: "Content Studio" },
+    aiPowered: { en: "AI Powered", mm: "AI နှင့် ပံ့ပိုးထားသော" },
+    engineReady: { en: "Engine: Ready", mm: "စနစ် - အသင့်ဖြစ်ပါပြီ" },
+    engineCooling: { en: "Engine: Cooling Down", mm: "စနစ် - ခေတ္တအနားယူနေသည်" },
+    engineLimit: { en: "Engine: Limit Reached", mm: "စနစ် - အကန့်အသတ်သို့ ရောက်နေသည်" },
+    rewriteBtn: { en: "Rewrite with AI", mm: "AI နှင့် ပြန်လည်ရေးသားမည်" },
+    rewriting: { en: "Rewriting...", mm: "ပြန်လည်ရေးသားနေသည်..." },
+    coolingDown: { en: "Cooling down...", mm: "စောင့်ဆိုင်းနေပါသည်..." },
+    copySuccess: { en: "Copied to clipboard ✨", mm: "စာသားကို ကူးယူပြီးပါပြီ ✨" },
+    pasteSuccess: { en: "Text pasted from clipboard 📋", mm: "စာသားကို ထည့်သွင်းပြီးပါပြီ 📋" },
+    noApiKey: { en: "No API Key found. Please add one in Settings.", mm: "ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။" },
+    rewriteSuccess: { en: "Text rewritten successfully!", mm: "စာသားကို အောင်မြင်စွာ ပြန်လည်ရေးသားပြီးပါပြီ။" },
+    characters: { en: "characters", mm: "စာလုံးရေ" }
+  },
+
+  // Voice Config
+  voiceConfig: {
+    title: { en: "Voice Configuration", mm: "အသံချိန်ညှိချက်များ" },
+    model: { en: "AI Model", mm: "AI မော်ဒယ်" },
+    voice: { en: "Voice Persona", mm: "အသံရွေးချယ်ရန်" },
+    speed: { en: "Speaking Speed", mm: "အသံအနှေးအမြန်" },
+    pitch: { en: "Voice Pitch", mm: "အသံအနိမ့်အမြင့်" },
+    volume: { en: "Volume", mm: "အသံပမာဏ" },
+    style: { en: "Narration Style Instructions", mm: "အသံနေအထား ညွှန်ကြားချက်" },
+    stylePlaceholder: { en: "e.g. Angry, Excited, Professional...", mm: "ဥပမာ - Angry, Excited, Professional..." },
+    changesApplyNext: { en: "Changes will apply to the next generation.", mm: "ပြုပြင်ပြောင်းလဲမှုများသည် နောက်တစ်ကြိမ် ထုတ်ယူမှသာ သက်ရောက်မည်ဖြစ်သည်။" },
+    styles: {
+      warm: { en: "Warm", mm: "နွေးထွေးသော" },
+      professional: { en: "Professional", mm: "ကျွမ်းကျင်သော" },
+      excited: { en: "Excited", mm: "စိတ်လှုပ်ရှားသော" },
+      angry: { en: "Angry", mm: "ဒေါသထွက်သော" },
+      sad: { en: "Sad", mm: "ဝမ်းနည်းဖွယ်" },
+      whisper: { en: "Whisper", mm: "တိုးတိုးလေး" }
+    }
+  },
+
+  // Translator
+  translator: {
+    title: { en: "Video Script Translator", mm: "Video Script ဘာသာပြန်ရန်" },
+    subtitle: { en: "Translate scripts into cinematic storyteller Myanmar language.", mm: "ဇာတ်လမ်းပြောဟန် မြန်မာဘာသာသို့ အလိုအလျောက် ပြောင်းလဲပေးမည်။" },
+    inputPlaceholder: { en: "Paste original script here (English, Thai, etc.)...", mm: "ဘာသာပြန်လိုသော စာသားများကို ဤနေရာတွင် ထည့်ပါ..." },
+    translateBtn: { en: "Translate Now", mm: "ဘာသာပြန်ဆိုမည်" },
+    translating: { en: "Translating...", mm: "ဘာသာပြန်နေပါသည်..." },
+    sendToGenerator: { en: "Send to Generator", mm: "Generator သို့ ပို့မည်" },
+    copy: { en: "Copy Result", mm: "စာသားကူးယူမည်" },
+    translatedTitle: { en: "Translated Script (Myanmar)", mm: "ဘာသာပြန်ပြီးစာသား (မြန်မာ)" },
+    translatedSuccess: { en: "Translation successful!", mm: "ဘာသာပြန်ဆိုမှု အောင်မြင်ပါသည်။" },
+    translatedFailed: { en: "Translation failed. Please check your connection.", mm: "ဘာသာပြန်ဆိုမှု မအောင်မြင်ပါ။" },
+    sentToGenerator: { en: "Sent to Generator!", mm: "စာသားကို Generator သို့ ပို့လိုက်ပါပြီ။" }
+  },
+
+  // Video Recap
+  video: {
+    title: { en: "Video-to-Text Recap", mm: "ဗီဒီယိုမှ စာသားထုတ်ယူခြင်း" },
+    subtitle: { en: "Upload a video file to automatically extract Myanmar text.", mm: "ဗီဒီယိုဖိုင်ကို တင်သွင်းပြီး အလိုအလျောက် စာသားထုတ်ယူပါ။" },
+    premiumRequired: { en: "This is a Premium Feature. Please contact Admin to upgrade.", mm: "ဤသည်မှာ Premium သီးသန့် Feature ဖြစ်ပါသည်။ အဆင့်မြှင့်ရန် Admin ကို ဆက်သွယ်ပါ။" },
+    blocked: { en: "Your User ID is blocked. Contact Admin.", mm: "သင်၏ User ID ကို ပိတ်ပင်ထားပါသည်။ Admin ကို ဆက်သွယ်ပါ။" },
+    recapLocked: { en: "Premium Feature Locked 🔒", mm: "Premium Feature ကို ပိတ်ထားပါသည် 🔒" },
+    contactAdmin: { en: "Please send your User ID to Admin for approval.", mm: "အသုံးပြုလိုပါက သင်၏ User ID ကို Admin ထံပေးပို့၍ ခွင့်ပြုချက်တောင်းခံပါ။" },
+    yourUserId: { en: "Your User ID:", mm: "သင်၏ User ID:" },
+    dragDrop: { en: "Drag & Drop Video", mm: "ဗီဒီယိုဖိုင်အား ဤနေရာသို့ ဆွဲထည့်ပါ" },
+    supportFormats: { en: "Support MP4, MOV, AVI. Max 20MB recommended.", mm: "MP4, MOV, AVI ဖိုင်များ ရရှိနိုင်ပါသည်။ အများဆုံး 20MB အထိ အကြံပြုပါသည်။" },
+    dropToUpload: { en: "Drop to Upload", mm: "တင်ရန် လွှတ်ချလိုက်ပါ" },
+    transcribeBtn: { en: "Transcribe Video", mm: "စာသားထုတ်ယူမည်" },
+    transcribing: { en: "Transcribing...", mm: "စာသားထုတ်ယူနေသည်..." },
+    aiListening: { en: "AI is listening to your video...", mm: "AI မှ ဗီဒီယိုကို နားထောင်နေပါသည်..." },
+    success: { en: "Transcription & Translation successful! ✨", mm: "ဗီဒီယိုမှ မြန်မာဘာသာသို့ ပြန်ဆိုပြီးပါပြီ ✨" },
+    onlyVideos: { en: "Only video files are supported.", mm: "ဗီဒီယိုဖိုင်များသာ လက်ခံပါသည်။" },
+    premiumActive: { en: "Premium Access Active ✨", mm: "Premium အသုံးပြုခွင့် ရရှိထားပါသည် ✨" }
+  },
+
+  // Output Preview
+  output: {
+    title: { en: "AI Narrator Studio", mm: "AI Narrator Studio" },
+    premiumOutput: { en: "Premium Output", mm: "Premium Output" },
+    generating: { en: "AI Narrator is crafting your voice...", mm: "AI Narrator မှ အသံဖိုင်ကို ဖန်တီးနေပါသည်..." },
+    tuning: { en: "Fine-tuning the cinematic tone and synchronizing every millisecond.", mm: "အသံနေအထားနှင့် အချိန်ကိုက်မှုများကို အကောင်းဆုံးဖြစ်အောင် ချိန်ညှိနေပါသည်။" },
+    emptyTitle: { en: "Output Preview", mm: "Output Preview" },
+    emptySubtitle: { en: "Generated audio and subtitles will appear here after you click generate.", mm: "အသံနှင့် စာတန်းထိုးများကို ထုတ်ယူပြီးပါက ဤနေရာတွင် မြင်တွေ့ရမည်ဖြစ်သည်။" },
+    srtPreview: { en: "Subtitle Preview (SRT)", mm: "စာတန်းထိုး နမူနာ (SRT)" },
+    target: { en: "Target", mm: "သတ်မှတ်ချိန်" },
+    original: { en: "Original", mm: "မူလကြာချိန်" },
+    downloadMp3: { en: "Download MP3", mm: "MP3 ရယူမည်" },
+    downloadSrt: { en: "Download SRT", mm: "SRT ရယူမည်" }
+  },
+
+  // History
+  history: {
+    title: { en: "Generation History", mm: "ယခင်မှတ်တမ်းများ" },
+    subtitle: { en: "Manage and re-download your previous professional narrations", mm: "ယခင်ထုတ်ယူထားသော အသံဖိုင်များကို စီမံခန့်ခွဲပြီး ပြန်လည်ရယူပါ" },
+    search: { en: "Search history...", mm: "မှတ်တမ်းများကို ရှာဖွေရန်..." },
+    noHistory: { en: "No generation history found.", mm: "မှတ်တမ်းများ မရှိသေးပါ။" },
+    noResults: { en: "No results found", mm: "ရှာဖွေမှုရလဒ် မတွေ့ပါ" },
+    adjustSearch: { en: "Try adjusting your search or start generating professional voiceovers now!", mm: "ရှာဖွေမှုစကားလုံးကို ပြောင်းလဲကြည့်ပါ သို့မဟုတ် အသံဖိုင်အသစ်များ စတင်ထုတ်ယူလိုက်ပါ" },
+    loading: { en: "Loading your history...", mm: "မှတ်တမ်းများကို ရယူနေပါသည်..." },
+    copyText: { en: "Copy Text", mm: "စာသားကူးယူရန်" },
+    play: { en: "Load to Player", mm: "Player သို့ ပို့မည်" }
+  },
+
+  // Settings / Admin
+  settings: {
+    title: { en: "Account Settings", mm: "အကောင့်ပြင်ဆင်ချက်များ" },
+    logout: { en: "Logout", mm: "ထွက်မည်" },
+    apiKey: { en: "Personal API Key", mm: "မိမိ၏ API Key" },
+    theme: { en: "App Theme", mm: "Theme ပြောင်းရန်" },
+    dark: { en: "Dark Mode", mm: "Dark Mode" },
+    light: { en: "Light Mode", mm: "Light Mode" }
+  },
+
+  // Admin Dashboard
+  admin: {
+    title: { en: "Admin Control Center", mm: "ဗဟိုထိန်းချုပ်ရေးဌာန" },
+    subtitle: { en: "Manage Authorized Access Codes (User IDs)", mm: "ခွင့်ပြုထားသော Access Code (User ID) များကို စီမံခန့်ခွဲရန်" },
+    authTitle: { en: "Authorized Access Only", mm: "စီမံခန့်ခွဲသူများသာ အသုံးပြုနိုင်ပါသည်" },
+    authSubtitle: { en: "Please enter the administrative access code to continue.", mm: "ဆက်လက်ဆောင်ရွက်ရန် စီမံခန့်ခွဲသူ ကုဒ်ကို ရိုက်ထည့်ပါ။" },
+    enterCode: { en: "Enter Access Code", mm: "Access Code ရိုက်ထည့်ပါ" },
+    unlockBtn: { en: "Unlock Dashboard", mm: "Dashboard ဖွင့်မည်" },
+    logout: { en: "Logout", mm: "ထွက်မည်" },
+    userManagement: { en: "User Management", mm: "အသုံးပြုသူ စီမံခန့်ခွဲခြင်း" },
+    systemSettings: { en: "System Settings", mm: "System ချိန်ညှိချက်များ" },
+    idSettings: { en: "ID Management", mm: "User ID စီမံခန့်ခွဲခြင်း" },
+    pronunciationRules: { en: "Pronunciation Rules", mm: "အသံထွက် ချိန်ညှိချက်များ" },
+    createUser: { en: "Create New User ID", mm: "User ID အသစ်ပြုလုပ်ရန်" },
+    idLabel: { en: "Access ID / Code", mm: "Access ID / ကုဒ်" },
+    noteLabel: { en: "User Note / Name", mm: "မှတ်ချက် / အမည်" },
+    roleLabel: { en: "User Role", mm: "အသုံးပြုသူ အဆင့်" },
+    expiryLabel: { en: "Expiry Date (Optional)", mm: "သက်တမ်းကုန်ဆုံးရက် (မထည့်လည်းရ)" },
+    passwordLabel: { en: "Password", mm: "လျှို့ဝှက်နံပါတ်" },
+    createBtn: { en: "Create ID", mm: "ID ပြုလုပ်မည်" },
+    userList: { en: "Authorized User IDs", mm: "ခွင့်ပြုထားသော User ID များ" },
+    searchIds: { en: "Search by ID or Note...", mm: "ID သို့မဟုတ် မှတ်ချက်ဖြင့် ရှာရန်..." },
+    id: { en: "ID", mm: "ID" },
+    note: { en: "Note", mm: "မှတ်ချက်" },
+    usage: { en: "Usage History", mm: "အသုံးပြုမှုမှတ်တမ်း" },
+    membership: { en: "Membership", mm: "အဖွဲ့ဝင်အဆင့်" },
+    premiumAccess: { en: "Premium Access", mm: "Premium ခွင့်ပြုချက်" },
+    expiry: { en: "Expiry Date", mm: "သက်တမ်းကုန်ရက်" },
+    status: { en: "Status", mm: "အခြေအနေ" },
+    actions: { en: "Actions", mm: "လုပ်ဆောင်ချက်" },
+    active: { en: "Active", mm: "အသုံးပြုနေဆဲ" },
+    deactivated: { en: "Deactivated", mm: "ရပ်ဆိုင်းထားသည်" },
+    noUsers: { en: "No users found matching your search.", mm: "ရှာဖွေမှုနှင့် ကိုက်ညီသော အသုံးပြုသူ မတွေ့ပါ" },
+    registeredUsers: { en: "Registered Users", mm: "မှတ်ပုံတင်ထားသော အသုံးပြုသူများ" },
+    user: { en: "User", mm: "အသုံးပြုသူ" },
+    verification: { en: "Verification", mm: "အတည်ပြုချက်" },
+    joined: { en: "Joined", mm: "စတင်ဝင်ရောက်သည့်နေ့" },
+    lastActivity: { en: "Last Activity", mm: "နောက်ဆုံးလှုပ်ရှားမှု" },
+    extend30Days: { en: "Extend 30 Days", mm: "ရက် ၃၀ တိုးမည်" },
+    setCustomExpiry: { en: "Set Custom Expiry", mm: "သက်တမ်းကုန်ရက် သတ်မှတ်မည်" },
+    updatePassword: { en: "Update Password", mm: "စကားဝှက် ပြောင်းမည်" },
+    toggleVIP: { en: "Toggle VIP/Unlimited Hub", mm: "VIP/အကန့်အသတ်မဲ့ ပြောင်းမည်" },
+    resetUsage: { en: "Reset Daily Usage", mm: "နေ့စဉ်အသုံးပြုမှု ပြန်စမည်" },
+    toggleRole: { en: "Toggle Role", mm: "အခန်းကဏ္ဍ ပြောင်းမည်" },
+    deactivate: { en: "Deactivate", mm: "ရပ်ဆိုင်းရန်" },
+    activate: { en: "Activate", mm: "ပြန်ဖွင့်ရန်" },
+    stats: { en: "Statistics", mm: "စာရင်းအင်း" },
+    totalGenerations: { en: "Total Generations", mm: "စုစုပေါင်း ထုတ်ယူမှု" },
+    unlimited: { en: "Unlimited", mm: "အကန့်အသတ်မရှိ" },
+    today: { en: "Today", mm: "ယနေ့" },
+    adminRole: { en: "Admin", mm: "Admin" },
+    userRole: { en: "User", mm: "User" },
+    standard: { en: "Standard", mm: "Standard" },
+    premium: { en: "Premium", mm: "Premium" },
+    expiryUnlimited: { en: "No Expiry", mm: "သက်တမ်းကုန်ဆုံးရက်မရှိ" },
+    expired: { en: "Expired", mm: "သက်တမ်းကုန်ပြီ" },
+    tasksToday: { en: "Tasks Today", mm: "ယနေ့လုပ်ဆောင်မှု" },
+    loginSuccess: { en: "Logged in as Admin.", mm: "Admin အဖြစ် ဝင်ရောက်ပြီးပါပြီ။" },
+    infrastructureMode: { en: "Infrastructure Configuration Mode", mm: "အခြေခံအဆောက်အအုံ ပြင်ဆင်မှုပုံစံ" },
+    firebaseTelegram: { en: "Firebase & Telegram Settings", mm: "Firebase နှင့် Telegram ချိန်ညှိချက်များ" },
+    infraDesc: { en: "Configure Infrastructure Integrations", mm: "အခြေခံစနစ် ချိတ်ဆက်မှုများကို ချိန်ညှိရန်" },
+    showSecrets: { en: "Show Secrets", mm: "လျှို့ဝှက်ချက်များ ပြရန်" },
+    hideSecrets: { en: "Hide Secrets", mm: "လျှို့ဝှက်ချက်များ ဖုံးရန်" },
+    firebaseConfig: { en: "Firebase Configuration", mm: "Firebase ချိန်ညှိချက်" },
+    apiKeyControl: { en: "API Key Control", mm: "API Key ထိန်းချုပ်မှု" },
+    systemConfig: { en: "System Configuration", mm: "စနစ် ချိန်ညှိချက်" },
+    apiKeyRotation: { en: "API Key Rotation & Switch", mm: "API Key အလှည့်ကျစနစ်" },
+    apiKeyRotationDesc: { en: "Manage multiple keys for auto-switching on rate limits", mm: "Rate Limit ဖြစ်ပေါ်ပါက Key များ အလိုအလျောက် ပြောင်းလဲသောအစီအစဉ်" },
+    allowAdminKeys: { en: "Allow Users to use Admin API Keys", mm: "Admin Key များကို အသုံးပြုသူများ သုံးခွင့်ပေးရန်" },
+    allowAdminKeysDesc: { en: "If ON, the system uses rotated Admin keys. If OFF, users must provide their own.", mm: "ဖွင့်ထားပါက Admin Key များကို သုံးပါမည်။ ပိတ်ထားပါက အသုံးပြုသူများ ကိုယ်ပိုင် Key ထည့်ရပါမည်။" },
+    primaryKey: { en: "Primary API Key", mm: "ပင်မ API Key" },
+    secondaryKey: { en: "Secondary API Key", mm: "ဒုတိယ API Key" },
+    backupKey: { en: "Backup API Key", mm: "အရန် API Key" },
+    keyRotationDesc: { en: "The system will automatically rotate through these keys if a Rate Limit (429) occurs.", mm: "Rate Limit (429) ဖြစ်ပေါ်ပါက စနစ်မှ ဤ Key များကို အလိုအလျောက် လှည့်ပတ်အသုံးပြုပါမည်။" },
+    saveSettings: { en: "Save Settings", mm: "ချိန်ညှိချက်များ သိမ်းမည်" },
+    standby: { en: "Standby", mm: "အရန်သင့်" },
+    backup1: { en: "Backup 1", mm: "အရန် ၁" },
+    backup2: { en: "Backup 2", mm: "အရန် ၂" },
+  },
+
+  // Welcome Page
+  welcome: {
+    title: { en: "Vlogs By Saw AI Audio Generation System", mm: "Vlogs By Saw AI အသံဖန်တီးမှု စနစ်" },
+    subtitle: { en: "The best AI technology for Burmese Storytelling, TTS and Video Recap.", mm: "Burmese Storytelling, TTS နှင့် Video Recap များအတွက် အကောင်းဆုံး AI နည်းပညာ။" },
+    description: { en: "Experience high-quality narration with cutting-edge AI technology. Specially designed for Burmese narration.", mm: "Experience high-quality narration with cutting-edge AI technology. မြန်မာစကားပြော အသံဖန်တီးမှုများအတွက် အထူးပြုလုပ်ထားပါသည်။" },
+    feature1Title: { en: "Natural Voices", mm: "သဘာဝကျသော အသံများ" },
+    feature2Title: { en: "Expert Translation", mm: "ကျွမ်းကျင်စွာ ဘာသာပြန်ဆိုမှု" },
+    feature3Title: { en: "4x Faster Processing", mm: "၄ ဆ ပိုမိုမြန်ဆန်သော လုပ်ဆောင်ချက်" },
+    startBtn: { en: "Get Started", mm: "စတင်အသုံးပြုမည်" }
+  },
+
+  // Pronunciation Rules
+  rules: {
+    title: { en: "Pronunciation Rules", mm: "အသံထွက် ချိန်ညှိချက်များ" },
+    subtitle: { en: "Built-in Engine Rules", mm: "စနစ်တွင် ပါဝင်ပြီးသား စည်းမျဉ်းများ" },
+    manage: { en: "Manage Rules", mm: "စည်းမျဉ်းများ ပြင်ဆင်ရန်" },
+    view: { en: "View Settings", mm: "ချိန်ညှိချက်များ ကြည့်ရန်" },
+    original: { en: "Original Text", mm: "မူလစာသား" },
+    replacement: { en: "Replacement (Myanmar)", mm: "အစားထိုးရန် (မြန်မာ)" },
+    global: { en: "Global", mm: "အားလုံးအတွက်" },
+    custom: { en: "Custom User Rules", mm: "ကိုယ်ပိုင် စည်းမျဉ်းများ" },
+    regexSupported: { en: "Regex supported. Format: \"Original -> Replacement\"", mm: "Regex ကို အသုံးပြုနိုင်သည်။ ပုံစံ - \"မူလ -> အစားထိုး\"" },
+    placeholder: { en: "Example: 'Vlogs By Saw' -> 'ဗလော့ ဘိုင် စော'", mm: "ဥပမာ - 'Vlogs By Saw' -> 'ဗလော့ ဘိုင် စော'" }
+  },
+
+  // API Key Modal
+  keyModal: {
+    title: { en: "Settings", mm: "ဆက်တင်များ" },
+    config: { en: "API Configuration", mm: "API ချိန်ညှိချက်များ" },
+    label: { en: "Enter your API Key (Google AI Studio)", mm: "သင်၏ API Key ကို ဤနေရာတွင် ထည့်ပါ (Google AI Studio)" },
+    placeholder: { en: "Paste your API Key here (starts with AIza...)", mm: "API Key ကို ဤနေရာတွင် ကူးထည့်ပါ (AIza... ဖြင့်စသည်)" },
+    getApiKey: { en: "How to get a free API Key?", mm: "အခမဲ့ API Key မည်သို့ရယူမည်နည်း။" },
+    clear: { en: "Clear Key", mm: "ဖျက်မည်" },
+    save: { en: "Save & Test", mm: "သိမ်းဆည်းမည်" },
+    verifying: { en: "Key Verified (Status: Active) - Settings saved!", mm: "Key စစ်ဆေးပြီးပါပြီ (အခြေအနေ - အသုံးပြုနိုင်သည်) - ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။" },
+    invalid: { en: "Invalid API Key. Please check again.", mm: "API Key မှားယွင်းနေပါသည်။ ပြန်စစ်ပေးပါ။" },
+    unexpected: { en: "An unexpected error occurred during verification.", mm: "စစ်ဆေးနေစဉ်အတွင်း အမှားတစ်ခု ဖြစ်ပေါ်ခဲ့ပါသည်။" },
+    userIdLabel: { en: "Your User ID:", mm: "သင်၏ User ID:" },
+    localStoreNotice: { en: "Your API Key is stored locally and never sent to our servers.", mm: "သင်၏ API Key ကို စက်ထဲတွင်သာ သိမ်းဆည်းထားပြီး မည်သည့်နေရာသို့မှ ပေးပို့မည်မဟုတ်ပါ။" }
+  },
+
+  // Error Messages
+  errors: {
+    rateLimit: { en: "Your API Key has reached its temporary limit. The system will resume shortly.", mm: "သင့် API Key မှာ ခေတ္တအကန့်အသတ်သို့ ရောက်ရှိနေပါသည်။ ခေတ္တစောင့်ဆိုင်းပေးပါ။" },
+    connection: { en: "Connection failed. Please try again.", mm: "ချိတ်ဆက်မှု မအောင်မြင်ပါ။ ထပ်မံကြိုးစားကြည့်ပါ။" },
+    generic: { en: "Something went wrong.", mm: "အမှားအယွင်းတစ်ခု ရှိနေပါသည်။" },
+    audioLoadFailed: { en: "Failed to load audio from history.", mm: "မှတ်တမ်းမှ အသံဖိုင်ကို ပြန်လည်ယူရန် မအောင်မြင်ပါ။" }
+  },
+
+  // Common UI
+  ui: {
+    confirm: { en: "Confirm", mm: "အတည်ပြုပါ" },
+    cancel: { en: "Cancel", mm: "ပယ်ဖျက်ပါ" },
+    save: { en: "Save Changes", mm: "သိမ်းဆည်းပါ" },
+    delete: { en: "Delete", mm: "ဖျက်မည်" },
+    close: { en: "Close", mm: "ပိတ်မည်" },
+    search: { en: "Search...", mm: "ရှာဖွေရန်..." },
+    dismiss: { en: "Dismiss", mm: "ပိတ်မည်" }
+  }
+};

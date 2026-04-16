@@ -55,6 +55,18 @@ service cloud.firestore {
     // Fields:
     //   - firebase_project_id: string
     //   - firebase_api_key: string
+    //
+    // Collection: user_controls
+    // Document ID: vbsId
+    // Fields:
+    //   - vbsId: string
+    //   - dailyUsage: number
+    //   - lastUsedDate: string
+    //   - isUnlimited: boolean
+    //   - isBlocked: boolean
+    //   - customLimit: number (optional)
+    //   - expiryDate: string (optional)
+    //   - updatedAt: timestamp
     // ===============================================================
 
     // ===============================================================
@@ -105,6 +117,17 @@ service cloud.firestore {
       return data.keys().hasAll(['original', 'replacement']) &&
              data.original is string && data.original.size() > 0 && data.original.size() < 500 &&
              data.replacement is string && data.replacement.size() < 500;
+    }
+
+    function isValidUserControl(data) {
+      return data.keys().hasAll(['vbsId', 'dailyUsage', 'lastUsedDate', 'isUnlimited', 'isBlocked']) &&
+             data.vbsId is string && data.vbsId.size() > 0 && data.vbsId.size() < 100 &&
+             data.dailyUsage is number &&
+             data.lastUsedDate is string &&
+             data.isUnlimited is bool &&
+             data.isBlocked is bool &&
+             (!('membershipStatus' in data) || data.membershipStatus in ['standard', 'premium']) &&
+             (!('expiryDate' in data) || data.expiryDate is string);
     }
 
     function isValidSession(data) {
@@ -183,6 +206,30 @@ service cloud.firestore {
     match /users/{userId} {
       // Used for Google Auth admins
       allow read, write: if isAdmin();
+    }
+
+    match /user_controls/{vbsId} {
+      // Users can read their own control doc, admins can read all
+      allow read: if isAuthenticated();
+      
+      // Admins or users can initialize their own control doc
+      allow create: if isAuthenticated() && (isAdmin() || (isValidUserControl(request.resource.data) && request.resource.data.vbsId == vbsId));
+      
+      // Users can update their usage, but not flags. Admins can update everything.
+      allow update: if isAuthenticated() && (
+        isAdmin() || 
+        (
+          isValidUserControl(request.resource.data) &&
+          request.resource.data.vbsId == resource.data.vbsId &&
+          request.resource.data.isUnlimited == resource.data.isUnlimited &&
+          request.resource.data.isBlocked == resource.data.isBlocked &&
+          (!('membershipStatus' in request.resource.data) || request.resource.data.membershipStatus == resource.data.membershipStatus) &&
+          (!('expiryDate' in request.resource.data) || request.resource.data.expiryDate == resource.data.expiryDate) &&
+          (!('customLimit' in request.resource.data) || request.resource.data.customLimit == resource.data.customLimit)
+        )
+      );
+      
+      allow delete: if isAdmin();
     }
 
     match /test/{docId} {
