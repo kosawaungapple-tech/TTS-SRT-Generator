@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { Headphones, Download, Play, Pause, FileText, Music, Volume2, VolumeX, RefreshCw, Sparkles, Clipboard, Check } from 'lucide-react';
+import { motion } from 'motion/react';
+import { Headphones, Play, Pause, FileText, Music, RefreshCw, Sparkles, Clipboard, Check, AlertCircle } from 'lucide-react';
 import { AudioResult } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
+import { formatTime, formatMyanmarDuration } from '../utils/audioUtils';
 
 interface OutputPreviewProps {
   result: AudioResult | null;
@@ -10,10 +11,8 @@ interface OutputPreviewProps {
   globalVolume?: number;
   engineStatus?: 'ready' | 'cooling' | 'limit';
   retryCountdown?: number;
-  targetDuration?: {
-    minutes: number;
-    seconds: number;
-  };
+  error?: string | null;
+  onRetry?: () => void;
   showToast: (message: string, type: 'success' | 'error') => void;
 }
 
@@ -53,7 +52,8 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   globalVolume,
   engineStatus = 'ready',
   retryCountdown = 0,
-  targetDuration,
+  error = null,
+  onRetry,
   showToast
 }) => {
   const { t } = useLanguage();
@@ -61,54 +61,136 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [playerVolume, setPlayerVolume] = useState(globalVolume !== undefined ? globalVolume / 100 : 0.8);
-  const [isMuted, setIsMuted] = useState(false);
   const [currentSrt, setCurrentSrt] = useState('');
   const [isSrtCopied, setIsSrtCopied] = useState(false);
-  const [isTextCopied, setIsTextCopied] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
+  const audioBufferRef = useRef<AudioBuffer | null>(null);
+  const fallbackAudioRef = useRef<HTMLAudioElement | null>(null);
+  const startTimeRef = useRef<number>(0);
+  const pausedTimeRef = useRef<number>(0);
+  const gainNodeRef = useRef<GainNode | null>(null);
+  const [isFallback, setIsFallback] = useState(false);
 
+  // Set duration and current SRT from result
   useEffect(() => {
-    if (audioRef.current && result) {
-      const audio = audioRef.current;
-      audio.load();
-      setCurrentSrt(result.srtContent);
-
-      const updateTime = () => setCurrentTime(audio.currentTime);
-      const updateDuration = () => setDuration(audio.duration);
-      const onEnded = () => setIsPlaying(false);
-
-      audio.addEventListener('timeupdate', updateTime);
-      audio.addEventListener('loadedmetadata', updateDuration);
-      audio.addEventListener('ended', onEnded);
-
-      // Auto-sync playback rate if target duration is set
-      if (targetDuration) {
-        const targetSeconds = targetDuration.minutes * 60 + targetDuration.seconds;
-        if (targetSeconds > 0) {
-          const syncRate = () => {
-            if (audio.duration > 0) {
-              const rate = audio.duration / targetSeconds;
-              audio.playbackRate = rate;
-              console.log(`Auto-sync: Adjusting playback rate to ${rate.toFixed(3)} to match target ${targetSeconds}s`);
-            }
-          };
-          audio.addEventListener('loadedmetadata', syncRate);
-          syncRate();
-        }
-      }
-
-      return () => {
-        audio.removeEventListener('timeupdate', updateTime);
-        audio.removeEventListener('loadedmetadata', updateDuration);
-        audio.removeEventListener('ended', onEnded);
-      };
+    if (result) {
+      setCurrentSrt(result.srtContent || '');
+      setDuration(result.baseDuration);
     }
   }, [result]);
+
+  // Handle Playback Speed change
+  // Note: We ignore playbackSpeed for the audio node because the speed is already baked into the file
+  useEffect(() => {
+    if (result) {
+      setDuration(result.baseDuration);
+    }
+  }, [result]);
+
+  // Initialize/Reset Player when result changes
+  useEffect(() => {
+    if (result) {
+      stopAudio();
+      setCurrentTime(0);
+      pausedTimeRef.current = 0;
+      audioBufferRef.current = null;
+      
+      // Decode audio data early
+      const decode = async () => {
+        try {
+          let bufferToDecode: ArrayBuffer;
+          
+          if (result.rawAudio) {
+            bufferToDecode = result.rawAudio;
+          } else {
+            const binaryStr = window.atob(result.audioData);
+            const bytes = new Uint8Array(binaryStr.length);
+            for (let i = 0; i < binaryStr.length; i++) {
+              bytes[i] = binaryStr.charCodeAt(i);
+            }
+            bufferToDecode = bytes.buffer;
+          }
+          
+          if (!audioContextRef.current) {
+            const AudioContextClass = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext) as typeof AudioContext;
+            audioContextRef.current = new AudioContextClass();
+          }
+          
+          try {
+            // slice(0) to avoid detached buffer issues if decoded multiple times
+            const buffer = await audioContextRef.current.decodeAudioData(bufferToDecode.slice(0));
+            audioBufferRef.current = buffer;
+            setDuration(buffer.duration);
+            setIsFallback(false);
+          } catch (decodeErr) {
+            console.error("Decode failed, preparing fallback:", decodeErr);
+            setIsFallback(true);
+            setupFallbackAudio(bufferToDecode);
+          }
+        } catch (err) {
+          console.error("Error in decode process:", err);
+          setIsFallback(true);
+        }
+      };
+      decode();
+    }
+    return () => {
+      stopAudio();
+      if (fallbackAudioRef.current) {
+        fallbackAudioRef.current.pause();
+        fallbackAudioRef.current = null;
+      }
+    };
+  }, [result]);
+
+  const setupFallbackAudio = (data: ArrayBuffer) => {
+    // Gemini returns WAV
+    const blob = new Blob([data], { type: 'audio/wav' });
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.playbackRate = 1.0; 
+    
+    audio.onended = () => {
+      setIsPlaying(false);
+      setCurrentTime(0);
+      pausedTimeRef.current = 0;
+    };
+
+    audio.ontimeupdate = () => {
+      if (isFallback) {
+        setCurrentTime(audio.currentTime);
+      }
+    };
+
+    audio.onloadedmetadata = () => {
+      setDuration(audio.duration);
+    };
+
+    fallbackAudioRef.current = audio;
+  };
+
+  const stopAudio = () => {
+    if (sourceNodeRef.current) {
+      try {
+        sourceNodeRef.current.stop();
+      } catch {
+        // Already stopped
+      }
+      sourceNodeRef.current.disconnect();
+      sourceNodeRef.current = null;
+    }
+    
+    if (fallbackAudioRef.current) {
+      fallbackAudioRef.current.pause();
+    }
+    
+    setIsPlaying(false);
+  };
 
   useEffect(() => {
     if (globalVolume !== undefined) {
@@ -117,22 +199,29 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   }, [globalVolume]);
 
   useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = isMuted ? 0 : playerVolume;
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = playerVolume;
     }
-  }, [playerVolume, isMuted]);
+  }, [playerVolume]);
 
   const initAudioContext = () => {
-    if (!audioContextRef.current && audioRef.current) {
-      const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
+    if (!audioContextRef.current) {
+      const AudioContextClass = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext) as typeof AudioContext;
       audioContextRef.current = new AudioContextClass();
+    }
+    
+    if (!analyserRef.current && audioContextRef.current) {
       analyserRef.current = audioContextRef.current.createAnalyser();
-      sourceRef.current = audioContextRef.current.createMediaElementSource(audioRef.current);
-      sourceRef.current.connect(analyserRef.current);
-      analyserRef.current.connect(audioContextRef.current.destination);
       analyserRef.current.fftSize = 256;
+      
+      gainNodeRef.current = audioContextRef.current.createGain();
+      gainNodeRef.current.gain.value = playerVolume;
+      
+      gainNodeRef.current.connect(analyserRef.current);
+      analyserRef.current.connect(audioContextRef.current.destination);
     }
   };
+
 
   const drawWaveform = () => {
     if (!canvasRef.current || !analyserRef.current) return;
@@ -202,31 +291,115 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
     };
   }, [isPlaying]);
 
-  const togglePlay = () => {
-    if (audioRef.current) {
+  useEffect(() => {
+    let interval: number;
+    if (isPlaying && audioContextRef.current) {
+      interval = window.setInterval(() => {
+        if (audioContextRef.current) {
+          const elapsed = (audioContextRef.current.currentTime - startTimeRef.current);
+          const newTime = Math.min(elapsed, duration);
+          setCurrentTime(newTime);
+          if (newTime >= duration) {
+            setIsPlaying(false);
+          }
+        }
+      }, 50);
+    }
+    return () => clearInterval(interval);
+  }, [isPlaying, duration]);
+
+  const togglePlay = async () => {
+    if (isFallback) {
+      if (!fallbackAudioRef.current) return;
+      
       if (isPlaying) {
-        audioRef.current.pause();
+        fallbackAudioRef.current.pause();
+        setIsPlaying(false);
       } else {
-        audioRef.current.play();
+        fallbackAudioRef.current.currentTime = currentTime;
+        fallbackAudioRef.current.play();
+        setIsPlaying(true);
       }
-      setIsPlaying(!isPlaying);
+      return;
+    }
+
+    if (!audioBufferRef.current || !audioContextRef.current) return;
+
+    if (isPlaying) {
+      pausedTimeRef.current = currentTime;
+      stopAudio();
+    } else {
+      initAudioContext();
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
+
+      const source = audioContextRef.current.createBufferSource();
+      source.buffer = audioBufferRef.current;
+      source.playbackRate.value = 1.0; 
+      source.connect(gainNodeRef.current!);
+      
+      source.start(0, currentTime);
+      sourceNodeRef.current = source;
+      startTimeRef.current = audioContextRef.current.currentTime - currentTime;
+      
+      setIsPlaying(true);
+
+      source.onended = () => {
+        // Only reset if it ended naturally
+        if (sourceNodeRef.current === source) {
+          setIsPlaying(false);
+          if (currentTime >= duration - 0.1) {
+            setCurrentTime(0);
+            pausedTimeRef.current = 0;
+          }
+        }
+      };
     }
   };
 
-  const totalTargetSeconds = targetDuration ? (targetDuration.minutes * 60 + targetDuration.seconds) : 0;
-  const displayDuration = totalTargetSeconds > 0 ? totalTargetSeconds : duration;
-  const displayCurrentTime = (totalTargetSeconds > 0 && duration > 0) 
-    ? (currentTime * (totalTargetSeconds / duration)) 
-    : currentTime;
-
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (audioRef.current) {
-      const displayTime = parseFloat(e.target.value);
-      const actualTime = (totalTargetSeconds > 0 && duration > 0)
-        ? (displayTime * (duration / totalTargetSeconds))
-        : displayTime;
-      audioRef.current.currentTime = actualTime;
-      setCurrentTime(actualTime);
+    const newTime = parseFloat(e.target.value);
+    setCurrentTime(newTime);
+    pausedTimeRef.current = newTime;
+    
+    if (isFallback && fallbackAudioRef.current) {
+      fallbackAudioRef.current.currentTime = newTime;
+    }
+
+    if (isPlaying) {
+      stopAudio();
+      togglePlay();
+    }
+  };
+
+  const handleDownloadAudio = async () => {
+    if (!result) return;
+    try {
+      showToast(t('output.tuning'), 'success');
+      
+      let audioBlob: Blob;
+      if (result.rawAudio) {
+        audioBlob = new Blob([result.rawAudio], { type: 'audio/wav' });
+      } else {
+        const binaryStr = window.atob(result.audioData);
+        const bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) {
+          bytes[i] = binaryStr.charCodeAt(i);
+        }
+        audioBlob = new Blob([bytes], { type: 'audio/wav' });
+      }
+
+      const filename = `vlogs-by-saw-audio`;
+      const url = URL.createObjectURL(audioBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${filename}.wav`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Download failed:", err);
+      showToast("Download failed", "error");
     }
   };
 
@@ -258,15 +431,33 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
       if (type === 'srt') {
         setIsSrtCopied(true);
         setTimeout(() => setIsSrtCopied(false), 2000);
-      } else {
-        setIsTextCopied(true);
-        setTimeout(() => setIsTextCopied(false), 2000);
       }
       showToast(t('generate.copySuccess'), 'success');
-    } catch (err) {
+    } catch {
       console.error('Failed to copy text');
     }
   };
+
+  if (error && !isLoading) {
+    return (
+      <div className="glass-card rounded-[32px] p-12 sm:p-20 shadow-2xl flex flex-col items-center justify-center text-center transition-all duration-300 border border-rose-500/20 bg-rose-500/5 group">
+        <div className="w-24 h-24 bg-rose-50 dark:bg-rose-950/20 rounded-[32px] flex items-center justify-center text-rose-500 mb-8 border border-rose-200 dark:border-rose-800/50 group-hover:scale-110 transition-transform duration-500 shadow-inner">
+          <AlertCircle size={48} />
+        </div>
+        <h3 className="text-2xl font-bold mb-3 text-slate-900 dark:text-white tracking-tight">{t('common.error')}</h3>
+        <p className="text-slate-500 dark:text-slate-400 text-sm sm:text-base max-w-sm leading-relaxed mb-8">
+          {error === 'SERVER_BUSY_RETRY' ? 'Server Busy - Please Retry' : error}
+        </p>
+        <button
+          onClick={onRetry}
+          className="flex items-center gap-3 px-8 py-4 bg-brand-purple text-white rounded-2xl font-bold shadow-xl shadow-brand-purple/20 hover:bg-brand-purple/90 transition-all active:scale-95"
+        >
+          <RefreshCw size={20} />
+          Retry Generation
+        </button>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (
@@ -338,8 +529,15 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
           </div>
           {t('output.title')}
         </h2>
-        <div className="px-5 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-full text-[10px] font-bold uppercase tracking-[0.15em] w-fit shadow-sm neon-glow-indigo">
-          {t('output.premiumOutput')}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="px-5 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-full text-[10px] font-bold uppercase tracking-[0.15em] w-fit shadow-sm neon-glow-indigo">
+            {t('output.premiumOutput')}
+          </div>
+          {result && (
+            <div className="px-4 py-2 bg-brand-purple/10 text-brand-purple border border-brand-purple/20 rounded-full text-[10px] font-bold uppercase tracking-tight w-fit">
+              တကယ်ကြာချိန်: {formatMyanmarDuration(duration)}
+            </div>
+          )}
         </div>
       </div>
 
@@ -381,110 +579,50 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
                 <input
                   type="range"
                   min={0}
-                  max={displayDuration || 0}
+                  max={duration || 0}
                   step={0.01}
-                  value={displayCurrentTime}
+                  value={currentTime}
                   onChange={handleSeek}
                   className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full appearance-none cursor-pointer accent-brand-purple hover:h-2 transition-all"
                   style={{
-                    background: `linear-gradient(to right, #8B5CF6 0%, #3B82F6 ${(displayCurrentTime / (displayDuration || 1)) * 100}%, transparent ${(displayCurrentTime / (displayDuration || 1)) * 100}%, transparent 100%)`
+                    background: `linear-gradient(to right, #8B5CF6 0%, #3B82F6 ${(currentTime / (duration || 1)) * 100}%, transparent ${(currentTime / (duration || 1)) * 100}%, transparent 100%)`
                   }}
                 />
               </div>
               
-              {/* Timestamps */}
               <div className="flex items-center justify-between w-full px-1">
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-medium text-slate-900 dark:text-white">
-                    {formatDisplayTime(displayCurrentTime)}
+                    {formatTime(currentTime).split(',')[0]}
                   </span>
-                  {targetDuration && (
-                    <span className="text-[10px] font-bold text-slate-400 dark:text-slate-600">
-                      / {formatDisplayTime(displayDuration)}
-                    </span>
-                  )}
                 </div>
                 <div className="flex items-center gap-3">
-                  {targetDuration && (
-                    <div className="flex flex-col items-end gap-0.5">
-                      <div className="flex items-center gap-1.5 px-2 py-0.5 bg-brand-purple/5 rounded-md border border-brand-purple/10">
-                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">{t('output.target')}:</span>
-                        <span className="text-[10px] font-mono font-bold text-brand-purple">
-                          {formatDisplayTime(targetDuration.minutes * 60 + targetDuration.seconds)}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-100/50 dark:bg-slate-800/50 rounded-md border border-slate-200/50 dark:border-slate-700/50">
-                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">{t('output.original')}:</span>
-                        <span className="text-[10px] font-mono font-bold text-slate-500">
-                          {formatDisplayTime(duration)}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                  {!targetDuration && (
-                    <span className="text-xs font-medium text-slate-900 dark:text-white">
-                      {formatDisplayTime(displayDuration)}
-                    </span>
-                  )}
+                  <span className="text-xs font-medium text-slate-900 dark:text-white">
+                    {formatTime(duration).split(',')[0]}
+                  </span>
                 </div>
               </div>
             </div>
 
-            {/* Volume Control */}
-            <div className="flex items-center justify-center w-full shrink-0">
-              <div className="flex items-center gap-4 bg-slate-100/50 dark:bg-slate-800/50 px-6 py-3 rounded-2xl border border-slate-200/50 dark:border-slate-700/50">
-                <button 
-                  onClick={() => setIsMuted(!isMuted)}
-                  className="text-slate-400 hover:text-brand-purple transition-colors p-1"
-                >
-                  {isMuted || playerVolume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}
-                </button>
-                
-                <div className="w-32 sm:w-48 flex items-center">
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={isMuted ? 0 : playerVolume}
-                    onChange={(e) => {
-                      setPlayerVolume(parseFloat(e.target.value));
-                      if (isMuted) setIsMuted(false);
-                    }}
-                    className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full appearance-none cursor-pointer accent-brand-purple"
-                    style={{
-                      background: `linear-gradient(to right, #8B5CF6 0%, #8B5CF6 ${(isMuted ? 0 : playerVolume) * 100}%, transparent ${(isMuted ? 0 : playerVolume) * 100}%, transparent 100%)`
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
           </div>
-
-          <audio ref={audioRef} src={result.audioUrl} className="hidden" />
         </div>
 
       {/* Subtitle Preview Box */}
           <div className="space-y-3 flex-1">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                <FileText size={14} /> {t('output.srtPreview')}
-              </h3>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => handleCopy(currentSrt, 'srt')}
-                  className="p-2 bg-slate-100 dark:bg-white/5 rounded-lg text-slate-500 hover:text-brand-purple transition-all"
-                  title={t('translator.copy')}
-                >
-                  {isSrtCopied ? <Check size={14} className="text-emerald-500" /> : <Clipboard size={14} />}
-                </button>
-                {targetDuration && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-brand-purple/10 text-brand-purple border border-brand-purple/20">
-                    Target: {targetDuration.minutes.toString().padStart(2, '0')}:{targetDuration.seconds.toString().padStart(2, '0')}.000
-                  </span>
-                )}
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                  <FileText size={14} /> {t('output.srtPreview')}
+                </h3>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleCopy(currentSrt, 'srt')}
+                    className="p-2 bg-slate-100 dark:bg-white/5 rounded-lg text-slate-500 hover:text-brand-purple transition-all"
+                    title={t('translator.copy')}
+                  >
+                    {isSrtCopied ? <Check size={14} className="text-emerald-500" /> : <Clipboard size={14} />}
+                  </button>
+                </div>
               </div>
-            </div>
             <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 h-64 overflow-y-auto custom-scrollbar shadow-inner relative group/srt">
               <pre className="text-[11px] sm:text-xs font-mono text-slate-600 dark:text-slate-400 whitespace-pre-wrap break-keep leading-[1.6]">
                 {currentSrt}
@@ -496,14 +634,14 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <button
-                onClick={() => fetch(result.audioUrl).then(r => r.blob()).then(b => downloadFile(b, 'vlogs-by-saw-audio.mp3'))}
+                onClick={handleDownloadAudio}
                 className="flex items-center justify-center gap-3 py-4 bg-brand-purple/10 text-brand-purple rounded-2xl font-bold hover:bg-brand-purple hover:text-white transition-all border border-brand-purple/20 group"
               >
                 <Music size={20} className="group-hover:scale-110 transition-transform" />
                 {t('output.downloadMp3')}
               </button>
               <button
-                onClick={() => downloadFile(currentSrt, 'vlogs-by-saw-subs.srt')}
+                onClick={() => downloadFile(currentSrt, `vlogs-by-saw-subs.srt`)}
                 className="flex items-center justify-center gap-3 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all border border-slate-200 dark:border-slate-700 group"
               >
                 <FileText size={20} className="group-hover:scale-110 transition-transform" />
@@ -532,10 +670,3 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
       </div>
     );
   };
-
-function formatDisplayTime(seconds: number): string {
-  if (isNaN(seconds)) return '0:00';
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}

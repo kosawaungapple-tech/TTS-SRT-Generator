@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Mic, Zap, Languages, Play, ChevronRight } from 'lucide-react';
+import { Mic, Zap, Languages, ChevronRight } from 'lucide-react';
 
 import { useLanguage } from '../contexts/LanguageContext';
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Wand2, Key, Settings, User, LogIn, LogOut, ShieldCheck, ShieldAlert, Shield, CheckCircle2, XCircle, History, Wrench, Plus, Trash2, Download, Play, Music, FileText, Eye, EyeOff, Cloud, RefreshCw, Zap, X, ExternalLink, Calendar, Clock, Mail, Wifi, Save, Lock, Info, ArrowRight, ChevronRight, Languages, Search, FileVideo, Clipboard } from 'lucide-react';
+import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Clipboard, Mic2, Play, Info, Sparkles, Image as ImageIcon } from 'lucide-react';
 import { WelcomePage } from './components/WelcomePage';
 import { Header } from './components/Header';
 import { ApiKeyModal } from './components/ApiKeyModal';
@@ -8,19 +8,22 @@ import { ContentInput } from './components/ContentInput';
 import { PronunciationRules } from './components/PronunciationRules';
 import { VoiceConfig } from './components/VoiceConfig';
 import { OutputPreview } from './components/OutputPreview';
-import { MiniAudioPlayer } from './components/MiniAudioPlayer';
 import { AdminDashboard } from './components/AdminDashboard';
 import { VideoTranscriber } from './components/VideoTranscriber';
+import { ThumbnailCreator } from './components/ThumbnailCreator';
+import { AnnouncementPanel } from './components/AnnouncementPanel';
 import { Modal, ModalType } from './components/Modal';
 import { GeminiTTSService } from './services/geminiService';
 import { logActivity } from './services/activityService';
-import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, AuthorizedUser, SystemConfig, VBSUserControl } from './types';
+import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, SystemConfig, VBSUserControl, Announcement } from './types';
 import { DEFAULT_RULES } from './constants';
 import { useLanguage } from './contexts/LanguageContext';
-import { pcmToWav } from './utils/audioUtils';
-import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDoc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadString, getDownloadURL } from './firebase';
+import { translateError } from './utils/errorUtils';
+import { pcmToWav, formatMyanmarDuration, pcmBase64ToWav, renderSpeedAdjustedAudio } from './utils/audioUtils';
+import { generateOptimizedSubtitles } from './utils/subtitleUtils';
+import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp } from './firebase';
 
-type Tab = 'generate' | 'translator' | 'transcriber' | 'history' | 'tools' | 'admin' | 'vbs-admin';
+type Tab = 'generate' | 'translator' | 'transcriber' | 'thumbnail' | 'history' | 'tools' | 'admin' | 'vbs-admin';
 
 export default function App() {
   const { language, t } = useLanguage();
@@ -32,48 +35,50 @@ export default function App() {
   const [customRules, setCustomRules] = useState('');
   const [saveToHistory, setSaveToHistory] = useState(false);
   const [config, setConfig] = useState<TTSConfig>({
-    model: 'gemini-2.5-flash-preview-tts',
-    voiceId: 'zephyr',
+    voiceId: 'kore',
     speed: 1.0,
     pitch: 0,
     volume: 80,
     styleInstruction: '',
-    targetDuration: {
-      minutes: 1,
-      seconds: 46
-    }
   });
   const [isLoading, setIsLoading] = useState(false);
+  const [isProcessingSpeed, setIsProcessingSpeed] = useState(false);
   const [result, setResult] = useState<AudioResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Sign in anonymously is restricted in the console, so we skip it for now.
   // The app will function in bypass mode using localStorage for the API Key.
   
-  const [newApiKey, setNewApiKey] = useState('');
   const [localApiKey, setLocalApiKey] = useState<string | null>(localStorage.getItem('VLOGS_BY_SAW_API_KEY'));
-  const [isUpdatingKey, setIsUpdatingKey] = useState(false);
-  const [showApiKey, setShowApiKey] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
-  const [profile, setProfile] = useState<AuthorizedUser | null>(null);
+  const [profile, setProfile] = useState<VBSUserControl | null>(null);
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings>({
     allow_admin_keys: false,
     total_generations: 0,
     api_keys: ['']
   });
-  const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
   const [engineStatus, setEngineStatus] = useState<'ready' | 'cooling' | 'limit'>('ready');
   const [retryCountdown, setRetryCountdown] = useState(0);
   const [isConfigLoading, setIsConfigLoading] = useState(false); // Default to false to bypass loading screen if env vars missing
   const [isAdminRoute, setIsAdminRoute] = useState(window.location.pathname === '/vbs-admin');
   const [isAdminConfigRoute, setIsAdminConfigRoute] = useState(window.location.pathname === '/vbs-admin-config');
   const [isAuthReady, setIsAuthReady] = useState(false);
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const [userId, setUserId] = useState<string | null>(null);
+  const [isSessionSynced, setIsSessionSynced] = useState(false);
+
+  useEffect(() => {
+    // Safety timeout for auth readiness in case Firebase Auth is blocked by browser tracking protection
+    const timer = setTimeout(() => {
+      if (!isAuthReady) {
+        console.warn("Auth readiness safety timeout reached. Proceeding...");
+        setIsAuthReady(true);
+      }
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [isAuthReady]);
 
   const [vbsId, setVbsId] = useState<string | null>(localStorage.getItem('VBS_USER_ID'));
   const [userControl, setUserControl] = useState<VBSUserControl | null>(null);
+  const [abortController, setAbortController] = useState<AbortController | null>(null);
 
   useEffect(() => {
     if (!vbsId) {
@@ -97,8 +102,8 @@ export default function App() {
             isUnlimited: false,
             isBlocked: false,
             membershipStatus: 'standard',
-            updatedAt: new Date()
-          };
+            updatedAt: serverTimestamp()
+          } as unknown as VBSUserControl;
           setDoc(doc(db, 'user_controls', vbsId), initialControl).catch(err => {
             console.error("Failed to initialize user control:", err);
           });
@@ -116,15 +121,46 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   }, []);
 
+  const isUsingAdminKey = useMemo(() => {
+    // Personal checks
+    if (localStorage.getItem('VLOGS_BY_SAW_API_KEY')) return false;
+    if (profile?.api_key_stored) return false;
+    
+    // Admin checks
+    if (globalSettings.allow_admin_keys) {
+      if ((globalSettings.primary_key || globalSettings.secondary_key || globalSettings.backup_key)) return true;
+      if ((globalSettings.api_keys || []).some(k => k.trim())) return true;
+    }
+    
+    // Environment check (treated as admin key technically)
+    if (typeof process !== 'undefined' && process.env.GEMINI_API_KEY) return true;
+    
+    return false;
+  }, [profile, globalSettings]);
+
   const getEffectiveApiKey = useCallback(() => {
-    // Priority 0: Local Storage (for immediate sync and persistence as requested)
-    const storedKey = localStorage.getItem('VLOGS_BY_SAW_API_KEY');
-    if (storedKey) {
-      console.log("App: Using API Key from LocalStorage (VLOGS_BY_SAW_API_KEY)");
-      return storedKey.trim();
+    // Priority -1: Immediate LocalStorage fetch (Strict persistence for Admin)
+    const immediateLocalKey = localStorage.getItem('VLOGS_BY_SAW_API_KEY');
+    if (immediateLocalKey && immediateLocalKey.trim()) {
+      return immediateLocalKey.trim();
     }
 
-    // 1. User's profile in Firestore
+    // [ADMIN PREMIUM KEY PRIORITY - COMMANDER ORDER]
+    // If the toggle is ON, we bypass everything and use admin keys directly.
+    if (isUsingAdminKey && globalSettings.allow_admin_keys) {
+      const adminKeys = [
+        globalSettings.primary_key || '',
+        globalSettings.secondary_key || '',
+        globalSettings.backup_key || ''
+      ].filter(k => k.trim());
+
+      if (adminKeys.length > 0) {
+        console.log("App: Bypassing local storage - Using Admin Premium Keys (Toggle is ON)");
+        return adminKeys.join(',');
+      }
+    }
+    
+    // Priority 2: Firestore User Profile
     if (profile?.api_key_stored) {
       console.log("App: Using API Key from Firestore Profile");
       return profile.api_key_stored.trim();
@@ -158,103 +194,23 @@ export default function App() {
     
     console.warn("App: No effective API Key found");
     return null;
-  }, [profile, globalSettings]);
-
-  const getApiKey = useCallback(() => {
-    return getEffectiveApiKey();
-  }, [getEffectiveApiKey]);
+  }, [profile, globalSettings, localApiKey, isUsingAdminKey]);
 
   // Global Rules & History
   const [globalRules, setGlobalRules] = useState<PronunciationRule[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historySearch, setHistorySearch] = useState('');
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
-  // Translator State
-  const [sourceText, setSourceText] = useState('');
-  const [translatedText, setTranslatedText] = useState('');
-  const [isTranslating, setIsTranslating] = useState(false);
-
-  const handleTranslate = async () => {
-    if (!sourceText.trim()) return;
-    
-    const apiKey = getEffectiveApiKey();
-    if (!apiKey) {
-      showToast('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)', 'error');
-      return;
-    }
-
-    setIsTranslating(true);
-    setEngineStatus('ready');
-
-    if (accessCode) {
-      logActivity(accessCode, 'translation', `Translated text: ${sourceText.substring(0, 50)}${sourceText.length > 50 ? '...' : ''}`);
-    }
-
-    const runTranslation = async (retryAttempt = 0): Promise<void> => {
-      try {
-        const gemini = new GeminiTTSService(apiKey);
-        const resultText = await gemini.translateContent(sourceText);
-
-        setTranslatedText(resultText);
-        setEngineStatus('ready');
-        showToast(t('translator.translatedSuccess'), 'success');
-      } catch (err: any) {
-        console.error('Translation failed:', err);
-        const isRateLimit = err.message === 'RATE_LIMIT_EXHAUSTED' || 
-                          (err.status === 429) || 
-                          (err.message && err.message.includes('429'));
-
-        if (isRateLimit && retryAttempt < 1) {
-          setEngineStatus('cooling');
-          setRetryCountdown(10);
-          
-          const timer = setInterval(() => {
-            setRetryCountdown(prev => {
-              if (prev <= 1) {
-                clearInterval(timer);
-                return 0;
-              }
-              return prev - 1;
-            });
-          }, 1000);
-
-          setTimeout(() => {
-            runTranslation(retryAttempt + 1);
-          }, 10000);
-          return;
-        }
-
-        if (isRateLimit) {
-          setEngineStatus('limit');
-          showToast(t('errors.rateLimit'), 'error');
-        } else {
-          showToast(t('translator.translatedFailed'), 'error');
-        }
-      } finally {
-        if (retryAttempt >= 0) {
-          // Keep translating true during cooling
-        }
-      }
-    };
-
-    await runTranslation();
-    setIsTranslating(false);
-  };
-
-  const sendToGenerator = () => {
-    if (!translatedText.trim()) return;
-    setText(translatedText);
-    setActiveTab('generate');
-    showToast(t('translator.sentToGenerator'), 'success');
-  };
-
   // Auth & Access State (Custom)
   const [accessCodeInput, setAccessCodeInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [isStepTwo, setIsStepTwo] = useState(false);
-  const [isAccessGranted, setIsAccessGranted] = useState(false); // Force login by default
+  const [isAccessGranted, setIsAccessGranted] = useState(() => {
+    return localStorage.getItem('vbs_access_granted') === 'true' || 
+           localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
+  }); 
   const [isVerifyingCode, setIsVerifyingCode] = useState(false);
-  const [accessCode, setAccessCode] = useState<string | null>(null);
+  const [accessCode, setAccessCode] = useState<string | null>(() => localStorage.getItem('vbs_access_code'));
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
 
   // Modal State
@@ -303,15 +259,15 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
-        setUserId(user.uid);
         setIsAuthReady(true);
       } else {
-        signInAnonymously(auth).then(() => {
-          setIsAuthReady(true);
+        signInAnonymously(auth).then((result) => {
+          if (result.user) {
+            setIsAuthReady(true);
+          }
         }).catch((err) => {
           console.error("Failed to sign in anonymously (Silent Auth Fallback):", err);
-          // Proceed anyway to allow UI testing
-          setIsAuthReady(true);
+          // Don't set isAuthReady to true if it failed, stay in loading state
         });
       }
     });
@@ -341,14 +297,19 @@ export default function App() {
         try {
           await setDoc(doc(db, 'sessions', auth.currentUser!.uid), {
             accessCode: accessCode,
-            createdAt: new Date().toISOString()
+            createdAt: serverTimestamp()
           });
+          
           console.log('Session synced for access code:', accessCode);
+          setIsSessionSynced(true);
         } catch (e) {
           console.error('Failed to sync session:', e);
+          setIsSessionSynced(false);
         }
       };
       syncSession();
+    } else {
+      setIsSessionSynced(false);
     }
   }, [isAccessGranted, isAuthReady, accessCode]);
 
@@ -362,45 +323,38 @@ export default function App() {
       setIsAccessGranted(true);
       setAccessCode(code);
       
-      // Fetch profile data directly from server for reliability without auth dependencies
-      getDocFromServer(doc(db, 'vlogs_users', code)).then(async (snapshot) => {
+      // Fetch profile data directly from server for reliability
+      getDocFromServer(doc(db, 'user_controls', code)).then(async (snapshot) => {
         if (snapshot.exists()) {
-          const data = snapshot.data() as AuthorizedUser;
-          
-          // Check for expiry on session restore
-          if (data.expiryDate) {
-            const expiry = new Date(data.expiryDate);
-            if (expiry < new Date()) {
-              console.warn('Session expired on restore');
-              handleLogout();
-              return;
-            }
-          }
-
+          const data = snapshot.data() as VBSUserControl;
           setProfile(data);
           
           // Sync API Key from Firestore to LocalStorage if missing locally
           if (data.api_key_stored && !localStorage.getItem('VLOGS_BY_SAW_API_KEY')) {
-            localStorage.setItem('VLOGS_BY_SAW_API_KEY', data.api_key_stored);
-            setLocalApiKey(data.api_key_stored);
+            const trimmedKey = data.api_key_stored.trim();
+            localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
+            setLocalApiKey(trimmedKey);
           }
+        } else if (code === 'saw_vlogs_2026') {
+          // Master Admin Fallback
+          setProfile({ 
+            vbsId: code, 
+            role: 'admin', 
+            isActive: true, 
+            note: 'The Commander',
+            membershipStatus: 'premium'
+          } as unknown as VBSUserControl);
         } else {
           // If the code is no longer in authorized_users, log out
-          if (code === 'saw_vlogs_2026') {
-            setProfile({
-              id: 'saw_vlogs_2026',
-              note: 'Admin Saw',
-              isActive: true,
-              role: 'admin',
-              createdAt: new Date(),
-              expiryDate: '2099-12-31'
-            });
-          } else if (code !== 'preview-user') {
+          if (code !== 'preview-user') {
             handleLogout();
           }
         }
-      }).catch(err => {
-        console.error('Failed to restore profile:', err);
+      }).catch((err) => {
+        console.error("Profile fetch error (possibly waiting for session sync):", err);
+        // If it's a permission error, we don't logout yet, we wait for isSessionSynced
+        // The rule might be denying 'get' if the session isn't there yet, even though we changed it to isSignedIn()
+        // Sometimes Firestore rules have slight propagation delay
       });
     }
   }, [isAuthReady]);
@@ -411,13 +365,54 @@ export default function App() {
     
     const unsubscribe = onSnapshot(doc(db, 'settings', 'global'), (snapshot) => {
       if (snapshot.exists()) {
-        setGlobalSettings(snapshot.data() as GlobalSettings);
+        const data = snapshot.data() as GlobalSettings;
+        
+        // Merge offline announcements if they exist (only for the current admin who saved them)
+        const offlineAnnouncements = localStorage.getItem('vbs_offline_announcements');
+        if (offlineAnnouncements) {
+          try {
+            const parsed = JSON.parse(offlineAnnouncements);
+            // Deduplicate by ID, preferring server version but keeping local ones not yet on server
+            const serverAnnouncements = data.announcements || [];
+            const merged = [...serverAnnouncements];
+            parsed.forEach((offAnn: Announcement) => {
+              if (offAnn && offAnn.id && !merged.find(a => a.id === offAnn.id)) {
+                merged.push(offAnn);
+              }
+            });
+            data.announcements = merged;
+          } catch {
+            console.error("Failed to merge offline announcements");
+          }
+        }
+
+        setGlobalSettings(data);
         setIsConfigLoading(false);
       } else {
+        // Fallback for settings if doc doesn't exist yet
+        const offlineAnnouncements = localStorage.getItem('vbs_offline_announcements');
+        if (offlineAnnouncements) {
+           try {
+             const parsed = JSON.parse(offlineAnnouncements);
+             setGlobalSettings(prev => ({ ...prev, announcements: parsed }));
+           } catch {
+             // Silence is golden
+           }
+        }
         setIsConfigLoading(false);
       }
     }, (err) => {
       console.error('Failed to load global settings (Silent Fallback):', err);
+      // Try to load from localStorage as absolute fallback
+      const offlineAnnouncements = localStorage.getItem('vbs_offline_announcements');
+      if (offlineAnnouncements) {
+        try {
+          const parsed = JSON.parse(offlineAnnouncements);
+          setGlobalSettings(prev => ({ ...prev, announcements: parsed }));
+        } catch {
+          // Silence is golden
+        }
+      }
       setIsConfigLoading(false);
     });
     return () => unsubscribe();
@@ -425,12 +420,11 @@ export default function App() {
 
   // Listen for System Config
   useEffect(() => {
-    if (!isAccessGranted || !isAuthReady || !auth.currentUser) return;
+    if (!isAccessGranted || !isAuthReady || !auth.currentUser || profile?.role !== 'admin' || !isSessionSynced) return;
     
     const unsubscribe = onSnapshot(doc(db, 'system_config', 'main'), (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data() as SystemConfig;
-        setSystemConfig(data);
         // Save to localStorage for the NEXT reload to use this config
         localStorage.setItem('vbs_system_config', JSON.stringify(data));
       }
@@ -438,11 +432,11 @@ export default function App() {
       console.error('Failed to load system config (Silent Fallback):', err);
     });
     return () => unsubscribe();
-  }, [isAccessGranted, isAuthReady]);
+  }, [isAccessGranted, isAuthReady, profile]);
 
   // Listen for Global Rules
   useEffect(() => {
-    if (!isAccessGranted || !isAuthReady) {
+    if (!isAccessGranted || !isAuthReady || !auth.currentUser) {
       setGlobalRules([]);
       return;
     }
@@ -479,43 +473,49 @@ export default function App() {
     const seedDefaultAdmin = async () => {
       try {
         // Seed SAW-ADMIN-2026
-        const adminDoc = await getDocFromServer(doc(db, 'vlogs_users', 'SAW-ADMIN-2026'));
+        const adminDoc = await getDocFromServer(doc(db, 'user_controls', 'SAW-ADMIN-2026'));
         if (!adminDoc.exists()) {
           console.log('Seeding default admin Access Code...');
-          const defaultAdmin: AuthorizedUser = {
-            id: 'SAW-ADMIN-2026',
-            userId: 'SAW-ADMIN-2026',
-            label: 'Default Admin',
+          const defaultAdmin: VBSUserControl = {
+            vbsId: 'SAW-ADMIN-2026',
             isActive: true,
             role: 'admin',
-            createdAt: new Date().toISOString(),
-            createdBy: 'system'
+            isUnlimited: true,
+            membershipStatus: 'premium',
+            dailyUsage: 0,
+            lastUsedDate: new Date().toDateString(),
+            isBlocked: false,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
           };
-          await setDoc(doc(db, 'vlogs_users', defaultAdmin.id), defaultAdmin);
+          await setDoc(doc(db, 'user_controls', defaultAdmin.vbsId), defaultAdmin);
         }
 
         // Seed saw_vlogs_2026 as master admin
-        const masterAdminDoc = await getDocFromServer(doc(db, 'vlogs_users', 'saw_vlogs_2026'));
+        const masterAdminDoc = await getDocFromServer(doc(db, 'user_controls', 'saw_vlogs_2026'));
         if (!masterAdminDoc.exists()) {
           console.log('Seeding master admin Access Code...');
-          const masterAdmin: AuthorizedUser = {
-            id: 'saw_vlogs_2026',
-            userId: 'saw_vlogs_2026',
-            label: 'Master Admin',
+          const masterAdmin: VBSUserControl = {
+            vbsId: 'saw_vlogs_2026',
             isActive: true,
             role: 'admin',
-            createdAt: new Date().toISOString(),
-            createdBy: 'system'
+            isUnlimited: true,
+            membershipStatus: 'premium',
+            dailyUsage: 0,
+            lastUsedDate: new Date().toDateString(),
+            isBlocked: false,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
           };
-          await setDoc(doc(db, 'vlogs_users', masterAdmin.id), masterAdmin);
+          await setDoc(doc(db, 'user_controls', masterAdmin.vbsId), masterAdmin);
         }
         console.log('Admin seeding check completed.');
       } catch (err) {
-        console.error('Failed to seed admins:', err);
+        console.error('Failed to seed admin:', err);
       }
     };
     
-    // Only seed if we are on the login screen or admin screen
+    // Only seed if we are not authenticated
     if (!isAccessGranted) {
       seedDefaultAdmin();
     }
@@ -523,7 +523,6 @@ export default function App() {
 
   const handleLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (isVerifyingCode) return;
     
     const code = accessCodeInput.trim();
     if (!code) {
@@ -531,47 +530,32 @@ export default function App() {
       return;
     }
 
-    // Step 1: Admin bypass or reveal password
+    // [COMMANDER BYPASS - URGENT]
+    if (code === 'saw_vlogs_2026') {
+      setIsAccessGranted(true);
+      setAccessCode(code);
+      setVbsId(code);
+      localStorage.setItem('VBS_USER_ID', code);
+      localStorage.setItem('vbs_access_granted', 'true');
+      localStorage.setItem('vbs_access_code', code);
+      setProfile({ 
+        vbsId: code, 
+        role: 'admin', 
+        isActive: true, 
+        note: 'The Commander',
+        membershipStatus: 'premium'
+      } as unknown as VBSUserControl);
+      setToast({ message: 'Welcome back, Commander!', type: 'success' });
+      setTimeout(() => setToast(null), 3000);
+      return;
+    }
+
+    // Step 1: Check code presence
     if (!isStepTwo) {
-      if (code === 'saw_vlogs_2026') {
-        setIsVerifyingCode(true);
-        setError(null);
-        try {
-          setIsAccessGranted(true);
-          setAccessCode(code);
-          // Sync vbsId with accessCode for admin
-          setVbsId(code);
-          localStorage.setItem('VBS_USER_ID', code);
-          setProfile({
-            id: 'saw_vlogs_2026',
-            note: 'Admin Saw',
-            isActive: true,
-            role: 'admin',
-            createdAt: new Date(),
-            expiryDate: '2099-12-31'
-          });
-          localStorage.setItem('vbs_access_granted', 'true');
-          localStorage.setItem('vbs_access_code', code);
-          localStorage.setItem('vbs_admin_auth', 'saw_vlogs_2026');
-          setToast({ message: 'Welcome Admin Saw!', type: 'success' });
-          setTimeout(() => {
-            setToast(null);
-            window.history.pushState({}, '', '/vbs-admin');
-            window.dispatchEvent(new Event('popstate'));
-          }, 1500);
-        } catch (err) {
-          console.error('Admin login error:', err);
-          setError('An error occurred during login.');
-        } finally {
-          setIsVerifyingCode(false);
-        }
-        return;
-      } else {
-        // Regular user - show password field
-        setIsStepTwo(true);
-        setError(null);
-        return;
-      }
+      // Regular login flow
+      setIsStepTwo(true);
+      setError(null);
+      return;
     }
 
     // Step 2: Regular user login with password
@@ -581,15 +565,15 @@ export default function App() {
     try {
       console.log('Attempting public fetch for Access Code:', code);
       // Requirement 2: Direct Document Match using getDocFromServer for maximum reliability
-      const codeDoc = await getDocFromServer(doc(db, 'vlogs_users', code));
+      const codeDoc = await getDocFromServer(doc(db, 'user_controls', code));
       
       if (!codeDoc.exists()) {
-        console.warn('Access Code not found in vlogs_users collection');
+        console.warn('Access Code not found in user_controls collection');
         setError('Invalid Access Code. Please contact Admin for authorization.');
         return;
       }
 
-      const codeData = codeDoc.data() as AuthorizedUser;
+      const codeData = codeDoc.data() as VBSUserControl;
       
       // Check password if it exists in DB
       if (codeData.password && codeData.password.trim() !== '' && codeData.password !== passwordInput.trim()) {
@@ -621,12 +605,15 @@ export default function App() {
       // Sync vbsId with accessCode for regular user
       setVbsId(code);
       localStorage.setItem('VBS_USER_ID', code);
+      localStorage.setItem('vbs_access_granted', 'true');
+      localStorage.setItem('vbs_access_code', code);
       setProfile(codeData);
       
       // Sync API Key from Firestore to LocalStorage if present
       if (codeData.api_key_stored) {
-        localStorage.setItem('VLOGS_BY_SAW_API_KEY', codeData.api_key_stored);
-        setLocalApiKey(codeData.api_key_stored);
+        const trimmedKey = codeData.api_key_stored.trim();
+        localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
+        setLocalApiKey(trimmedKey);
       }
       
       // Log successful login
@@ -638,9 +625,10 @@ export default function App() {
       
       setToast({ message: 'Welcome back!', type: 'success' });
       setTimeout(() => setToast(null), 3000);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Access Code Verification Error:', err);
-      let msg = err.message || 'Unknown error';
+      const errorObj = err as { message?: string };
+      let msg = errorObj.message || 'Unknown error';
       if (msg.includes('client is offline')) {
         msg = 'Connection failed. Please check your Firebase configuration or wait a moment for the database to initialize.';
       }
@@ -675,104 +663,25 @@ export default function App() {
   const handleClearApiKey = () => {
     localStorage.removeItem('VLOGS_BY_SAW_API_KEY');
     setLocalApiKey(null);
-    setToast({ message: 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ Website ကို ပြန်ဖွင့်ပါမည်။ (Settings saved. Reloading page...)', type: 'success' });
-    setTimeout(() => {
-      window.location.reload();
-    }, 1500);
-  };
-
-  const maskApiKey = (key: string | undefined) => {
-    if (!key) return 'Not Set';
-    if (showApiKey) return key;
-    return `${key.substring(0, 8)}...${key.substring(key.length - 4)}`;
-  };
-
-  const handleUpdateGlobalSettings = async (updates: Partial<GlobalSettings>) => {
-    try {
-      await updateDoc(doc(db, 'settings', 'global'), updates);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, 'settings/global');
-    }
+    setToast({ message: 'API Key အောင်မြင်စွာ ဖျက်လိုက်ပါပြီ။ (API Key cleared successfully!)', type: 'success' });
+    setTimeout(() => setToast(null), 3000);
   };
 
   const handleSaveApiKeyFromModal = async (key: string) => {
     const trimmedKey = key.trim();
-    setIsUpdatingKey(true);
     try {
       // 1. Save to Local Storage ONLY as per safety requirements
       localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
       setLocalApiKey(trimmedKey);
       
-      setToast({ message: 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ Website ကို ပြန်ဖွင့်ပါမည်။ (Settings saved. Reloading page...)', type: 'success' });
-      setTimeout(() => {
-        window.location.reload();
-      }, 1500);
-    } catch (err: any) {
+      setToast({ message: 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ (Settings saved successfully!)', type: 'success' });
+      setTimeout(() => setToast(null), 3000);
+    } catch (err: unknown) {
       console.error('Save API Key Error:', err);
       setToast({ message: 'Failed to save API Key', type: 'error' });
       setTimeout(() => setToast(null), 3000);
     } finally {
-      setIsUpdatingKey(false);
-    }
-  };
-
-  const handleAddGlobalRule = () => {
-    openModal({
-      title: 'Add Global Rule',
-      message: 'Enter the original text and its replacement:',
-      type: 'prompt',
-      placeholder: 'Original text...',
-      confirmText: 'Next',
-      onConfirm: (original) => {
-        if (!original) return;
-        openModal({
-          title: 'Add Global Rule',
-          message: `Enter the replacement for "${original}":`,
-          type: 'prompt',
-          placeholder: 'Replacement text...',
-          confirmText: 'Add Rule',
-          onConfirm: async (replacement) => {
-            if (!replacement) return;
-            try {
-              await addDoc(collection(db, 'globalRules'), {
-                original: original.trim(),
-                replacement: replacement.trim(),
-                createdAt: new Date().toISOString()
-              });
-              setToast({ message: 'Global rule added successfully!', type: 'success' });
-              setTimeout(() => setToast(null), 3000);
-            } catch (err) {
-              handleFirestoreError(err, OperationType.CREATE, 'globalRules');
-            }
-          }
-        });
-      }
-    });
-  };
-
-  const handleDeleteGlobalRule = async (id: string) => {
-    openModal({
-      title: 'Delete Global Rule',
-      message: 'Are you sure you want to delete this global pronunciation rule?',
-      type: 'confirm',
-      confirmText: 'Delete',
-      onConfirm: async () => {
-        try {
-          await deleteDoc(doc(db, 'globalRules', id));
-          setToast({ message: 'Global rule deleted successfully!', type: 'success' });
-          setTimeout(() => setToast(null), 3000);
-        } catch (err) {
-          handleFirestoreError(err, OperationType.DELETE, `globalRules/${id}`);
-        }
-      }
-    });
-  };
-
-  const handleUpdateGlobalRule = async (id: string, updates: Partial<PronunciationRule>) => {
-    try {
-      await updateDoc(doc(db, 'globalRules', id), updates);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `globalRules/${id}`);
+      // Done setting key
     }
   };
 
@@ -797,16 +706,11 @@ export default function App() {
       }
     }
 
-    // Direct Fetching from LocalStorage as requested - Strict Validation
+    // [SINGLE-PASS ESTIMATION - COMMANDER ORDER]
+    // Gemini 1.5 Flash uses single-pass with no recursive sync loops
     const effectiveKey = getEffectiveApiKey();
     
-    const totalTargetSeconds = (config.targetDuration?.minutes || 0) * 60 + (config.targetDuration?.seconds || 0);
-    if (totalTargetSeconds <= 0) {
-      setError('Please set a target duration of at least 1 second.');
-      return;
-    }
-    
-    if (!effectiveKey) {
+    if (!effectiveKey || !effectiveKey.trim()) {
       console.warn("App: Generation blocked - No API Key found. Opening settings modal.");
       openModal({
         title: 'API Key Required',
@@ -819,6 +723,11 @@ export default function App() {
       return;
     }
     
+    if (!text || text.trim().length === 0) {
+      showToast("ကျေးဇူးပြု၍ ပြောင်းလဲလိုသော စာသားကို အရင်ရိုက်ထည့်ပါ။ (Please enter text to convert.)", 'error');
+      return;
+    }
+    
     setIsLoading(true);
     setError(null);
     setResult(null);
@@ -828,26 +737,24 @@ export default function App() {
 
     const runGeneration = async (retryAttempt = 0): Promise<void> => {
       try {
-        const isMock = systemConfig?.mock_mode || false;
         const ttsService = new GeminiTTSService(effectiveKey);
         
+        const currentController = new AbortController();
+        setAbortController(currentController);
+
         console.log("App: Applying pronunciation rules...");
-        // Apply pronunciation rules sequentially: Default -> Global Admin -> User Custom
         let processedText = text;
         
-        // 1. Default Rules
         DEFAULT_RULES.forEach(rule => {
           const regex = new RegExp(rule.original, 'gi');
           processedText = processedText.replace(regex, rule.replacement);
         });
 
-        // 2. Global Admin Rules
         globalRules.forEach(rule => {
           const regex = new RegExp(rule.original, 'gi');
           processedText = processedText.replace(regex, rule.replacement);
         });
         
-        // 3. User Custom Rules
         customRules.split('\n').forEach((line) => {
           const parts = line.split('->').map(p => p.trim());
           if (parts.length === 2) {
@@ -856,108 +763,160 @@ export default function App() {
           }
         });
 
-        console.log("App: Text processed, calling TTS service...");
-        const audioResult = await ttsService.generateTTS(processedText, config, isMock);
+        // [SINGLE-PASS ESTIMATION - COMMANDER ORDER]
+        // Gemini 1.5 Flash uses single-pass with no recursive sync loops
+        const generationPromise = ttsService.generateTTS(
+          processedText, 
+          { ...config }
+        );
+
+        console.log(`App: Calling TTS service with Single-Pass logic...`);
         
-        if (audioResult.isSimulation) {
-          console.warn("App: Received simulation result (fallback triggered)");
-          setError("Note: Real API call failed or timed out. Showing simulation result for testing.");
-        } else {
-          console.log("App: TTS generation successful, updating state...");
+        const audioResult = await generationPromise;
+        
+        // [SPEED ADJUSTMENT - CRITICAL FIX]
+        let finalAudioResult = { ...audioResult };
+        if (config.speed && config.speed !== 1.0) {
+          setIsProcessingSpeed(true);
+          try {
+            console.log(`App: Processing audio speed adjustment to ${config.speed}x...`);
+            const wavBlob = pcmBase64ToWav(audioResult.audioData);
+            const { blob: speedAdjustedBlob, duration: finalDuration } = await renderSpeedAdjustedAudio(wavBlob, config.speed);
+            const finalUrl = URL.createObjectURL(speedAdjustedBlob);
+            
+            // Re-generate subtitles for final duration
+            const finalSubtitles = generateOptimizedSubtitles(processedText, finalDuration);
+            const finalSrt = finalSubtitles.map(s => `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}\n`).join('\n');
+            
+            // Convert blob to base64 for history/storage
+            const speedAdjustedBuffer = await speedAdjustedBlob.arrayBuffer();
+            const reader = new FileReader();
+            const base64Promise = new Promise<string>((resolve) => {
+              reader.onloadend = () => {
+                const base64data = reader.result as string;
+                resolve(base64data.split(',')[1]);
+              };
+            });
+            reader.readAsDataURL(speedAdjustedBlob);
+            const finalBase64 = await base64Promise;
+
+            finalAudioResult = {
+              ...audioResult,
+              audioUrl: finalUrl,
+              audioData: finalBase64,
+              rawAudio: speedAdjustedBuffer, // CRITICAL: Update rawAudio to new buffer
+              duration: finalDuration,
+              baseDuration: finalDuration, // Update so OutputPreview sees the final duration
+              subtitles: finalSubtitles,
+              srtContent: finalSrt,
+              speed: config.speed
+            };
+          } catch (err) {
+            console.error("Speed adjustment failed:", err);
+            // Fallback to 1x if processing fails
+          } finally {
+            setIsProcessingSpeed(false);
+          }
         }
-        
-        setResult(audioResult);
+
+        // [AUTO-PLAY REMOVED - USER REQUEST]
+        // Playback is now triggered manually by the user in the OutputPreview component
+
+        // IMMEDIATE RELEASE: Show result before any DB writes
+        setResult(finalAudioResult);
+        setError(null);
         setEngineStatus('ready');
-
-        // Log successful TTS process
-        if (accessCode && !audioResult.isSimulation) {
-          logActivity(accessCode, 'tts', `Generated prompt: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`);
+        setIsLoading(false); 
+        setAbortController(null);
+        
+        // BACKGROUND TASKS: Non-blocking
+        if (accessCode) {
+          logActivity(accessCode, 'tts', `Generated: ${text.substring(0, 50)}`).catch(() => {});
         }
 
-        // Save to History (Asynchronous if enabled)
-        if (saveToHistory && accessCode && !audioResult.isSimulation) {
-          console.log("App: Saving to history (Asynchronous)...");
-          // We don't await this to ensure immediate result display
+        if (saveToHistory && accessCode) {
           const saveHistory = async () => {
             try {
-              // 1. Upload Audio to Storage
               const audioFileName = `audio/${accessCode}/${Date.now()}.wav`;
               const audioRef = ref(storage, audioFileName);
-              await uploadString(audioRef, audioResult.audioData, 'base64');
+              await uploadString(audioRef, finalAudioResult.audioData, 'base64');
               const audioStorageUrl = await getDownloadURL(audioRef);
 
-              // 2. Upload SRT to Storage
               const srtFileName = `srt/${accessCode}/${Date.now()}.srt`;
               const srtRef = ref(storage, srtFileName);
-              await uploadString(srtRef, audioResult.srtContent);
+              await uploadString(srtRef, finalAudioResult.srtContent);
               const srtStorageUrl = await getDownloadURL(srtRef);
 
-              // 3. Save to Firestore
               await addDoc(collection(db, 'history'), {
                 userId: accessCode,
-                text: text.length > 1000 ? text.substring(0, 1000) + '...' : text,
+                text: text.length > 5000 ? text.substring(0, 5000) + '...' : text,
                 audioStorageUrl: audioStorageUrl,
                 srtStorageUrl: srtStorageUrl,
-                createdAt: new Date().toISOString(),
-                config: config
+                duration: finalAudioResult.duration,
+                config: { ...config },
+                createdAt: serverTimestamp(),
               });
-              
-              // Update total generations
+
               await updateDoc(doc(db, 'settings', 'global'), {
                 total_generations: (globalSettings.total_generations || 0) + 1
               });
-              console.log("App: History saved successfully in background");
-            } catch (storageErr) {
-              console.error('Error saving to history in background:', storageErr);
+
+              console.log("App: Generation saved to history successfully.");
+            } catch (err) {
+              console.error("App: Failed to save to history:", err);
             }
           };
-          
           saveHistory();
         }
-      } catch (err: any) {
-        console.error("App: Generation failed with error:", err);
-        const isRateLimit = err.message === 'RATE_LIMIT_EXHAUSTED' || 
-                          (err.status === 429) || 
-                          (err.message && err.message.includes('429'));
+      } catch (err: unknown) {
+        setIsLoading(false);
+        setAbortController(null);
+        
+        const error = err as { message?: string; name?: string; status?: number };
 
+        if (error.message === 'AbortError' || error.name === 'AbortError') {
+          console.log("App: Generation cancelled by user");
+          setEngineStatus('ready');
+          return;
+        }
+        if (error.message?.startsWith('TEXT_TOO_LONG')) {
+          const parts = error.message.split('|');
+          setError(`${t('generate.textTooLong')} (${parts[1]}/${parts[2]})`);
+          return;
+        }
+        
+        const isRateLimit = error.message === 'RATE_LIMIT_EXHAUSTED' || error.status === 429;
         if (isRateLimit && retryAttempt < 1) {
           setEngineStatus('cooling');
           setRetryCountdown(10);
-          
-          // Start countdown
           const timer = setInterval(() => {
             setRetryCountdown(prev => {
-              if (prev <= 1) {
-                clearInterval(timer);
-                return 0;
-              }
+              if (prev <= 1) { clearInterval(timer); return 0; }
               return prev - 1;
             });
           }, 1000);
-
-          // Auto-retry after 10 seconds
-          setTimeout(() => {
-            runGeneration(retryAttempt + 1);
-          }, 10000);
+          setTimeout(() => runGeneration(retryAttempt + 1), 10000);
           return;
         }
 
         if (isRateLimit) {
           setEngineStatus('limit');
-          setError("Your API Key has reached its temporary limit. The system will resume shortly.");
+          setError(translateError(err, language));
         } else {
-          setError(err.message || 'An unexpected error occurred.');
-          showToast('Generation failed. Please check your API key and connection.', 'error');
+          setError(translateError(err, language));
+          showToast(translateError(err, language), 'error');
         }
-      } finally {
-        if (retryAttempt >= 0) { // Only set loading false if we're not waiting for retry
-          // Actually, we want to keep loading true during cooling
-        }
-      }
+      } 
     };
 
-    await runGeneration();
-    setIsLoading(false);
+    try {
+      await runGeneration();
+    } catch (criticalErr) {
+      console.error("Critical Generation Error:", criticalErr);
+      setError("A critical error occurred. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleDeleteHistory = async (id: string) => {
@@ -1059,14 +1018,31 @@ export default function App() {
       for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i);
       }
-      const wavBlob = pcmToWav(bytes, 24000);
-      const url = URL.createObjectURL(wavBlob);
+      
+      // Check if it's MP3 or PCM (OLD)
+      let audioBlob: Blob;
+      if (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) { // ID3 (MP3)
+        audioBlob = new Blob([bytes], { type: 'audio/mp3' });
+      } else if (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) { // Sync Frame (MP3)
+        audioBlob = new Blob([bytes], { type: 'audio/mp3' });
+      } else {
+        // Assume old PCM format
+        audioBlob = pcmToWav(bytes, 24000);
+      }
+      
+      const url = URL.createObjectURL(audioBlob);
+      const audioArrayBuffer = await audioBlob.arrayBuffer();
       
       setResult({
         audioUrl: url,
         audioData: audioData,
+        rawAudio: audioArrayBuffer,
         srtContent: srtContent,
-        subtitles: GeminiTTSService.parseSRT(srtContent)
+        subtitles: GeminiTTSService.parseSRT(srtContent),
+        baseDuration: item.baseDuration || 0,
+        oneXDuration: item.oneXDuration || item.baseDuration || 0,
+        speed: item.config.speed || 1.0,
+        duration: item.duration || item.baseDuration || 0
       });
       setActiveTab('generate');
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1076,7 +1052,10 @@ export default function App() {
     }
   };
 
-  const isVbsAdmin = profile?.role === 'admin' || accessCode === 'saw_vlogs_2026';
+  const isVbsAdmin = useMemo(() => {
+    const ADMIN_CODE = import.meta.env.VITE_ADMIN_ACCESS_CODE || 'saw_vlogs_2026';
+    return accessCode === ADMIN_CODE;
+  }, [accessCode]);
 
   const isExpired = useMemo(() => {
     if (!userControl?.expiryDate || isVbsAdmin) return false;
@@ -1091,24 +1070,8 @@ export default function App() {
     }
   }, [userControl?.expiryDate, isVbsAdmin]);
 
-  const daysUntilExpiry = useMemo(() => {
-    if (!userControl?.expiryDate || isVbsAdmin) return null;
-    try {
-      const expiry = new Date(userControl.expiryDate);
-      if (isNaN(expiry.getTime())) return null;
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      expiry.setHours(0, 0, 0, 0);
-      const diffTime = expiry.getTime() - today.getTime();
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      return diffDays;
-    } catch (e) {
-      console.error("Days until expiry calculation error:", e);
-      return null;
-    }
-  }, [userControl?.expiryDate, isVbsAdmin]);
-
   const isPremium = isVbsAdmin || (userControl?.membershipStatus === 'premium' && !isExpired);
+  const canUseThumbnail = isVbsAdmin || (isPremium && !!globalSettings.allow_thumbnail_admin_key);
 
   useEffect(() => {
     if (isExpired && userControl?.isUnlimited) {
@@ -1130,7 +1093,7 @@ export default function App() {
     }
   }, [isLoading, result, activeTab]);
 
-  const NavTab = ({ id, icon, label, tooltip, onClick, active, locked = false }: {
+  const NavTab = ({ icon, label, tooltip, onClick, active, locked = false }: {
     id: Tab;
     icon: React.ReactNode;
     label: string;
@@ -1200,11 +1163,29 @@ export default function App() {
         toggleTheme={() => setIsDarkMode(!isDarkMode)} 
         onOpenTools={() => setIsApiKeyModalOpen(true)}
         isAccessGranted={isAccessGranted}
-        isAdmin={accessCode === 'saw_vlogs_2026'}
+        isAdmin={isVbsAdmin}
         onLogout={handleLogout}
+        profile={profile}
+        userControl={userControl}
       />
 
+      {isAccessGranted && !isVbsAdmin && (
+        <AnnouncementPanel announcements={globalSettings.announcements} />
+      )}
+
       <main className="flex-1 container mx-auto px-4 sm:px-6 py-6 sm:py-8 overflow-x-hidden">
+        <div className="mb-8 text-center sm:text-left">
+          <h1 className="text-3xl sm:text-5xl font-black text-slate-900 dark:text-white mb-2 flex items-center justify-center sm:justify-start gap-3">
+            Vlogs By Saw
+            <span className="text-xs bg-brand-purple/10 text-brand-purple px-3 py-1 rounded-full uppercase tracking-tighter shadow-sm border border-brand-purple/20">
+              Premium AI Narration
+            </span>
+          </h1>
+          <p className="text-slate-500 dark:text-slate-400 font-medium max-w-2xl">
+            Professional Burmese Storytelling & Cinematic AI Voiceover Studio. Engineered for high-end recap content.
+          </p>
+        </div>
+
         {isConfigLoading ? (
           <div className="flex flex-col items-center justify-center py-40">
             <div className="flex items-center justify-center gap-1.5 h-12 mb-6">
@@ -1225,6 +1206,21 @@ export default function App() {
               ))}
             </div>
             <p className="text-slate-500 font-bold uppercase tracking-widest text-xs animate-pulse">Initializing Narration Engine...</p>
+            
+            <div className="mt-12 flex flex-col items-center gap-3">
+              <a 
+                href={window.location.href} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 px-4 py-2 bg-brand-purple/10 text-brand-purple rounded-full hover:bg-brand-purple/20 transition-all text-sm font-medium group"
+              >
+                <ExternalLink size={14} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                Open in New Tab (Fixes Safari/iOS)
+              </a>
+              <p className="text-[10px] text-slate-400 max-w-[250px] text-center leading-relaxed">
+                If the app fails to load, your browser might be blocking session cookies. Opening in a new tab or disabling "Prevent Cross-Site Tracking" in Safari usually fixes this.
+              </p>
+            </div>
           </div>
         ) : (isAdminRoute || isAdminConfigRoute) ? (
           <AdminDashboard 
@@ -1234,6 +1230,7 @@ export default function App() {
               setAccessCode(code);
             }}
             configOnly={isAdminConfigRoute}
+            isSessionSynced={isSessionSynced}
           />
         ) : !isAccessGranted ? (
           <div className="flex flex-col items-center justify-center py-20 text-center px-4">
@@ -1323,17 +1320,9 @@ export default function App() {
                 id="generate"
                 active={activeTab === 'generate'}
                 onClick={() => setActiveTab('generate')}
-                icon={<Wand2 size={18} />}
-                label={t('nav.generate')}
+                icon={<Mic2 size={18} />}
+                label={t('nav.studio')}
                 tooltip={t('tooltips.generate')}
-              />
-              <NavTab
-                id="translator"
-                active={activeTab === 'translator'}
-                onClick={() => setActiveTab('translator')}
-                icon={<Languages size={18} />}
-                label={t('nav.translator')}
-                tooltip={t('tooltips.translator')}
               />
               <NavTab
                 id="transcriber"
@@ -1349,6 +1338,21 @@ export default function App() {
                 label={t('nav.transcriber')}
                 tooltip={isPremium ? t('tooltips.premiumActive') : t('tooltips.transcriber')}
                 locked={!isPremium}
+              />
+              <NavTab
+                id="thumbnail"
+                active={activeTab === 'thumbnail'}
+                onClick={() => {
+                  if (!canUseThumbnail) {
+                    showToast(isPremium ? t('thumbnailFeature.temporarilyDisabled') : t('thumbnailFeature.premiumRequired'), "error");
+                    return;
+                  }
+                  setActiveTab('thumbnail');
+                }}
+                icon={<ImageIcon size={18} />}
+                label={t('nav.thumbnail') || 'သမ်းနေးလ်'}
+                tooltip={canUseThumbnail ? t('tooltips.thumbnail') : t('thumbnailFeature.locked')}
+                locked={!canUseThumbnail}
               />
               <NavTab
                 id="history"
@@ -1387,6 +1391,8 @@ export default function App() {
                       showToast={showToast}
                       engineStatus={engineStatus}
                       retryCountdown={retryCountdown}
+                      speed={config.speed}
+                      hasResult={!!result}
                     />
                     
                     {/* Default Pronunciation Rules Table */}
@@ -1410,7 +1416,13 @@ export default function App() {
 
                   {/* Right Column - Config */}
                   <div className="lg:col-span-5 space-y-8">
-                    <VoiceConfig config={config} setConfig={setConfig} isDarkMode={isDarkMode} />
+                    <VoiceConfig 
+                      config={config} 
+                      setConfig={setConfig} 
+                      isDarkMode={isDarkMode} 
+                      isAdmin={profile?.role === 'admin'}
+                      baseDuration={result?.oneXDuration}
+                    />
 
                     <div className="space-y-4">
                       <div className="flex items-center justify-between bg-white/50 backdrop-blur dark:bg-slate-900/50 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors duration-300">
@@ -1419,8 +1431,8 @@ export default function App() {
                             <History size={18} />
                           </div>
                           <div>
-                            <p className="text-sm font-bold text-slate-900 dark:text-white">မှတ်တမ်းသိမ်းဆည်းမည်</p>
-                            <p className="text-[10px] text-slate-500 dark:text-slate-400">Keep a record of this generation for later access</p>
+                            <p className="text-sm font-bold text-slate-900 dark:text-white">{t('generate.saveToHistory')}</p>
+                            <p className="text-[10px] text-slate-500 dark:text-slate-400">{t('generate.saveToHistoryDesc')}</p>
                           </div>
                         </div>
                         <button
@@ -1432,119 +1444,119 @@ export default function App() {
                         </button>
                       </div>
 
-                      {/* Target Duration Input */}
-                      <div className="premium-glass rounded-[24px] p-6 border border-white/5 space-y-4 shadow-xl">
-                        <div className="flex items-center justify-between">
-                          <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                            <Clock size={14} className="text-brand-purple" /> ဗီဒီယိုကြာချိန် သတ်မှတ်ရန်
-                          </label>
-                          {(text.length > ((config.targetDuration?.minutes || 0) * 60 + (config.targetDuration?.seconds || 0)) * 15) && (
-                            <motion.span 
-                              initial={{ opacity: 0, scale: 0.9 }}
-                              animate={{ opacity: 1, scale: 1 }}
-                              className="text-[10px] font-bold text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20"
-                            >
-                              AI will condense long text
-                            </motion.span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <div className="flex-1 bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-xl p-3 flex flex-col items-center gap-1 shadow-inner group transition-all focus-within:ring-2 focus-within:ring-brand-purple/30">
-                            <input 
-                              type="number" 
-                              min="0"
-                              max="59"
-                              value={config.targetDuration?.minutes || 0}
-                              onChange={(e) => setConfig({
-                                ...config, 
-                                targetDuration: { ...config.targetDuration!, minutes: parseInt(e.target.value) || 0 }
-                              })}
-                              className="bg-transparent text-2xl font-mono font-bold text-center w-full focus:outline-none text-slate-900 dark:text-white"
-                            />
-                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">မိနစ်</span>
-                          </div>
-                          <div className="text-2xl font-bold text-slate-300 dark:text-slate-700">:</div>
-                          <div className="flex-1 bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-xl p-3 flex flex-col items-center gap-1 shadow-inner group transition-all focus-within:ring-2 focus-within:ring-brand-purple/30">
-                            <input 
-                              type="number" 
-                              min="0"
-                              max="59"
-                              value={config.targetDuration?.seconds || 0}
-                              onChange={(e) => setConfig({
-                                ...config, 
-                                targetDuration: { ...config.targetDuration!, seconds: parseInt(e.target.value) || 0 }
-                              })}
-                              className="bg-transparent text-2xl font-mono font-bold text-center w-full focus:outline-none text-slate-900 dark:text-white"
-                            />
-                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">စက္ကန့်</span>
-                          </div>
-                        </div>
-                      </div>
+                      {config.speed > 1.5 && (
+                          <motion.div 
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="mb-6 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 shadow-xl shadow-amber-500/5"
+                          >
+                            <div className="flex gap-3">
+                              <Info size={18} className="shrink-0 mt-0.5 text-amber-500" />
+                              <div className="text-[11px] leading-relaxed space-y-1">
+                                <p className="font-bold">အမြန်နှုန်း အရမ်းမြန်ရင် အသံအရည်အသွေး အနည်းငယ် ပြောင်းလဲနိုင်ပါတယ်။</p>
+                                <p className="opacity-80">အကောင်းဆုံး အသံထွက်အတွက် 1.2x မှ 1.5x အတွင်းသာ ထားရှိရန် အကြံပြုပါတယ်။</p>
+                                <button 
+                                  onClick={() => setConfig(prev => ({ ...prev, speed: 1.2 }))}
+                                  className="mt-2 flex items-center gap-1.5 px-3 py-1 bg-amber-500 text-white rounded-full font-bold uppercase text-[9px] tracking-wider hover:bg-amber-600 transition-all shadow-lg shadow-amber-500/30"
+                                >
+                                  <Sparkles size={10} />
+                                  Optimize to 1.2x
+                                </button>
+                              </div>
+                            </div>
+                          </motion.div>
+                        )}
 
                       <button
-                        onClick={handleGenerate}
-                        disabled={isLoading}
-                        className={`w-full py-6 rounded-[24px] font-bold text-xl shadow-2xl flex items-center justify-center gap-4 transition-all active:scale-[0.98] bg-brand-purple hover:bg-brand-purple/90 text-white shadow-brand-purple/40`}
+                        onClick={isLoading || isProcessingSpeed ? () => abortController?.abort() : handleGenerate}
+                        disabled={isLoading || isProcessingSpeed}
+                        className={`w-full py-6 rounded-[24px] font-bold text-xl shadow-2xl flex items-center justify-center gap-4 transition-all active:scale-[0.98] ${
+                          (isLoading || isProcessingSpeed) 
+                            ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20 shadow-none cursor-not-allowed' 
+                            : 'bg-brand-purple hover:bg-brand-purple/90 text-white shadow-brand-purple/40'
+                        }`}
                       >
-                        {isLoading ? (
-                          <div className="flex items-center gap-1 h-6">
-                            {[...Array(4)].map((_, i) => (
-                              <motion.div
-                                key={i}
-                                className="w-1.5 bg-white rounded-full"
-                                animate={{
-                                  height: [10, 24, 10],
-                                }}
-                                transition={{
-                                  duration: 0.6,
-                                  repeat: Infinity,
-                                  delay: i * 0.1,
-                                }}
-                              />
-                            ))}
+                        {(isLoading || isProcessingSpeed) ? (
+                          <div className="flex flex-col items-center gap-1">
+                            {isProcessingSpeed ? (
+                              <div className="flex flex-col items-center gap-2">
+                                <RefreshCw size={24} className="animate-spin text-rose-500" />
+                                <span className="text-sm font-bold text-rose-500">
+                                  ⚙️ Speed {config.speed}x အသံပြင်ဆင်နေသည်...
+                                </span>
+                              </div>
+                            ) : (
+                              <>
+                                <div className="flex items-center gap-1 h-5">
+                                  {[...Array(5)].map((_, i) => (
+                                    <motion.div
+                                      key={i}
+                                      className="w-1 bg-rose-500 rounded-full"
+                                      animate={{
+                                        height: [8, 20, 8],
+                                      }}
+                                      transition={{
+                                        duration: 0.6,
+                                        repeat: Infinity,
+                                        delay: i * 0.1,
+                                      }}
+                                    />
+                                  ))}
+                                </div>
+                                <span className="animate-pulse text-xs opacity-90">{t('generate.generating')}</span>
+                                <span className="text-[10px] font-bold opacity-60 uppercase tracking-widest mt-0.5">ခေတ္တစောင့်ဆိုင်းပေးပါ... (Might take 1-2 mins)</span>
+                              </>
+                            )}
                           </div>
+                        ) : error ? (
+                          <>
+                            <RefreshCw size={24} className="animate-spin-slow" /> Retry Generation
+                          </>
                         ) : (
-                          <Zap size={28} fill="currentColor" />
+                          <>
+                            <Wand2 size={24} /> {t('generate.generateBtn')}
+                          </>
                         )}
-                        <div className="flex flex-col items-center">
+                      </button>
+                      <div className="flex flex-col items-center">
                           <span className="flex items-baseline gap-3">
-                            အသံနှင့် စာတန်းထိုး ထုတ်ယူမည်
+                            {"အသံနှင့် စာတန်းထိုး ထုတ်ယူမည်"}
                             <span className="text-sm font-medium opacity-60">
                               ({Math.ceil(text.length / 3000) || 1} {Math.ceil(text.length / 3000) > 1 ? 'chunks' : 'chunk'})
                             </span>
                           </span>
                         </div>
-                      </button>
                     </div>
 
-                    {/* AI Result Area - Hidden until generated */}
-                    <AnimatePresence>
-                      {(isLoading || (result && activeTab === 'generate')) && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 40, scale: 0.98 }}
-                          animate={{ opacity: 1, y: 0, scale: 1 }}
-                          exit={{ opacity: 0, y: 20 }}
-                          transition={{ 
-                            type: "spring", 
-                            stiffness: 100, 
-                            damping: 20,
-                            duration: 0.6 
-                          }}
-                          id="output-preview-container"
-                          className="mt-8"
-                        >
-                          <OutputPreview 
-                            result={result} 
-                            isLoading={isLoading} 
-                            globalVolume={config.volume}
-                            engineStatus={engineStatus}
-                            retryCountdown={retryCountdown}
-                            targetDuration={config.targetDuration}
-                            showToast={showToast}
-                          />
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
+                        <AnimatePresence>
+                          {(isLoading || error || (result && activeTab === 'generate')) && (
+                            <motion.div
+                              initial={{ opacity: 0, y: 40, scale: 0.98 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: 20 }}
+                              transition={{ 
+                                type: "spring", 
+                                stiffness: 100, 
+                                damping: 20,
+                                duration: 0.6 
+                              }}
+                              id="output-preview-container"
+                              className="mt-8"
+                            >
+                              <OutputPreview 
+                                playbackSpeed={config.speed}
+                                result={result} 
+                                isLoading={isLoading} 
+                                error={error}
+                                onRetry={() => handleGenerate()}
+                                globalVolume={config.volume}
+                                engineStatus={engineStatus}
+                                retryCountdown={retryCountdown}
+                                showToast={showToast}
+                              />
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                   </div>
                 </motion.div>
               )}
@@ -1565,11 +1577,12 @@ export default function App() {
                       <h3 className="text-2xl font-bold text-slate-900 dark:text-white">
                         {isExpired ? "သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ" : "ဤသည်မှာ Premium Feature ဖြစ်ပါသည်။"}
                       </h3>
-                      <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
-                        {isExpired 
-                          ? "သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ။ အသုံးပြုလိုပါက Admin ထံ ဆက်သွယ်၍ သက်တမ်းတိုးပါ။" 
-                          : `အသုံးပြုလိုပါက သင်၏ User ID [${vbsId}] ကို Admin ထံပေးပို့၍ ခွင့်ပြုချက်တောင်းခံပါ။`}
-                      </p>
+                        <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
+                          {isExpired 
+                            ? "သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ။ အသုံးပြုလိုပါက Admin ထံ ဆက်သွယ်၍ သက်တမ်းတိုးပါ။" 
+                            : "အသုံးပြုလိုပါက Admin ထံသို့ ခွင့်ပြုချက်တောင်းခံပါ။"
+                          }
+                        </p>
                       <div className="pt-4">
                         <button 
                           onClick={() => setActiveTab('tools')}
@@ -1581,19 +1594,8 @@ export default function App() {
                     </div>
                   ) : (
                     <VideoTranscriber 
-                      onTranscriptionComplete={(transcribedText, duration) => {
+                      onTranscriptionComplete={(transcribedText) => {
                         setText(transcribedText);
-                        if (duration) {
-                          const mins = Math.floor(duration / 60);
-                          const secs = Math.floor(duration % 60);
-                          setConfig(prev => ({
-                            ...prev,
-                            targetDuration: {
-                              minutes: mins,
-                              seconds: secs
-                            }
-                          }));
-                        }
                         setActiveTab('generate');
                         setTimeout(() => {
                           window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1603,139 +1605,28 @@ export default function App() {
                       showToast={showToast}
                       isAdmin={isVbsAdmin}
                       userControl={userControl}
+                      isUsingAdminKey={isUsingAdminKey}
+                      allowVideoRecapAdminKey={globalSettings.allow_video_recap_admin_key}
                     />
                   )}
                 </motion.div>
               )}
 
-              {activeTab === 'translator' && (
+              {activeTab === 'thumbnail' && (
                 <motion.div
-                  key="translator"
+                  key="thumbnail"
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -20 }}
-                  className="max-w-6xl mx-auto space-y-8"
                 >
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 sm:gap-10">
-                    {/* Source Text */}
-                    <div className="glass-card rounded-[32px] p-8 sm:p-10 shadow-2xl transition-all duration-300">
-                      <div className="flex items-center gap-4 mb-8">
-                        <div className="p-2.5 bg-brand-purple/10 rounded-xl text-brand-purple">
-                          <FileText size={24} />
-                        </div>
-                        <h3 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">Source Text</h3>
-                      </div>
-                      <div className="relative group/textarea">
-                        <textarea
-                          value={sourceText}
-                          onChange={(e) => setSourceText(e.target.value)}
-                          placeholder="Enter text to translate (English, Thai, etc.)..."
-                          className="w-full h-80 bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-[24px] px-6 py-5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all resize-none font-medium placeholder:text-slate-400 leading-relaxed"
-                        />
-                        <div className="absolute top-4 right-4 flex gap-2">
-                          <button
-                            onClick={() => {
-                              navigator.clipboard.writeText(sourceText);
-                              showToast('စာသားကို ကူးယူပြီးပါပြီ ✨', 'success');
-                            }}
-                            disabled={!sourceText}
-                            className="p-2.5 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-white/10 rounded-xl text-slate-500 hover:text-brand-purple hover:border-brand-purple/50 transition-all shadow-sm disabled:opacity-30"
-                            title="Copy"
-                          >
-                            <Clipboard size={18} />
-                          </button>
-                          <button
-                            onClick={async () => {
-                              try {
-                                const clipboardText = await navigator.clipboard.readText();
-                                setSourceText(sourceText + clipboardText);
-                                showToast('စာသားကို ထည့်သွင်းပြီးပါပြီ 📋', 'success');
-                              } catch (err) {
-                                console.error('Failed to read clipboard');
-                              }
-                            }}
-                            className="p-2.5 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-white/10 rounded-xl text-slate-500 hover:text-brand-purple hover:border-brand-purple/50 transition-all shadow-sm"
-                            title="Paste"
-                          >
-                            <Clipboard size={18} className="rotate-180" />
-                          </button>
-                        </div>
-                      </div>
-                      <button
-                        onClick={handleTranslate}
-                        disabled={isTranslating || !sourceText.trim()}
-                        className={`w-full mt-8 py-5 rounded-[20px] font-bold text-lg shadow-xl flex items-center justify-center gap-3 transition-all active:scale-[0.98] ${
-                          isTranslating || !sourceText.trim()
-                            ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
-                            : 'bg-brand-purple hover:bg-brand-purple/90 text-white shadow-lg shadow-brand-purple/30'
-                        }`}
-                      >
-                        {isTranslating ? (
-                          <div className="flex items-center gap-0.5 h-5">
-                            {[...Array(3)].map((_, i) => (
-                              <motion.div
-                                key={i}
-                                className="w-1 bg-white rounded-full"
-                                animate={{
-                                  height: [6, 14, 6],
-                                }}
-                                transition={{
-                                  duration: 0.6,
-                                  repeat: Infinity,
-                                  delay: i * 0.1,
-                                }}
-                              />
-                            ))}
-                          </div>
-                        ) : (
-                          <Languages size={22} />
-                        )}
-                        {isTranslating ? 'Translating...' : 'Translate to Burmese'}
-                      </button>
-                    </div>
- 
-                    {/* Burmese Result */}
-                    <div className="glass-card rounded-[32px] p-8 sm:p-10 shadow-2xl transition-all duration-300">
-                      <div className="flex items-center gap-4 mb-8">
-                        <div className="p-2.5 bg-brand-purple/10 rounded-xl text-brand-purple">
-                          <Languages size={24} />
-                        </div>
-                        <h3 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">Burmese Result</h3>
-                      </div>
-                      <div className="relative group/textarea">
-                        <textarea
-                          value={translatedText}
-                          readOnly
-                          placeholder="Burmese translation will appear here..."
-                          className="w-full h-80 bg-slate-100/50 dark:bg-slate-800/20 border border-slate-200 dark:border-slate-800 rounded-[24px] px-6 py-5 text-slate-900 dark:text-white focus:outline-none transition-all resize-none font-medium placeholder:text-slate-400 leading-relaxed"
-                        />
-                        <div className="absolute top-4 right-4">
-                          <button
-                            onClick={() => {
-                              navigator.clipboard.writeText(translatedText);
-                              showToast('စာသားကို ကူးယူပြီးပါပြီ ✨', 'success');
-                            }}
-                            disabled={!translatedText}
-                            className="p-2.5 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-white/10 rounded-xl text-slate-500 hover:text-brand-purple hover:border-brand-purple/50 transition-all shadow-sm disabled:opacity-30"
-                            title="Copy"
-                          >
-                            <Clipboard size={18} />
-                          </button>
-                        </div>
-                      </div>
-                      <button
-                        onClick={sendToGenerator}
-                        disabled={!translatedText.trim()}
-                        className={`w-full mt-8 py-5 rounded-[20px] font-bold text-lg shadow-xl flex items-center justify-center gap-3 transition-all active:scale-[0.98] ${
-                          !translatedText.trim()
-                            ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
-                            : 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:opacity-90 shadow-lg'
-                        }`}
-                      >
-                        <ArrowRight size={22} /> Send to Generator
-                      </button>
-                    </div>
-                  </div>
+                   <ThumbnailCreator 
+                     isDarkMode={isDarkMode} 
+                     showToast={showToast}
+                     getApiKey={getEffectiveApiKey}
+                     isAdmin={isVbsAdmin}
+                     isPremium={isPremium}
+                     allowThumbnailAdminKey={globalSettings.allow_thumbnail_admin_key}
+                   />
                 </motion.div>
               )}
 
@@ -1803,6 +1694,12 @@ export default function App() {
                                     <Clock size={12} />
                                     {new Date(item.createdAt).toLocaleString()}
                                   </div>
+                                  {(item.duration || item.baseDuration) > 0 && (
+                                    <div className="flex items-center gap-2 text-[10px] text-brand-purple font-bold uppercase tracking-widest bg-brand-purple/5 px-2 py-0.5 rounded-full border border-brand-purple/10">
+                                      <Play size={10} fill="currentColor" />
+                                      {formatMyanmarDuration(item.duration || item.baseDuration || 0)}
+                                    </div>
+                                  )}
                                 </div>
                                 <p className="text-base font-medium text-slate-900 dark:text-slate-200 line-clamp-2 leading-relaxed">
                                   {item.text}
@@ -1844,7 +1741,7 @@ export default function App() {
                                 <button 
                                   onClick={() => handleDeleteHistory(item.id)}
                                   className="p-3 bg-rose-500/10 text-rose-500 rounded-[14px] hover:bg-rose-500 hover:text-white transition-all border border-rose-500/20 shadow-sm"
-                                  title={t('common.delete')}
+                                  title={t('history.delete')}
                                 >
                                   <Trash2 size={18} />
                                 </button>
@@ -1867,16 +1764,19 @@ export default function App() {
                   className="max-w-5xl mx-auto space-y-8"
                 >
                   {/* Profile Card */}
-                  <div className="glass-card rounded-[32px] p-8 sm:p-12 shadow-2xl transition-all duration-300">
+                  <div className="glass-card rounded-[32px] p-8 sm:p-12 shadow-2xl transition-all duration-300 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-brand-purple/5 blur-[50px] -z-10" />
                     <div className="flex flex-col lg:flex-row items-center lg:items-start gap-8 lg:gap-10 text-center lg:text-left">
                       <div className="w-24 h-24 sm:w-32 sm:h-32 bg-gradient-to-br from-brand-purple to-purple-700 text-white rounded-[32px] flex items-center justify-center text-4xl sm:text-5xl font-bold shadow-2xl shadow-brand-purple/30 border border-white/10 shrink-0">
                         {accessCode?.charAt(0).toUpperCase() || 'V'}
                       </div>
                       <div className="flex-1 w-full space-y-4">
                         <div className="flex flex-col lg:flex-row items-center gap-4">
-                          <h3 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white tracking-tight">User ID: {accessCode}</h3>
+                          <h3 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white tracking-tight">
+                            {t('settings.title')}
+                          </h3>
                           <span className="flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] sm:text-[11px] font-bold uppercase tracking-[0.15em] border bg-emerald-500/10 text-emerald-500 border-emerald-500/20 shadow-sm">
-                            <CheckCircle2 size={14} /> Authorized Access
+                            <CheckCircle2 size={14} /> AUTHORIZED
                           </span>
                         </div>
                         <div className="flex flex-wrap items-center justify-center lg:justify-start gap-6 text-slate-500 dark:text-slate-400">
@@ -1886,31 +1786,7 @@ export default function App() {
                           </div>
                           <div className="flex items-center gap-2 text-sm font-medium">
                             <ShieldCheck size={16} className="text-brand-purple" />
-                            {isPremium ? 'အဆင့်မြင့် (Premium) အသုံးပြုသူ' : 'သာမန် (Standard) အသုံးပြုသူ'}
-                          </div>
-                          <div className="flex items-center gap-2 text-sm font-medium">
-                            <Calendar size={16} className="text-brand-purple" />
-                            {isVbsAdmin ? (
-                              "သက်တမ်း: Lifetime Premium"
-                            ) : (userControl?.membershipStatus === 'premium' || userControl?.isUnlimited) ? (
-                              <div className="flex items-center gap-2">
-                                <span>အကောင့်သက်တမ်းကုန်ဆုံးရက်: {userControl.expiryDate ? (
-                                  (() => {
-                                    try {
-                                      const d = new Date(userControl.expiryDate);
-                                      return isNaN(d.getTime()) ? 'မာစတာအကောင့် (Master)' : d.toLocaleDateString('en-GB');
-                                    } catch(e) { return 'မာစတာအကောင့် (Master)'; }
-                                  })()
-                                ) : 'မာစတာအကောင့် (Master)'}</span>
-                                {daysUntilExpiry !== null && daysUntilExpiry <= 3 && daysUntilExpiry >= 0 && (
-                                  <span className="px-2 py-0.5 bg-amber-500/10 text-amber-500 rounded-md text-[10px] font-bold animate-pulse border border-amber-500/20">
-                                    {daysUntilExpiry === 0 ? "ယနေ့ ကုန်ဆုံးပါမည်" : `${daysUntilExpiry} ရက်သာ လိုပါတော့သည်`}
-                                  </span>
-                                )}
-                              </div>
-                            ) : (
-                              "သက်တမ်း: Standard User"
-                            )}
+                            {isPremium ? (language === 'mm' ? 'အဆင့်မြင့် (Premium) အသုံးပြုသူ' : 'Premium Access Active') : (language === 'mm' ? 'သာမန် (Standard) အသုံးပြုသူ' : 'Standard User')}
                           </div>
                         </div>
                         
@@ -1984,6 +1860,7 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
       <Modal
         isOpen={modal.isOpen}
         onClose={() => setModal({ ...modal, isOpen: false })}

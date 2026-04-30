@@ -12,9 +12,11 @@
         "role": { "type": "string", "enum": ["admin", "user"], "description": "The user's role in the system." },
         "api_key_stored": { "type": "string", "description": "The user's personal Google AI Studio API Key." },
         "is_verified": { "type": "boolean", "description": "Whether the user has been manually verified by an admin." },
-        "pending_verification": { "type": "boolean", "description": "Whether the user has requested activation." }
+        "pending_verification": { "type": "boolean", "description": "Whether the user has requested activation." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastSignInAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["uid", "email", "role", "is_verified"]
+      "required": ["uid", "email", "role"]
     },
     "PronunciationRule": {
       "title": "Pronunciation Rule",
@@ -84,10 +86,35 @@
       "description": "System-wide settings for API keys and monitoring.",
       "type": "object",
       "properties": {
-        "global_system_key": { "type": "string" },
-        "allow_global_key": { "type": "boolean" },
-        "total_generations": { "type": "number" }
+        "allow_admin_keys": { "type": "boolean" },
+        "total_generations": { "type": "number" },
+        "api_keys": { "type": "array", "items": { "type": "string" } },
+        "primary_key": { "type": "string" },
+        "secondary_key": { "type": "string" },
+        "backup_key": { "type": "string" }
       }
+    },
+    "Session": {
+      "title": "User Session",
+      "description": "Transient session information linking Auth UID to Access Code.",
+      "type": "object",
+      "properties": {
+        "accessCode": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["accessCode", "createdAt"]
+    },
+    "ActivityLog": {
+      "title": "Activity Log",
+      "description": "System activity logs for auditing.",
+      "type": "object",
+      "properties": {
+        "vbsId": { "type": "string" },
+        "type": { "type": "string" },
+        "details": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["vbsId", "type", "details", "createdAt"]
     },
     "SystemConfig": {
       "title": "System Configuration",
@@ -132,6 +159,14 @@
     "/system_config/main": {
       "schema": "SystemConfig",
       "description": "Global system configuration for Firebase and Telegram."
+    },
+    "/sessions/{uid}": {
+      "schema": "Session",
+      "description": "Auth session mapping."
+    },
+    "/activity_logs/{logId}": {
+      "schema": "ActivityLog",
+      "description": "System activity logs."
     }
   }
 }

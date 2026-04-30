@@ -1,26 +1,26 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Sun, Moon, Settings, Mic2, User, ChevronDown, LogOut, ShieldCheck, Calendar, UserCircle, Globe } from 'lucide-react';
-import { AuthorizedUser } from '../types';
+import { Sun, Moon, Mic2, User, ChevronDown, LogOut, ShieldCheck, UserCircle, Globe, Shield } from 'lucide-react';
+import { VBSUserControl } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 
 interface HeaderProps {
   isDarkMode: boolean;
   toggleTheme: () => void;
-  onOpenTools: () => void;
   isAccessGranted: boolean;
   isAdmin: boolean;
   onLogout: () => void;
-  profile: AuthorizedUser | null;
+  profile: VBSUserControl | null;
+  userControl: VBSUserControl | null;
 }
 
 export const Header: React.FC<HeaderProps> = ({ 
   isDarkMode, 
   toggleTheme, 
-  onOpenTools,
   isAccessGranted,
   isAdmin,
   onLogout,
-  profile
+  profile,
+  userControl
 }) => {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -35,16 +35,6 @@ export const Header: React.FC<HeaderProps> = ({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  const formatDate = (dateStr?: string) => {
-    if (!dateStr) return 'N/A';
-    try {
-      const date = new Date(dateStr);
-      return date.toLocaleDateString(language === 'mm' ? 'my-MM' : 'en-GB'); 
-    } catch (e) {
-      return dateStr;
-    }
-  };
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-slate-200/50 dark:border-slate-800/50 bg-white/70 dark:bg-[#020617]/70 backdrop-blur-xl transition-colors duration-300">
@@ -72,15 +62,17 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-2 sm:gap-4">
           <button
             onClick={() => setLanguage(language === 'mm' ? 'en' : 'mm')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-[12px] border transition-all text-[11px] font-bold uppercase tracking-wider ${
+            className={`flex items-center justify-center gap-2 px-3 sm:px-4 py-2 rounded-[14px] border transition-all text-[10px] sm:text-[11px] font-extrabold uppercase tracking-widest w-24 sm:w-36 h-10 sm:h-11 shadow-sm shrink-0 ${
               language === 'mm' 
-                ? 'bg-amber-500/10 text-amber-500 border-amber-500/20' 
-                : 'bg-blue-500/10 text-blue-500 border-blue-500/20'
+                ? 'bg-amber-500/10 text-amber-500 border-amber-500/20 hover:bg-amber-500/20' 
+                : 'bg-indigo-500/10 text-indigo-500 border-indigo-500/20 hover:bg-indigo-500/20'
             }`}
             title="Switch Language"
           >
-            <Globe size={14} />
-            {language === 'mm' ? 'Burmese (MM)' : 'English (EN)'}
+            <Globe size={14} className="shrink-0" />
+            <span className="w-16 sm:w-20 text-center">
+              {language === 'mm' ? 'BURMESE' : 'ENGLISH'}
+            </span>
           </button>
 
           <button
@@ -128,23 +120,19 @@ export const Header: React.FC<HeaderProps> = ({
                           <h3 className="font-bold text-slate-900 dark:text-white truncate">
                             {profile?.note || profile?.label || (language === 'mm' ? 'Saw အသုံးပြုသူ' : 'Saw User')}
                           </h3>
-                          <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-emerald-500">
-                            <ShieldCheck size={12} />
-                            {language === 'mm' ? 'အကောင့်အခြေအနေ: Active' : 'Account Status: Active'}
+                           <div className={`flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.1em] ${
+                            isAdmin 
+                              ? 'text-amber-500' 
+                              : (userControl?.membershipStatus === 'premium' ? 'text-emerald-500' : 'text-slate-500')
+                          }`}>
+                            {isAdmin ? <Shield size={10} className="fill-current" /> : <ShieldCheck size={10} />}
+                            {!isAdmin && (userControl?.membershipStatus === 'premium' ? 'PREMIUM ACCESS' : 'STANDARD USER')}
                           </div>
-                        </div>
-                      </div>
-
-                      {/* Details */}
-                      <div className="space-y-3 mb-6">
-                        <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-white/5 border border-slate-100 dark:border-white/5">
-                          <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                            <Calendar size={14} />
-                            {t('admin.expiry')}
-                          </div>
-                          <div className="text-xs font-bold text-slate-900 dark:text-white">
-                            {formatDate(profile?.expiryDate)}
-                          </div>
+                          {!(isAdmin || profile?.id === 'saw_vlogs_2026' || userControl?.vbsId === 'saw_vlogs_2026') && (
+                            <div className="mt-1.5 text-[10px] font-mono font-bold text-brand-purple/80 bg-brand-purple/5 px-2 py-0.5 rounded-lg border border-brand-purple/10 w-fit">
+                              ID: {profile?.id || userControl?.vbsId || 'Unknown'}
+                            </div>
+                          )}
                         </div>
                       </div>
 

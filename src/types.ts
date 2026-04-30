@@ -1,29 +1,3 @@
-export interface User {
-  uid: string;
-  email: string;
-  displayName?: string;
-  photoURL?: string;
-  role: 'admin' | 'user';
-  is_verified?: boolean;
-  pending_verification?: boolean;
-  createdAt?: any;
-  lastSignInAt?: any;
-}
-
-export interface AuthorizedUser {
-  id: string; // Document ID (Access Code)
-  userId?: string; // Explicit User ID as requested
-  createdAt: any; // Firestore Timestamp
-  isActive: boolean;
-  role: 'admin' | 'user';
-  note?: string; // Optional name/label
-  label?: string; // Alias for note
-  api_key_stored?: string;
-  password?: string; // User password
-  expiryDate?: string; // ISO date string
-  createdBy?: string;
-}
-
 export interface VBSUserControl {
   vbsId: string;
   dailyUsage: number;
@@ -33,9 +7,33 @@ export interface VBSUserControl {
   membershipStatus?: 'standard' | 'premium';
   customLimit?: number;
   expiryDate?: string; // ISO date string or YYYY-MM-DD
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   updatedAt: any;
-  lastLoginAt?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  lastLoginAt?: any;
   dailyTasks?: number;
+  role?: 'admin' | 'user';
+  isActive?: boolean;
+  note?: string;
+  password?: string;
+  api_key_stored?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  createdAt?: any;
+}
+
+export interface Announcement {
+  id: string;
+  message: string;
+  type: 'info' | 'warning' | 'success' | 'promotion';
+  isActive: boolean;
+  startDate?: string;
+  endDate?: string;
+  createdAt: string;
+  dismissible: boolean;
+  title?: string;
+  ctaLabel?: string;
+  ctaLink?: string;
+  scrollSpeed?: 'slow' | 'normal' | 'fast';
 }
 
 export interface GlobalSettings {
@@ -45,10 +43,13 @@ export interface GlobalSettings {
   secondary_key?: string;
   backup_key?: string;
   allow_admin_keys: boolean; // Toggle to allow users to use admin keys
+  allow_video_recap_admin_key?: boolean; // New gate for video recap
+  allow_thumbnail_admin_key?: boolean; // New gate for thumbnail
   total_generations: number;
   mock_mode?: boolean;
   transcription_daily_limit?: number;
   transcription_public_access?: boolean;
+  announcements?: Announcement[];
 }
 
 export interface SystemConfig {
@@ -59,6 +60,7 @@ export interface SystemConfig {
   telegram_bot_token: string;
   telegram_chat_id: string;
   mock_mode?: boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   updatedAt?: any;
 }
 
@@ -71,6 +73,9 @@ export interface HistoryItem {
   srtContent?: string;
   createdAt: string;
   config: TTSConfig;
+  baseDuration: number;
+  oneXDuration: number;
+  duration?: number;
 }
 
 export interface VoiceOption {
@@ -94,23 +99,29 @@ export interface SRTSubtitle {
 }
 
 export interface TTSConfig {
-  model: string;
   voiceId: string;
   speed: number;
   pitch: number;
   volume: number;
   styleInstruction?: string;
-  targetDuration?: {
-    minutes: number;
-    seconds: number;
-  };
+  vocalStyle?: 'Neutral' | 'Expressive' | 'Energetic' | 'Calm';
+  creativityLevel?: number; // 0.2 to 0.8
+  useGrounding?: boolean;
+  highFidelity?: boolean;
+  fastTrack?: boolean;
+  effects?: Record<string, boolean | number | string>;
 }
 
 export interface AudioResult {
   audioUrl: string; // Blob URL for local preview
   audioData: string; // base64 for download/upload
+  rawAudio?: ArrayBuffer; // Raw binary data to avoid base64 corruption
   srtContent: string;
   subtitles: SRTSubtitle[];
+  baseDuration: number; // Actual duration of the generated audio file (already speed-adjusted)
+  oneXDuration: number; // Normalized duration at 1.0x speed for estimation
+  speed: number; // Speed at which it was generated
+  duration: number; // Duration in seconds
 }
 
 export interface ActivityLog {

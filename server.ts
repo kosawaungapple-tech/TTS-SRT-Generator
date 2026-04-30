@@ -1,14 +1,10 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
-import { fileURLToPath } from "url";
 import { getFirestore } from "firebase-admin/firestore";
-import { getAuth } from "firebase-admin/auth";
+import { getAuth, DecodedIdToken } from "firebase-admin/auth";
 import { initializeApp, getApps, getApp } from "firebase-admin/app";
 import firebaseConfig from "./firebase-applet-config.json" with { type: "json" };
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Initialize Firebase Admin
 const app = getApps().length 
@@ -20,8 +16,12 @@ const app = getApps().length
 const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 const auth = getAuth(app);
 
+interface AuthenticatedRequest extends express.Request {
+  user?: DecodedIdToken;
+}
+
 // Middleware to verify Firebase ID Token
-const authenticate = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+const authenticate = async (req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthenticated: Missing authorization header' });
@@ -30,10 +30,10 @@ const authenticate = async (req: express.Request, res: express.Response, next: e
   const idToken = authHeader.split('Bearer ')[1];
   try {
     const decodedToken = await auth.verifyIdToken(idToken);
-    (req as any).user = decodedToken;
+    req.user = decodedToken;
     next();
-  } catch (error) {
-    console.error('Error verifying Firebase ID token:', error);
+  } catch (err) {
+    console.error('Error verifying Firebase ID token:', err);
     res.status(401).json({ error: 'Unauthenticated: Invalid token' });
   }
 };
@@ -98,8 +98,11 @@ async function startServer() {
   });
 
   // Example protected route
-  app.get("/api/user/profile", authenticate, async (req, res) => {
-    const userId = (req as any).user.uid;
+  app.get("/api/user/profile", authenticate, async (req: AuthenticatedRequest, res) => {
+    const userId = req.user?.uid;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthenticated' });
+    }
     try {
       const userDoc = await db.collection('users').doc(userId).get();
       if (userDoc.exists) {
@@ -107,7 +110,8 @@ async function startServer() {
       } else {
         res.status(404).json({ error: 'User not found' });
       }
-    } catch (error) {
+    } catch (err) {
+      console.error("Profile fetch error:", err);
       res.status(500).json({ error: 'Internal server error' });
     }
   });

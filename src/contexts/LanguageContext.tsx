@@ -33,17 +33,17 @@ export const LanguageProvider: React.FC<{ children: ReactNode }> = ({ children }
   // Type-safe translation helper
   const t = (path: string): string => {
     const keys = path.split('.');
-    let current: any = translations;
+    let current: Record<string, unknown> = translations as unknown as Record<string, unknown>;
     
     for (const key of keys) {
-      if (current[key] === undefined) {
+      if (!current || (current as Record<string, unknown>)[key] === undefined) {
         console.warn(`Translation key not found: ${path}`);
         return path;
       }
-      current = current[key];
+      current = (current as Record<string, unknown>)[key] as Record<string, unknown>;
     }
     
-    return current[language] || path;
+    return (current as unknown as Record<Language, string>)[language] || path;
   };
 
   return (

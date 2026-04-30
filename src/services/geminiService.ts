@@ -1,399 +1,182 @@
-import { GoogleGenAI, Modality } from "@google/genai";
 import { TTSConfig, AudioResult, SRTSubtitle } from "../types";
-import { GEMINI_MODELS, VOICE_OPTIONS } from "../constants";
-import { pcmToWav, formatTime } from "../utils/audioUtils";
+import { VOICE_OPTIONS, GEMINI_MODELS } from "../constants";
+import { formatTime } from "../utils/audioUtils";
+import { generateOptimizedSubtitles } from "../utils/subtitleUtils";
 
+interface GeminiResponse {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        text?: string;
+        inlineData?: {
+          data: string;
+          mimeType: string;
+        };
+      }>;
+    };
+  }>;
+}
+
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+
+/**
+ * GeminiTTSService handles integration with Google Generative AI
+ */
 export class GeminiTTSService {
-  private ai: GoogleGenAI;
-  private apiKeys: string[];
+  private apiKey: string;
   private static currentKeyIndex: number = 0;
-  private static keyStatuses: { [index: number]: { isRateLimited: boolean; lastUsed: number } } = {};
+  private apiKeys: string[] = [];
 
   constructor(apiKeys?: string | string[]) {
     if (Array.isArray(apiKeys)) {
-      this.apiKeys = apiKeys.filter(k => k.trim()).map(k => k.trim());
-    } else {
-      const rawKey = apiKeys || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '') || '';
-      // Support comma-separated keys if passed as string
-      this.apiKeys = rawKey.split(',').map(k => k.trim()).filter(k => k);
+      this.apiKeys = apiKeys.map(k => k.trim()).filter(k => k);
+    } else if (apiKeys && typeof apiKeys === 'string') {
+      this.apiKeys = apiKeys.split(',').map(k => k.trim()).filter(k => k);
     }
 
     if (this.apiKeys.length === 0) {
-      this.apiKeys = [''];
+      const envKey = (typeof process !== 'undefined' ? (process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY) : '') || '';
+      if (envKey.trim()) {
+        this.apiKeys = [envKey.trim()];
+      }
     }
 
-    // Initialize statuses if not already present
-    this.apiKeys.forEach((_, i) => {
-      if (!GeminiTTSService.keyStatuses[i]) {
-        GeminiTTSService.keyStatuses[i] = { isRateLimited: false, lastUsed: 0 };
-      }
+    if (this.apiKeys.length === 0) {
+      throw new Error("API Key required. Please configure in Settings.");
+    }
+
+    this.apiKey = this.apiKeys[GeminiTTSService.currentKeyIndex] || this.apiKeys[0];
+  }
+
+  private async geminiRequest(model: string, body: object): Promise<GeminiResponse> {
+    const url = `${GEMINI_BASE}/${model}:generateContent?key=${this.apiKey}`;
+    console.log(`Gemini Request [${model}]:`, url);
+    
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
     });
 
-    console.log("GeminiTTSService: Initialized with", this.apiKeys.length, "keys");
-    this.ai = new GoogleGenAI({ apiKey: this.apiKeys[GeminiTTSService.currentKeyIndex] || this.apiKeys[0], apiVersion: 'v1beta' });
+    if (!res.ok) {
+      const responseText = await res.text();
+      console.error(`TTS Response status: ${res.status}`);
+      console.error(`TTS Response body: ${responseText}`);
+
+      let err;
+      try {
+        err = JSON.parse(responseText);
+      } catch {
+        err = { error: { message: responseText || res.statusText, status: res.status } };
+      }
+      
+      console.error(`Gemini Error [${model}]:`, JSON.stringify(err, null, 2));
+      
+      if (res.status === 429 && this.apiKeys.length > 1) {
+        this.rotateKey();
+        return this.geminiRequest(model, body);
+      }
+      
+      throw err;
+    }
+
+    return res.json() as Promise<GeminiResponse>;
+  }
+
+  private rotateKey(): void {
+    if (this.apiKeys.length <= 1) return;
+    GeminiTTSService.currentKeyIndex = (GeminiTTSService.currentKeyIndex + 1) % this.apiKeys.length;
+    this.apiKey = this.apiKeys[GeminiTTSService.currentKeyIndex];
+    console.log(`GeminiService: Rotated to channel ${GeminiTTSService.currentKeyIndex}`);
   }
 
   public static getActiveKeyIndex(): number {
     return GeminiTTSService.currentKeyIndex;
   }
 
-  public getKeyCount(): number {
-    return this.apiKeys.length;
-  }
-
-  private rotateKey(): boolean {
-    if (this.apiKeys.length <= 1) return false;
-    
-    // Mark current key as rate limited
-    GeminiTTSService.keyStatuses[GeminiTTSService.currentKeyIndex].isRateLimited = true;
-    GeminiTTSService.keyStatuses[GeminiTTSService.currentKeyIndex].lastUsed = Date.now();
-
-    // Find next available key that isn't rate limited (or the one that was limited longest ago)
-    let nextIndex = (GeminiTTSService.currentKeyIndex + 1) % this.apiKeys.length;
-    let found = false;
-    
-    // Try to find a non-limited key
-    for (let i = 0; i < this.apiKeys.length; i++) {
-      const idx = (GeminiTTSService.currentKeyIndex + 1 + i) % this.apiKeys.length;
-      if (!GeminiTTSService.keyStatuses[idx].isRateLimited) {
-        nextIndex = idx;
-        found = true;
-        break;
-      }
-    }
-
-    // If all are limited, just pick the next one anyway (it might have recovered)
-    if (!found) {
-      nextIndex = (GeminiTTSService.currentKeyIndex + 1) % this.apiKeys.length;
-    }
-
-    GeminiTTSService.currentKeyIndex = nextIndex;
-    const nextKey = this.apiKeys[GeminiTTSService.currentKeyIndex];
-    this.ai = new GoogleGenAI({ apiKey: nextKey, apiVersion: 'v1beta' });
-    console.log(`GeminiTTSService: Rotated to key index ${GeminiTTSService.currentKeyIndex} (Starts with ${nextKey.substring(0, 4)}...)`);
-    return true;
-  }
-
   async verifyConnection(): Promise<{ isValid: boolean; status?: number; error?: string }> {
-    if (!this.apiKeys[GeminiTTSService.currentKeyIndex]) {
-      console.error("GeminiTTSService: Cannot verify connection - Current API Key is empty");
-      return { isValid: false, error: "Empty API Key" };
-    }
-
     try {
-      console.log("GeminiTTSService: Verifying connection with models.list...");
-      const response = await this.ai.models.list();
-      
-      if (response) {
-        return { isValid: true };
-      } else {
-        return { isValid: false, error: "No response from models.list" };
-      }
-    } catch (err: any) {
-      console.error("GeminiTTSService: Verification failed:", err);
-      return { isValid: false, error: err.message, status: err.status };
+      await this.geminiRequest(GEMINI_MODELS.VERIFY, {
+        contents: [{ parts: [{ text: "ping" }] }]
+      });
+      return { isValid: true };
+    } catch (err: unknown) {
+      const error = err as { error?: { message?: string, status?: number } };
+      return { 
+        isValid: false, 
+        error: error.error?.message || "Connection failed", 
+        status: error.error?.status 
+      };
     }
   }
 
-  async generateTTS(text: string, config: TTSConfig, forceMock: boolean = false): Promise<AudioResult & { isSimulation?: boolean }> {
-    console.log("TTS Service: Starting generation...", { 
-      forceMock, 
-      textLength: text.length,
-      keyCount: this.apiKeys.length,
-      currentKeyIndex: GeminiTTSService.currentKeyIndex
-    });
+  async generateTTS(text: string, config: TTSConfig): Promise<AudioResult> {
+    const voice = VOICE_OPTIONS.find(v => v.id === config.voiceId) || VOICE_OPTIONS[0];
 
-    const runMock = async () => {
-      console.log("TTS Service: Running in SIMULATION mode");
-      await new Promise(resolve => setTimeout(resolve, 1500)); // Brief delay for realism
-      
-      // Estimate duration for simulation (approx 15 chars per second)
-      const estimatedDuration = Math.max(2, text.length / 15);
-      const sampleRate = 24000;
-      const numSamples = Math.floor(estimatedDuration * sampleRate);
-      const dummyBytes = new Uint8Array(numSamples * 2); // 16-bit PCM
-      
-      const wavBlob = pcmToWav(dummyBytes, sampleRate);
-      const audioUrl = URL.createObjectURL(wavBlob);
-      const subtitles = this.generateMockSRT(text, estimatedDuration);
-      const srtContent = subtitles.map(s => 
-        `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}`
-      ).join('\n\n') + '\n\n';
-
-      console.log("TTS Service: Simulation generation successful", { estimatedDuration });
-      return {
-        audioUrl,
-        audioData: "MOCK_DATA",
-        srtContent,
-        subtitles,
-        isSimulation: true
-      };
-    };
-
-    if (forceMock) {
-      return await runMock();
-    }
-
-    if (!this.apiKeys[GeminiTTSService.currentKeyIndex]) {
-      console.error("TTS Service: API Key missing, falling back to simulation");
-      return await runMock();
-    }
-
-    const voiceId = config.voiceId || 'zephyr';
-    const voice = VOICE_OPTIONS.find(v => v.id === voiceId) || VOICE_OPTIONS[0];
-    const language = voice.name.split(' ')[0];
-    
-    // Request Validation (Error 400 Fix)
-    const speed = Math.max(0.25, Math.min(4.0, parseFloat(String(config.speed)) || 1.0));
-    const pitch = Math.max(-20.0, Math.min(20.0, parseFloat(String(config.pitch)) || 0.0));
-    const volume = Math.max(0, Math.min(100, parseFloat(String(config.volume)) || 80));
-
-    const styleCmd = config.styleInstruction?.trim() 
-      ? `Command: ${config.styleInstruction.trim()}. Now, read the following text: ` 
-      : "Narrate the following text in a natural, clear, and cinematic voice. ";
-
-    const targetDuration = config.targetDuration;
-    const totalTargetSeconds = targetDuration ? (targetDuration.minutes * 60 + targetDuration.seconds) : 0;
-    
-    const durationConstraint = totalTargetSeconds > 0
-      ? `You are a speed-controlled narrator. Current text MUST be narrated to fit EXACTLY into ${totalTargetSeconds} seconds. 
-         If the text is too long, you MUST speak faster. If it's too short, you MUST add pauses. 
-         DO NOT exceed the limit by even one second. 
-         You are a professional voice actor. You MUST time your speech to finish EXACTLY at ${targetDuration?.minutes} minutes and ${targetDuration?.seconds} seconds (${totalTargetSeconds} seconds). Do not finish early, do not finish late. 
-         Adjust the narration speed and word count accordingly to hit the target duration with 100% precision.`
-      : "";
-
-    const payload = {
-      model: config.model || GEMINI_MODELS.TTS,
-      contents: [{ parts: [{ text: `${styleCmd}
-      Language: ${language}.
-      Gender: ${voice.gender}.
-      Speaking rate: ${speed.toFixed(2)}x. 
-      Pitch: ${pitch.toFixed(1)}. 
-      Volume: ${volume}%.
-      ${durationConstraint}
-      Ensure word-for-word accuracy and do not summarize: ${text}` }] }],
-      config: {
-        responseModalities: [Modality.AUDIO],
+    const body = {
+      contents: [{ parts: [{ text: text }] }],
+      generationConfig: {
+        responseModalities: ["AUDIO"],
         speechConfig: {
           voiceConfig: {
             prebuiltVoiceConfig: {
-              voiceName: voice.voiceName
+              voiceName: voice.voiceName || "Puck"
             }
           }
         }
       }
     };
 
-    console.log("TTS Service: API Payload", JSON.stringify(payload, null, 2));
+    const data = await this.geminiRequest(GEMINI_MODELS.TTS, body);
+    const part = data.candidates?.[0]?.content?.parts?.[0];
+    const base64Audio = part?.inlineData?.data;
 
-    let attempts = 0;
-    const maxAttempts = this.apiKeys.length;
-
-    while (attempts < maxAttempts) {
-      try {
-        console.log(`TTS Service: Sending request (Attempt ${attempts + 1}/${maxAttempts}) using key index ${GeminiTTSService.currentKeyIndex}`);
-        const response = await this.ai.models.generateContent(payload);
-
-        console.log("TTS Service: Received response from API");
-
-        const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-
-        if (!base64Audio) {
-          throw new Error('No audio data received from Gemini');
-        }
-
-        const binaryString = window.atob(base64Audio);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-
-        // Gemini TTS returns raw PCM (24000Hz, 16-bit, mono)
-        const sampleRate = 24000;
-        const wavBlob = pcmToWav(bytes, sampleRate);
-        const audioUrl = URL.createObjectURL(wavBlob);
-        
-        // Calculate actual duration: bytes / (sampleRate * bytesPerSample * channels)
-        // 16-bit mono = 2 bytes per sample
-        const actualDuration = bytes.length / (sampleRate * 2);
-        
-        const effectiveDuration = totalTargetSeconds > 0 ? totalTargetSeconds : actualDuration;
-        const subtitles = this.generateMockSRT(text, effectiveDuration);
-        const srtContent = subtitles.map(s => 
-          `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}`
-        ).join('\n\n') + '\n\n';
-
-        console.log("TTS Service: API generation successful", { actualDuration });
-        return {
-          audioUrl,
-          audioData: base64Audio,
-          srtContent,
-          subtitles
-        };
-      } catch (err: any) {
-        const isRateLimit = err.status === 429 || 
-                          (err.message && err.message.includes('429')) || 
-                          (err.details && err.details.includes('429')) ||
-                          (err.message && err.message.toLowerCase().includes('rate limit'));
-        
-        if (isRateLimit && attempts < maxAttempts - 1) {
-          console.warn(`TTS Service: Rate limit hit (429) on key index ${GeminiTTSService.currentKeyIndex}. Rotating key...`);
-          this.rotateKey();
-          attempts++;
-          continue;
-        }
-
-        if (isRateLimit && attempts >= maxAttempts - 1) {
-          throw new Error("RATE_LIMIT_EXHAUSTED");
-        }
-
-        console.error("TTS Service: API call failed.", {
-          message: err.message,
-          status: err.status,
-          attempts: attempts + 1
-        });
-        
-        // If we've exhausted all keys or it's not a rate limit error, fallback to mock
-        return await runMock();
-      }
+    if (!base64Audio) {
+      console.error('No audio in response:', JSON.stringify(data));
+      throw new Error('No audio data returned from Gemini candidates');
     }
 
-    return await runMock();
-  }
+    // [PCM to WAV CONVERSION]
+    const pcmToWavBlob = (base64: string): Blob => {
+      const pcm = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+      const sampleRate = 24000;
+      const buf = new ArrayBuffer(44 + pcm.length);
+      const view = new DataView(buf);
+      const w = (o: number, s: string) => [...s].forEach((c, i) => view.setUint8(o + i, c.charCodeAt(0)));
+      w(0, 'RIFF'); view.setUint32(4, 36 + pcm.length, true);
+      w(8, 'WAVE'); w(12, 'fmt '); view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+      view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
+      view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+      w(36, 'data'); view.setUint32(40, pcm.length, true);
+      new Uint8Array(buf).set(pcm, 44);
+      return new Blob([buf], { type: 'audio/wav' });
+    };
 
-  async rewriteContent(text: string): Promise<string> {
-    console.log("GeminiTTSService: Rewriting content...");
-    
-    if (!this.apiKeys[GeminiTTSService.currentKeyIndex]) {
-      throw new Error("No API Key available for rewriting");
-    }
+    const audioBlob = pcmToWavBlob(base64Audio);
+    const audioUrl = URL.createObjectURL(audioBlob);
+    const arrayBuffer = await audioBlob.arrayBuffer();
 
-    const prompt = `You are a professional Burmese content creator. Paraphrase the following text to be unique, engaging, and copyright-safe. Use a natural storytelling tone. Original text: ${text}`;
+    // Duration estimation for subtitles (Baseline 1x)
+    const AudioContextClass = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext) as typeof AudioContext;
+    const audioContext = new AudioContextClass();
+    const decodedBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+    const totalDuration = decodedBuffer.duration;
+    await audioContext.close();
 
-    let attempts = 0;
-    const maxAttempts = this.apiKeys.length;
+    const subtitles = generateOptimizedSubtitles(text, totalDuration);
 
-    while (attempts < maxAttempts) {
-      try {
-        const response = await this.ai.models.generateContent({
-          model: GEMINI_MODELS.REWRITE,
-          contents: prompt,
-        });
-
-        const resultText = response.text;
-        if (!resultText) {
-          throw new Error("No text returned from Gemini");
-        }
-
-        return resultText.trim();
-      } catch (err: any) {
-        const isRateLimit = err.status === 429 || (err.message && err.message.includes('429'));
-        
-        if (isRateLimit && attempts < maxAttempts - 1) {
-          this.rotateKey();
-          attempts++;
-          continue;
-        }
-
-        if (isRateLimit && attempts >= maxAttempts - 1) {
-          throw new Error("RATE_LIMIT_EXHAUSTED");
-        }
-        throw err;
-      }
-    }
-    throw new Error("Failed to rewrite content after all attempts");
-  }
-
-  async translateContent(text: string): Promise<string> {
-    console.log("GeminiTTSService: Translating content...");
-    
-    if (!this.apiKeys[GeminiTTSService.currentKeyIndex]) {
-      throw new Error("No API Key available for translation");
-    }
-
-    const prompt = `Translate the provided text into Natural, Cinematic, and Professional storytelling Burmese. Use a tone suitable for high-end video narration. Ensure the phrasing is concise and readable for subtitles. Original: ${text}`;
-
-    let attempts = 0;
-    const maxAttempts = this.apiKeys.length;
-
-    while (attempts < maxAttempts) {
-      try {
-        const response = await this.ai.models.generateContent({
-          model: GEMINI_MODELS.TRANSLATE,
-          contents: prompt,
-        });
-
-        const resultText = response.text;
-        if (!resultText) {
-          throw new Error("No text returned from Gemini");
-        }
-
-        return resultText.trim();
-      } catch (err: any) {
-        const isRateLimit = err.status === 429 || (err.message && err.message.includes('429'));
-        
-        if (isRateLimit && attempts < maxAttempts - 1) {
-          this.rotateKey();
-          attempts++;
-          continue;
-        }
-
-        if (isRateLimit && attempts >= maxAttempts - 1) {
-          throw new Error("RATE_LIMIT_EXHAUSTED");
-        }
-        throw err;
-      }
-    }
-    throw new Error("Failed to translate content after all attempts");
-  }
-
-  async transcribeVideo(videoBase64: string, mimeType: string): Promise<string> {
-    console.log("GeminiTTSService: Transcribing video...");
-    
-    if (!this.apiKeys[GeminiTTSService.currentKeyIndex]) {
-      throw new Error("No API Key available for transcription");
-    }
-
-    const prompt = "Listen to this video carefully. Transcribe every word spoken. Output the result in a clean script format. Do not include timestamps, just the spoken text.";
-
-    let attempts = 0;
-    const maxAttempts = this.apiKeys.length;
-
-    while (attempts < maxAttempts) {
-      try {
-        const response = await this.ai.models.generateContent({
-          model: GEMINI_MODELS.REWRITE,
-          contents: {
-            parts: [
-              { inlineData: { data: videoBase64, mimeType } },
-              { text: prompt }
-            ]
-          },
-        });
-
-        const resultText = response.text;
-        if (!resultText) {
-          throw new Error("No text returned from Gemini");
-        }
-
-        return resultText.trim();
-      } catch (err: any) {
-        const isRateLimit = err.status === 429 || (err.message && err.message.includes('429'));
-        
-        if (isRateLimit && attempts < maxAttempts - 1) {
-          this.rotateKey();
-          attempts++;
-          continue;
-        }
-
-        if (isRateLimit && attempts >= maxAttempts - 1) {
-          throw new Error("RATE_LIMIT_EXHAUSTED");
-        }
-        throw err;
-      }
-    }
-    throw new Error("Failed to transcribe video after all attempts");
+    return {
+      audioUrl,
+      audioData: base64Audio,
+      rawAudio: arrayBuffer,
+      srtContent: subtitles.map(s => `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}\n`).join('\n'),
+      subtitles,
+      baseDuration: totalDuration,
+      oneXDuration: totalDuration,
+      speed: 1.0,
+      duration: totalDuration
+    };
   }
 
   static parseSRT(srt: string): SRTSubtitle[] {
@@ -402,76 +185,137 @@ export class GeminiTTSService {
       const lines = block.split('\n');
       if (lines.length < 3) return null;
       const index = parseInt(lines[0]);
+      if (isNaN(index)) return null;
       const [startTime, endTime] = lines[1].split(' --> ');
       const text = lines.slice(2).join(' ');
       return { index, startTime, endTime, text };
     }).filter((s): s is SRTSubtitle => s !== null);
   }
 
-  private generateMockSRT(text: string, totalDuration?: number): SRTSubtitle[] {
-    // Clean text and handle multiple spaces
-    const cleanText = text.replace(/\s+/g, ' ').trim();
-    
-    // Burmese text often doesn't have spaces. 
-    // We'll split by spaces first, then further split long chunks by characters.
-    const words = cleanText.split(' ');
-    const chunks: string[] = [];
-    const MAX_CHARS_PER_LINE = 48; // Target 45-50
-    const MAX_WORDS_PER_LINE = 10; // Target 10-12 Burmese words (if space-separated)
-
-    let currentChunk = "";
-    let wordCountInChunk = 0;
-
-    for (const word of words) {
-      // If adding this word exceeds character limit or word limit
-      if ((currentChunk.length + word.length + 1 > MAX_CHARS_PER_LINE && currentChunk.length > 0) || 
-          (wordCountInChunk >= MAX_WORDS_PER_LINE)) {
-        chunks.push(currentChunk);
-        currentChunk = word;
-        wordCountInChunk = 1;
-      } else {
-        currentChunk = currentChunk ? `${currentChunk} ${word}` : word;
-        wordCountInChunk++;
-      }
-
-      // Handle extremely long words (e.g. long Burmese strings without spaces)
-      while (currentChunk.length > MAX_CHARS_PER_LINE) {
-        chunks.push(currentChunk.substring(0, MAX_CHARS_PER_LINE));
-        currentChunk = currentChunk.substring(MAX_CHARS_PER_LINE);
-        wordCountInChunk = 1; // Reset word count for the remainder
-      }
-    }
-    if (currentChunk) chunks.push(currentChunk);
-
-    const subtitles: SRTSubtitle[] = [];
-    const totalChars = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
-    
-    // If totalDuration is not provided, estimate it (approx 15 chars per second)
-    const effectiveDuration = totalDuration || (totalChars / 15);
-    
-    let currentTime = 0;
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      // Calculate weight based on character length
-      const weight = chunk.length / totalChars;
-      let duration = weight * effectiveDuration;
+  private async generateSRTWithGemini(text: string, totalDuration: number): Promise<SRTSubtitle[]> {
+    try {
+      console.log("TTS Service: Generating optimized subtitles with strict chunking rules...");
+      // Using the deterministic chunking logic to ensure strict adherence to character and line limits
+      const subtitles = generateOptimizedSubtitles(text, totalDuration);
       
-      // Ensure the last subtitle ends EXACTLY at the effectiveDuration
-      let endTime = currentTime + duration;
-      if (i === chunks.length - 1) {
-        endTime = effectiveDuration;
+      if (subtitles.length === 0) {
+        throw new Error("Generated zero subtitles");
       }
+      
+      return subtitles;
+    } catch (error) {
+      console.error("TTS Service: Failed to generate optimized SRT, falling back to mock:", error);
+      return this.generateMockSRT(text, totalDuration);
+    }
+  }
+
+  private generateMockSRT(text: string, totalDuration: number = 0): SRTSubtitle[] {
+    const words = text.split(/\s+/);
+    const subtitles: SRTSubtitle[] = [];
+    const estimatedTotalDuration = totalDuration > 0 ? totalDuration : text.length * 0.1;
+    const wordsPerSubtitle = 5;
+    const totalChunks = Math.ceil(words.length / wordsPerSubtitle);
+    const durationPerChunk = estimatedTotalDuration / Math.max(1, totalChunks);
+
+    let currentTime = 0;
+
+    for (let i = 0; i < words.length; i += wordsPerSubtitle) {
+      const chunk = words.slice(i, i + wordsPerSubtitle).join(' ');
       
       subtitles.push({
-        index: i + 1,
+        index: Math.floor(i / wordsPerSubtitle) + 1,
         startTime: formatTime(currentTime),
-        endTime: formatTime(endTime),
+        endTime: formatTime(currentTime + durationPerChunk),
         text: chunk
       });
       
-      currentTime = endTime;
+      currentTime += durationPerChunk;
     }
 
     return subtitles;
   }
+
+  /**
+   * Rewrites content to be unique using gemini-2.5-flash with specific styles
+   */
+  async rewriteContent(text: string, style: 'conversational' | 'storytelling' | 'news' | 'poetic' | 'educational' = 'conversational'): Promise<string> {
+    const stylePrompts = {
+      conversational: "Rewrite this Myanmar text to be conversational and natural. Remove formal endings.",
+      storytelling: "Rewrite this Myanmar text in a storytelling style. Make it engaging.",
+      news: "Rewrite this Myanmar text in a formal news anchor style.",
+      poetic: "Rewrite this Myanmar text to be poetic and rhythmic.",
+      educational: "Rewrite this Myanmar text using very simple, short sentences."
+    };
+
+    const prompt = `${stylePrompts[style]}\n\nOriginal Text:\n${text}\n\nOutput only the rewritten Myanmar text.`;
+    const data = await this.geminiRequest(GEMINI_MODELS.REWRITE, {
+      contents: [{ parts: [{ text: prompt }] }]
+    });
+    const textResult = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!textResult) throw new Error('No text generated by Gemini');
+    return textResult.trim();
+  }
+
+  async translateContent(text: string): Promise<string> {
+    const prompt = `Translate the following text into natural, cinematic Burmese for high-end video narration: ${text}`;
+    const data = await this.geminiRequest(GEMINI_MODELS.TRANSLATE, {
+      contents: [{ parts: [{ text: prompt }] }]
+    });
+    return (data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+  }
+
+  async transcribeVideoFile(file: File): Promise<string> {
+    // 1. Upload file using File API
+    const uploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${this.apiKey}`;
+    
+    const uploadRes = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        'X-Goog-Upload-Command': 'start, upload, finalize',
+        'X-Goog-Upload-Header-Content-Length': file.size.toString(),
+        'X-Goog-Upload-Header-Content-Type': file.type,
+        'Content-Type': 'application/octet-stream'
+      },
+      body: file
+    });
+
+    if (!uploadRes.ok) {
+      throw new Error(`File upload failed: ${uploadRes.statusText}`);
+    }
+
+    const uploadData = await uploadRes.json();
+    const fileUri = uploadData.file.uri;
+
+    // 2. Generate transcript
+    const data = await this.geminiRequest(GEMINI_MODELS.VIDEO, {
+      contents: [{
+        parts: [
+          { fileData: { mimeType: file.type, fileUri } },
+          { text: "Transcribe this video in Myanmar language accurately." }
+        ]
+      }]
+    });
+
+    return (data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+  }
+
+  async generateImage(prompt: string): Promise<string> {
+    const body = {
+      contents: [{ parts: [{ text: `Generate thumbnail: ${prompt}` }] }],
+      generationConfig: {
+        responseModalities: ["TEXT", "IMAGE"]
+      }
+    };
+
+    const data = await this.geminiRequest(GEMINI_MODELS.IMAGE, body);
+    
+    for (const part of data.candidates?.[0]?.content?.parts || []) {
+      if (part.inlineData?.mimeType?.startsWith('image/')) {
+        return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+      }
+    }
+
+    throw new Error("No image data received from Gemini candidates");
+  }
 }
+

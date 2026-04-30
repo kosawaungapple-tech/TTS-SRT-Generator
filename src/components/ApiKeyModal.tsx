@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Key, Eye, EyeOff, Save, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, ShieldCheck } from 'lucide-react';
-import { GeminiTTSService } from '../services/geminiService';
+import { X, Key, Eye, EyeOff, Save, CheckCircle2, AlertCircle, ExternalLink, ShieldCheck } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 
 interface ApiKeyModalProps {
@@ -17,7 +16,6 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
   const { t } = useLanguage();
   const [apiKey, setApiKey] = useState(initialKey);
   const [showKey, setShowKey] = useState(false);
-  const [isValidating, setIsValidating] = useState(false);
   const [validationStatus, setValidationStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -37,38 +35,28 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
     }
   };
 
-  const handleSaveAndTest = async () => {
+  const handleSaveAndTest = (e?: React.FormEvent | React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    
     if (!apiKey.trim()) {
-      setValidationStatus('success');
       onSave('');
-      setTimeout(() => {
-        onClose();
-      }, 1500);
+      onClose();
       return;
     }
 
-    setIsValidating(true);
-    setValidationStatus('idle');
-    
     try {
-      const service = new GeminiTTSService(apiKey);
-      const result = await service.verifyConnection();
-      
-      if (result.isValid) {
-        setValidationStatus('success');
-        onSave(apiKey.trim());
-        setTimeout(() => {
-          onClose();
-        }, 2000);
-      } else {
-        setValidationStatus('error');
-        setErrorMessage(t('keyModal.invalid'));
-      }
-    } catch (error) {
+      onSave(apiKey.trim());
+      setValidationStatus('success');
+      setTimeout(() => {
+        onClose();
+      }, 600);
+    } catch (err) {
+      console.error("Save failed:", err);
       setValidationStatus('error');
-      setErrorMessage(t('keyModal.unexpected'));
-    } finally {
-      setIsValidating(false);
+      setErrorMessage("သိမ်းဆည်း၍ မရပါ။ (Save Failed)");
     }
   };
 
@@ -102,6 +90,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
                 </div>
               </div>
               <button 
+                type="button"
                 onClick={onClose}
                 className="p-2 hover:bg-slate-200 dark:hover:bg-white/10 rounded-full transition-colors text-slate-400 hover:text-slate-600 dark:hover:text-white"
               >
@@ -111,98 +100,84 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
 
             {/* Content */}
             <div className="p-8 space-y-6">
-              <div className="space-y-3">
-                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 px-1">
-                  {t('keyModal.label')}
-                </label>
-                <div className="relative group">
-                  <input
-                    type={showKey ? "text" : "password"}
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder={t('keyModal.placeholder')}
-                    className={`w-full bg-slate-50 dark:bg-slate-950 border rounded-2xl px-6 py-4 text-lg font-mono transition-all pr-14 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 text-slate-900 dark:text-white placeholder:text-slate-400 ${
-                      !apiKey.trim() 
-                        ? 'border-red-500/50' 
-                        : 'border-slate-200 dark:border-slate-800'
-                    }`}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowKey(!showKey)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-brand-purple transition-colors"
+              <form 
+                onSubmit={handleSaveAndTest}
+                className="space-y-6"
+              >
+                <div className="space-y-3">
+                  <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 px-1">
+                    {t('keyModal.label')}
+                  </label>
+                  <div className="relative group">
+                    <input
+                      type={showKey ? "text" : "password"}
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      placeholder={t('keyModal.placeholder')}
+                      className={`w-full bg-slate-50 dark:bg-slate-950 border rounded-2xl px-6 py-4 text-lg font-mono transition-all pr-14 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 text-slate-900 dark:text-white placeholder:text-slate-400 ${
+                        !apiKey.trim() 
+                          ? 'border-red-500/50' 
+                          : 'border-slate-200 dark:border-slate-800'
+                      }`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowKey(!showKey)}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-brand-purple transition-colors"
+                    >
+                      {showKey ? <EyeOff size={20} /> : <Eye size={20} />}
+                    </button>
+                  </div>
+                  
+                  <a 
+                    href="https://aistudio.google.com/app/apikey" 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-xs font-bold text-brand-purple hover:underline px-1 w-fit group"
                   >
-                    {showKey ? <EyeOff size={20} /> : <Eye size={20} />}
+                    {t('keyModal.getApiKey')}
+                    <ExternalLink size={12} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                  </a>
+                </div>
+
+                {validationStatus !== 'idle' && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className={`p-4 rounded-2xl border flex items-center gap-3 ${
+                      validationStatus === 'success' 
+                        ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400' 
+                        : 'bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400'
+                    }`}
+                  >
+                    {validationStatus === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
+                    <span className="text-sm font-bold">
+                      {validationStatus === 'success' 
+                        ? t('keyModal.verifying')
+                        : errorMessage}
+                    </span>
+                  </motion.div>
+                )}
+
+                <div className="flex gap-3">
+                  {onClear && initialKey && (
+                    <button
+                      type="button"
+                      onClick={handleClear}
+                      className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold text-lg transition-all hover:bg-red-500/10 hover:text-red-500 active:scale-[0.98]"
+                    >
+                      {t('keyModal.clear')}
+                    </button>
+                  )}
+                  <button
+                    type="submit"
+                    className={`${onClear && initialKey ? 'flex-[2]' : 'w-full'} py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg shadow-xl shadow-brand-purple/20 flex items-center justify-center gap-3 transition-all hover:bg-brand-purple/90 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed`}
+                  >
+                    <Save size={22} />
+                    {t('keyModal.save')}
                   </button>
                 </div>
-                
-                <a 
-                  href="https://aistudio.google.com/app/apikey" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2 text-xs font-bold text-brand-purple hover:underline px-1 w-fit group"
-                >
-                  {t('keyModal.getApiKey')}
-                  <ExternalLink size={12} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-                </a>
-              </div>
-
-              {validationStatus !== 'idle' && (
-                <motion.div
-                  initial={{ opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className={`p-4 rounded-2xl border flex items-center gap-3 ${
-                    validationStatus === 'success' 
-                      ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400' 
-                      : 'bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400'
-                  }`}
-                >
-                  {validationStatus === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-                  <span className="text-sm font-bold">
-                    {validationStatus === 'success' 
-                      ? t('keyModal.verifying')
-                      : errorMessage}
-                  </span>
-                </motion.div>
-              )}
-
-              <div className="flex gap-3">
-                {onClear && initialKey && (
-                  <button
-                    onClick={handleClear}
-                    className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold text-lg transition-all hover:bg-red-500/10 hover:text-red-500 active:scale-[0.98]"
-                  >
-                    {t('keyModal.clear')}
-                  </button>
-                )}
-                <button
-                  onClick={handleSaveAndTest}
-                  disabled={isValidating}
-                  className={`${onClear && initialKey ? 'flex-[2]' : 'w-full'} py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg shadow-xl shadow-brand-purple/20 flex items-center justify-center gap-3 transition-all hover:bg-brand-purple/90 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed`}
-                >
-                  {isValidating ? (
-                    <div className="flex items-center gap-0.5 h-5">
-                      {[...Array(3)].map((_, i) => (
-                        <motion.div
-                          key={i}
-                          className="w-1 bg-white rounded-full"
-                          animate={{
-                            height: [6, 14, 6],
-                          }}
-                          transition={{
-                            duration: 0.6,
-                            repeat: Infinity,
-                            delay: i * 0.1,
-                          }}
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <Save size={22} />
-                  )}
-                  {t('keyModal.save')}
-                </button>
-              </div>
+              </form>
             </div>
             
             {/* Footer Info */}

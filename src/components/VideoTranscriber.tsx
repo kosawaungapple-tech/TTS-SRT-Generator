@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Upload, FileVideo, CheckCircle2, AlertCircle, Sparkles, Trash2, ShieldCheck, Lock, User, Eye } from 'lucide-react';
+import { Upload, FileVideo, CheckCircle2, AlertCircle, Sparkles, Trash2, ShieldCheck, Lock } from 'lucide-react';
 import { GeminiTTSService } from '../services/geminiService';
 import { logActivity } from '../services/activityService';
+import { translateError } from '../utils/errorUtils';
 import { VBSUserControl } from '../types';
 import { db, doc, updateDoc } from '../firebase';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -13,6 +14,8 @@ interface VideoTranscriberProps {
   showToast: (message: string, type: 'success' | 'error') => void;
   isAdmin: boolean;
   userControl: VBSUserControl | null;
+  isUsingAdminKey: boolean;
+  allowVideoRecapAdminKey?: boolean;
 }
 
 export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({ 
@@ -20,9 +23,11 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
   getApiKey, 
   showToast,
   isAdmin,
-  userControl
+  userControl,
+  isUsingAdminKey,
+  allowVideoRecapAdminKey = true
 }) => {
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoDuration, setVideoDuration] = useState<number | null>(null);
@@ -49,11 +54,12 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
       const expiry = new Date(userControl.expiryDate);
       if (isNaN(expiry.getTime())) return false;
       return expiry.setHours(23, 59, 59, 999) < Date.now();
-    } catch (e) {
+    } catch {
       return false;
     }
   })();
   const isPremium = isAdmin || (userControl?.membershipStatus === 'premium' && !isExpired);
+  const isRecapRestricted = isUsingAdminKey && !allowVideoRecapAdminKey;
 
   const incrementUsage = async () => {
     if (isPremium) return;
@@ -106,18 +112,6 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
     }
   };
 
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => {
-        const base64String = (reader.result as string).split(',')[1];
-        resolve(base64String);
-      };
-      reader.onerror = error => reject(error);
-    });
-  };
-
   const handleTranscribe = async () => {
     if (!videoFile) return;
 
@@ -131,9 +125,15 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
         showToast(`${t('video.recapLocked')} - ${t('video.contactAdmin')} [${userControl?.vbsId || 'VBS-XXXX'}]`, 'error');
         return;
       }
+
+      if (isRecapRestricted) {
+        showToast(t('video.videoRecapLimited'), 'error');
+        return;
+      }
     }
     
-    const apiKey = getApiKey();
+    const rawKey = getApiKey();
+    const apiKey = (rawKey || '').trim();
     if (!apiKey) {
       showToast(t('generate.noApiKey'), 'error');
       return;
@@ -145,11 +145,10 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
     await incrementUsage();
 
     try {
-      const base64 = await fileToBase64(videoFile);
       const gemini = new GeminiTTSService(apiKey);
       
-      // Step 1: Transcribe
-      const transcription = await gemini.transcribeVideo(base64, videoFile.type);
+      // Step 1: Transcribe using File API (Unified multi-step upload)
+      const transcription = await gemini.transcribeVideoFile(videoFile);
       
       // Step 2: Auto-Translate to Burmese
       const translatedText = await gemini.translateContent(transcription);
@@ -162,13 +161,9 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
       }
       
       setVideoFile(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Transcription/Translation failed:', err);
-      showToast(err.message || t('errors.generic'), 'error');
-      
-      // Optional: Rollback usage if it failed? 
-      // User said "Once a video starts transcribing, increment the counter (+1) immediately so they can't refresh and try again."
-      // So we keep the increment even if it fails to prevent "retry spamming" on failed attempts.
+      showToast(translateError(err as { message?: string; status?: number }, language), 'error');
     } finally {
       setIsTranscribing(false);
     }
@@ -184,13 +179,25 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
         <p className="text-slate-500 dark:text-slate-400 max-w-md mx-auto leading-relaxed">
           {t('video.contactAdmin')}
         </p>
-        {userControl?.vbsId && (
-          <div className="mt-8 p-4 bg-slate-100 dark:bg-white/5 rounded-2xl border border-slate-200 dark:border-white/10 inline-flex items-center gap-3">
-            <User size={16} className="text-slate-400" />
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">{t('video.yourUserId')}</span>
-            <span className="text-xs font-mono font-bold text-brand-purple">{userControl.vbsId}</span>
+      </div>
+    );
+  }
+
+  if (isRecapRestricted) {
+    return (
+      <div className="premium-glass rounded-[32px] p-12 text-center shadow-2xl border border-amber-500/20">
+        <div className="w-20 h-20 bg-amber-500/10 text-amber-500 rounded-full flex items-center justify-center mx-auto mb-6">
+          <AlertCircle size={40} />
+        </div>
+        <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-4">{t('admin.adminFeatureControl')}</h2>
+        <p className="text-slate-500 dark:text-slate-400 max-w-md mx-auto leading-relaxed italic">
+          {t('video.videoRecapLimited')}
+        </p>
+        <div className="mt-8 flex items-center justify-center gap-3">
+          <div className="px-4 py-2 bg-amber-500/10 text-amber-600 rounded-lg text-[10px] font-bold uppercase tracking-widest border border-amber-500/20">
+            Admin Controlled Gate
           </div>
-        )}
+        </div>
       </div>
     );
   }
@@ -214,7 +221,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
             <p className="text-slate-500 dark:text-slate-400 text-sm">
               {t('video.subtitle')}
             </p>
-            {userControl?.vbsId && (
+            {userControl?.vbsId && false && (
               <div className="flex items-center gap-2 px-2 py-0.5 bg-slate-100 dark:bg-white/5 rounded-md border border-slate-200 dark:border-white/10">
                 <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">ID:</span>
                 <span className="text-[10px] font-mono font-bold text-brand-purple">{userControl.vbsId}</span>

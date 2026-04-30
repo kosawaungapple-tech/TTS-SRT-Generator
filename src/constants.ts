@@ -1,23 +1,18 @@
 import { VoiceOption } from './types';
 
 export const VOICE_OPTIONS: VoiceOption[] = [
-  { id: 'zephyr', name: 'Burmese Female (အမျိုးသမီး) - Zephyr', gender: 'female', voiceName: 'Zephyr' },
-  { id: 'kore', name: 'Burmese Male (အမျိုးသား) - Kore', gender: 'male', voiceName: 'Kore' },
-  { id: 'puck', name: 'Burmese Male (အမျိုးသား) - Puck', gender: 'male', voiceName: 'Puck' },
-  { id: 'charon', name: 'Burmese Male (အမျိုးသား) - Charon', gender: 'male', voiceName: 'Charon' },
-  { id: 'fenrir', name: 'Burmese Male (အမျိုးသား) - Fenrir', gender: 'male', voiceName: 'Fenrir' },
+  { id: 'puck', name: 'Myanmar Male (အမျိုးသား) - Puck', gender: 'male', voiceName: 'Puck' },
+  { id: 'charon', name: 'Myanmar Male (အမျိုးသား) - Charon', gender: 'male', voiceName: 'Charon' },
+  { id: 'kore', name: 'Myanmar Male (အမျိုးသား) - Kore', gender: 'male', voiceName: 'Kore' },
+  { id: 'fenrir', name: 'Myanmar Male (အမျိုးသား) - Fenrir', gender: 'male', voiceName: 'Fenrir' },
+  { id: 'aoede', name: 'Myanmar Female (အမျိုးသမီး) - Aoede', gender: 'female', voiceName: 'Aoede' },
+  { id: 'orbit', name: 'Myanmar Female (အမျိုးသမီး) - Orbit', gender: 'female', voiceName: 'Orbit' },
+  { id: 'zephyr', name: 'Myanmar Female (အမျိုးသမီး) - Zephyr', gender: 'female', voiceName: 'Zephyr' },
+  { id: 'leda', name: 'Myanmar Female (အမျိုးသမီး) - Leda', gender: 'female', voiceName: 'Leda' },
 ];
 
-export const MODEL_OPTIONS = [
-  { id: 'gemini-2.5-flash-preview-tts', name: 'Gemini 2.5 Flash (Latest)' },
-];
-
-// Define which voices are supported by which models
-const STABLE_VOICES = ['zephyr', 'kore', 'puck', 'charon', 'fenrir'];
-
-export const MODEL_VOICE_MAPPING: Record<string, string[]> = {
-  'gemini-2.5-flash-preview-tts': STABLE_VOICES,
-};
+// Supported voices are listed in VOICE_OPTIONS
+export const SUPPORTED_VOICES = VOICE_OPTIONS.map(v => v.id);
 
 export const DEFAULT_RULES = [
   { id: '1', original: 'Vlogs By Saw', replacement: 'ဗလော့ ဘိုင် စော' },
@@ -31,9 +26,10 @@ export const DEFAULT_RULES = [
 ];
 
 export const GEMINI_MODELS = {
-  VERIFY: 'gemini-3-flash-preview',
-  LIVE: 'gemini-3.1-flash-live-preview',
+  VERIFY: 'gemini-2.5-flash',
+  REWRITE: 'gemini-2.5-flash',
+  TRANSLATE: 'gemini-2.5-flash',
+  IMAGE: 'gemini-2.0-flash-preview-image-generation',
   TTS: 'gemini-2.5-flash-preview-tts',
-  REWRITE: 'gemini-3-flash-preview',
-  TRANSLATE: 'gemini-3-flash-preview',
+  VIDEO: 'gemini-2.5-flash'
 };
