@@ -1361,6 +1361,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             >
                               <Sparkles size={14} />
                             </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateVbsUser(u.vbsId, { allowAdminKey: !u.allowAdminKey })}
+                              className={`p-1.5 rounded-lg transition-all ${u.allowAdminKey ? 'text-brand-purple bg-brand-purple/10' : 'text-slate-400 hover:text-brand-purple hover:bg-slate-100 dark:hover:bg-white/5'}`}
+                              title={u.allowAdminKey ? 'Revoke Admin Key Access' : 'Grant Admin Key Access'}
+                            >
+                              <Key size={14} />
+                            </button>
                             <button 
                               type="button"
                               onClick={() => handleToggleStatus(u.vbsId, !!u.isActive)} className={`p-1.5 rounded-lg transition-all ${u.isActive ? 'text-amber-500 hover:bg-amber-500/10' : 'text-emerald-500 hover:bg-emerald-500/10'}`} title={u.isActive ? t('admin.deactivate') : t('admin.activate')}><RefreshCw size={14} /></button>

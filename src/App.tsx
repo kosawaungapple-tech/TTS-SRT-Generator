@@ -31,6 +31,10 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('generate');
   const [hasEntered, setHasEntered] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
+  type UITheme = 'glassmorphism' | 'minimal' | 'neon' | 'cyberpunk';
+  const [uiTheme, setUITheme] = useState<UITheme>(() => {
+    return (localStorage.getItem('vbs_ui_theme') as UITheme) || 'glassmorphism';
+  });
   const [text, setText] = useState('');
   const [customRules, setCustomRules] = useState('');
   const [saveToHistory, setSaveToHistory] = useState(false);
@@ -41,6 +45,7 @@ export default function App() {
     volume: 80,
     styleInstruction: '',
   });
+  const [outputConfig, setOutputConfig] = useState({ speed: 1.0, volume: 80 });
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessingSpeed, setIsProcessingSpeed] = useState(false);
   const [result, setResult] = useState<AudioResult | null>(null);
@@ -50,6 +55,7 @@ export default function App() {
   // The app will function in bypass mode using localStorage for the API Key.
   
   const [localApiKey, setLocalApiKey] = useState<string | null>(localStorage.getItem('VLOGS_BY_SAW_API_KEY'));
+  const [activeUserKeyIndex, setActiveUserKeyIndex] = useState(0);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [profile, setProfile] = useState<VBSUserControl | null>(null);
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings>({
@@ -142,12 +148,14 @@ export default function App() {
     // Priority -1: Immediate LocalStorage fetch (Strict persistence for Admin)
     const immediateLocalKey = localStorage.getItem('VLOGS_BY_SAW_API_KEY');
     if (immediateLocalKey && immediateLocalKey.trim()) {
-      return immediateLocalKey.trim();
+      const userKeys = immediateLocalKey.split(',').map(k => k.trim()).filter(k => k);
+      if (userKeys.length > 0) return userKeys.join(',');
     }
 
     // [ADMIN PREMIUM KEY PRIORITY - COMMANDER ORDER]
     // If the toggle is ON, we bypass everything and use admin keys directly.
-    if (isUsingAdminKey && globalSettings.allow_admin_keys) {
+    const userAllowedAdminKey = profile?.allowAdminKey === true || profile?.role === 'admin';
+    if (isUsingAdminKey && globalSettings.allow_admin_keys && userAllowedAdminKey) {
       const adminKeys = [
         globalSettings.primary_key || '',
         globalSettings.secondary_key || '',
@@ -288,7 +296,12 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDarkMode);
-  }, [isDarkMode]);
+    document.documentElement.classList.remove('theme-minimal', 'theme-neon', 'theme-cyberpunk');
+    if (uiTheme !== 'glassmorphism') {
+      document.documentElement.classList.add(`theme-${uiTheme}`);
+    }
+    localStorage.setItem('vbs_ui_theme', uiTheme);
+  }, [isDarkMode, uiTheme]);
 
   // Ensure session document exists for security rules
   useEffect(() => {
@@ -667,12 +680,12 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  const handleSaveApiKeyFromModal = async (key: string) => {
-    const trimmedKey = key.trim();
+  const handleSaveApiKeyFromModal = async (keys: string[]) => {
+    const joinedKeys = Array.isArray(keys) ? keys.join(',') : keys;
     try {
       // 1. Save to Local Storage ONLY as per safety requirements
-      localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
-      setLocalApiKey(trimmedKey);
+      localStorage.setItem('VLOGS_BY_SAW_API_KEY', joinedKeys);
+      setLocalApiKey(joinedKeys);
       
       setToast({ message: 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ (Settings saved successfully!)', type: 'success' });
       setTimeout(() => setToast(null), 3000);
@@ -680,12 +693,11 @@ export default function App() {
       console.error('Save API Key Error:', err);
       setToast({ message: 'Failed to save API Key', type: 'error' });
       setTimeout(() => setToast(null), 3000);
-    } finally {
-      // Done setting key
     }
   };
 
   const handleGenerate = async () => {
+    setOutputConfig({ speed: config.speed, volume: config.volume });
     console.log("App: Generate Voice Button Clicked");
     
     if (!text.trim()) {
@@ -887,6 +899,10 @@ export default function App() {
         
         const isRateLimit = error.message === 'RATE_LIMIT_EXHAUSTED' || error.status === 429;
         if (isRateLimit && retryAttempt < 1) {
+          setActiveUserKeyIndex(prev => {
+            const userKeys = (localStorage.getItem('VLOGS_BY_SAW_API_KEY') || '').split(',').filter(k => k.trim());
+            return userKeys.length > 1 ? (prev + 1) % userKeys.length : prev;
+          });
           setEngineStatus('cooling');
           setRetryCountdown(10);
           const timer = setInterval(() => {
@@ -1161,6 +1177,8 @@ export default function App() {
       <Header 
         isDarkMode={isDarkMode} 
         toggleTheme={() => setIsDarkMode(!isDarkMode)} 
+        uiTheme={uiTheme}
+        onThemeChange={setUITheme}
         onOpenTools={() => setIsApiKeyModalOpen(true)}
         isAccessGranted={isAccessGranted}
         isAdmin={isVbsAdmin}
@@ -1395,16 +1413,7 @@ export default function App() {
                       hasResult={!!result}
                     />
                     
-                    {/* Default Pronunciation Rules Table */}
-                    <PronunciationRules
-                      rules={DEFAULT_RULES}
-                      globalRules={globalRules}
-                      customRules={customRules}
-                      setCustomRules={setCustomRules}
-                      isAdmin={profile?.role === 'admin'}
-                      onOpenTools={() => setIsApiKeyModalOpen(true)}
-                      showCustomRules={false}
-                    />
+
 
                     {error && (
                       <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-start gap-3 text-red-500">
@@ -1544,12 +1553,12 @@ export default function App() {
                               className="mt-8"
                             >
                               <OutputPreview 
-                                playbackSpeed={config.speed}
+                                playbackSpeed={outputConfig.speed}
                                 result={result} 
                                 isLoading={isLoading} 
                                 error={error}
                                 onRetry={() => handleGenerate()}
-                                globalVolume={config.volume}
+                                globalVolume={outputConfig.volume}
                                 engineStatus={engineStatus}
                                 retryCountdown={retryCountdown}
                                 showToast={showToast}
@@ -1840,6 +1849,7 @@ export default function App() {
         onClose={() => setIsApiKeyModalOpen(false)}
         onSave={handleSaveApiKeyFromModal}
         onClear={handleClearApiKey}
+        activeKeyIndex={activeUserKeyIndex}
         initialKey={localApiKey || ''}
         vbsId={vbsId}
       />
@@ -1875,9 +1885,26 @@ export default function App() {
         inputType={modal.inputType}
       />
       <footer className="py-12 flex justify-center px-6">
-        <p className="text-slate-500 font-mono text-[10px] md:text-xs tracking-[0.2em] uppercase text-center max-w-xs md:max-w-none leading-relaxed opacity-60">
-          © 2026 Vlogs By Saw <span className="mx-2 hidden md:inline">•</span> <br className="md:hidden" /> Premium AI Narration
-        </p>
+        <div className="flex flex-col items-center gap-3">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 bg-brand-purple rounded-lg flex items-center justify-center shadow-lg shadow-brand-purple/30">
+              <Mic2 size={12} className="text-white" />
+            </div>
+            <p className="text-transparent bg-clip-text bg-gradient-to-r from-brand-purple via-neon-indigo to-neon-magenta font-black text-sm tracking-tight animate-pulse-soft">
+              Vlogs By Saw
+            </p>
+          </div>
+          <p className="text-[10px] md:text-xs font-bold tracking-[0.25em] uppercase text-center">
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-slate-400 via-brand-purple to-slate-400">
+              Premium Myanmar AI Studio 2026
+            </span>
+          </p>
+          <div className="flex items-center gap-3 mt-1">
+            <div className="w-12 h-px bg-gradient-to-r from-transparent to-brand-purple/50" />
+            <div className="w-1.5 h-1.5 rounded-full bg-brand-purple animate-pulse" />
+            <div className="w-12 h-px bg-gradient-to-l from-transparent to-brand-purple/50" />
+          </div>
+        </div>
       </footer>
     </div>
   );

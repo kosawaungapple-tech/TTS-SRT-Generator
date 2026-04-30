@@ -41,6 +41,54 @@ const PLATFORMS: Platform[] = [
   { id: 'facebook', name: 'Facebook', width: 1200, height: 630, aspectRatio: '16:9', icon: <Facebook size={20} /> },
 ];
 
+const THUMBNAIL_PRESETS = [
+  {
+    id: 'gaming',
+    label: 'Gaming',
+    emoji: '🎮',
+    promptPrefix: 'Epic gaming setup with dramatic RGB lighting, dark background, neon accents, cinematic fog,',
+    promptSuffix: 'photorealistic, 8K quality, gaming aesthetic',
+    textColor: '#00FF88',
+    bgHint: 'dark cyberpunk gaming room'
+  },
+  {
+    id: 'vlog',
+    label: 'Vlog',
+    emoji: '🎬',
+    promptPrefix: 'Warm lifestyle photography, golden hour lighting, bokeh background, vibrant colors,',
+    promptSuffix: 'professional vlog style, natural and authentic feel',
+    textColor: '#FFD700',
+    bgHint: 'warm outdoor or lifestyle setting'
+  },
+  {
+    id: 'tech',
+    label: 'Tech',
+    emoji: '💻',
+    promptPrefix: 'Futuristic technology background, circuit board patterns, blue and white lighting, clean minimal,',
+    promptSuffix: 'tech review style, professional, modern',
+    textColor: '#00BFFF',
+    bgHint: 'futuristic tech environment'
+  },
+  {
+    id: 'drama',
+    label: 'Drama',
+    emoji: '🎭',
+    promptPrefix: 'Dramatic cinematic scene, deep shadows, moody lighting, high contrast, emotional atmosphere,',
+    promptSuffix: 'movie poster quality, intense and powerful',
+    textColor: '#FF4444',
+    bgHint: 'dramatic emotional scene'
+  },
+  {
+    id: 'nature',
+    label: 'Nature',
+    emoji: '🌿',
+    promptPrefix: 'Beautiful nature landscape, lush greenery, golden sunlight, peaceful atmosphere,',
+    promptSuffix: 'travel photography style, stunning natural scenery',
+    textColor: '#7CFC00',
+    bgHint: 'beautiful nature landscape'
+  },
+];
+
 export const ThumbnailCreator: React.FC<ThumbnailTabProps> = ({ 
   isDarkMode, 
   showToast, 
@@ -55,6 +103,8 @@ export const ThumbnailCreator: React.FC<ThumbnailTabProps> = ({
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
+  const [textColor, setTextColor] = useState('#FFFFFF');
 
   const isThumbnailRestricted = false; // TEMPORARILY DISABLED FOR DEBUGGING (original: !isAdmin && !allowThumbnailAdminKey)
   const canUseThumbnail = true; // TEMPORARILY ENABLED FOR DEBUGGING (original: isAdmin || (isPremium && allowThumbnailAdminKey))
@@ -83,7 +133,28 @@ export const ThumbnailCreator: React.FC<ThumbnailTabProps> = ({
 
     try {
       const gemini = new GeminiTTSService(apiKey);
-      const dataUrl = await gemini.generateImage(prompt);
+      const platformLabel = platform.name;
+      const aspectRatio = platform.aspectRatio;
+      const resolution = `${platform.width}x${platform.height}`;
+
+      const preset = THUMBNAIL_PRESETS.find(p => p.id === selectedPreset);
+
+      const enhancedPrompt = `Create a professional ${platform.name} thumbnail BACKGROUND image only.
+Platform: ${platform.name} (${resolution}, ${aspectRatio} aspect ratio)
+${preset ? `Style: ${preset.promptPrefix}` : 'Style: Cinematic, dramatic lighting, vivid colors, high contrast, professional'}
+Requirements:
+- Do NOT include any text, letters, numbers, or typography in the image
+- Create a visually stunning background scene only
+- Strong focal point, depth of field
+- Suitable as a YouTube/social media thumbnail background
+${preset ? `Theme: ${preset.bgHint}` : ''}
+
+Scene description: ${prompt}
+
+${preset ? `Additional style: ${preset.promptSuffix}` : ''}
+CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.`;
+
+      const dataUrl = await gemini.generateImage(enhancedPrompt);
       
       // The service returns a full data URL (data:image/png;base64,...)
       // But the component adds the prefix itself: src={`data:image/png;base64,${generatedImage}`}
@@ -199,6 +270,54 @@ export const ThumbnailCreator: React.FC<ThumbnailTabProps> = ({
               </button>
             ))}
           </div>
+        </div>
+
+        {/* Preset Themes */}
+        <div className="glass-card p-6 rounded-[28px] border border-white/40 dark:border-slate-800/40 shadow-xl space-y-4">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="p-2 bg-neon-magenta/10 rounded-xl text-neon-magenta">
+              <Sparkles size={18} />
+            </div>
+            <h3 className="text-sm font-bold text-slate-800 dark:text-white uppercase tracking-widest">Preset Themes</h3>
+          </div>
+
+          <div className="grid grid-cols-5 gap-2">
+            {THUMBNAIL_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                onClick={() => {
+                  if (selectedPreset === preset.id) {
+                    setSelectedPreset(null);
+                  } else {
+                    setSelectedPreset(preset.id);
+                    setTextColor(preset.textColor);
+                  }
+                }}
+                className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl border transition-all ${
+                  selectedPreset === preset.id
+                    ? 'bg-brand-purple border-brand-purple text-white shadow-lg shadow-brand-purple/20'
+                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-brand-purple/40'
+                }`}
+              >
+                <span className="text-xl">{preset.emoji}</span>
+                <span className="text-[9px] font-bold uppercase tracking-wider">{preset.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {selectedPreset && (
+            <div className="flex items-center gap-2 px-3 py-2 bg-brand-purple/10 rounded-xl border border-brand-purple/20">
+              <span className="text-[10px] font-bold text-brand-purple uppercase tracking-widest">
+                {THUMBNAIL_PRESETS.find(p => p.id === selectedPreset)?.emoji} {THUMBNAIL_PRESETS.find(p => p.id === selectedPreset)?.label} Theme Active
+              </span>
+              <button
+                onClick={() => setSelectedPreset(null)}
+                className="ml-auto text-[10px] text-slate-400 hover:text-red-500 font-bold transition-colors"
+              >
+                ✕ Clear
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Prompt Input */}

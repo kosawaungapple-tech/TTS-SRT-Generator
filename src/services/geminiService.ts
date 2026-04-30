@@ -113,8 +113,21 @@ export class GeminiTTSService {
   async generateTTS(text: string, config: TTSConfig): Promise<AudioResult> {
     const voice = VOICE_OPTIONS.find(v => v.id === config.voiceId) || VOICE_OPTIONS[0];
 
+    const pitchInstruction = config.pitch > 0
+      ? `Speak with a noticeably higher pitched, brighter voice tone (+${config.pitch} semitones higher than normal). `
+      : config.pitch < 0
+      ? `Speak with a noticeably deeper, lower pitched voice tone (${config.pitch} semitones lower than normal). `
+      : '';
+
+    const styleInstruction = config.styleInstruction?.trim() || '';
+    const combinedInstruction = `${pitchInstruction}${styleInstruction}`.trim();
+
+    const textWithInstruction = combinedInstruction
+      ? `[${combinedInstruction}]\n\n${text}`
+      : text;
+
     const body = {
-      contents: [{ parts: [{ text: text }] }],
+      contents: [{ parts: [{ text: textWithInstruction }] }],
       generationConfig: {
         responseModalities: ["AUDIO"],
         speechConfig: {

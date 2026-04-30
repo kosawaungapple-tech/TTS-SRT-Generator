@@ -1,11 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Sun, Moon, Mic2, User, ChevronDown, LogOut, ShieldCheck, UserCircle, Globe, Shield } from 'lucide-react';
+import { Sun, Moon, Mic2, User, ChevronDown, LogOut, ShieldCheck, UserCircle, Globe, Shield, Palette } from 'lucide-react';
 import { VBSUserControl } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 
 interface HeaderProps {
   isDarkMode: boolean;
   toggleTheme: () => void;
+  uiTheme: 'glassmorphism' | 'minimal' | 'neon' | 'cyberpunk';
+  onThemeChange: (theme: 'glassmorphism' | 'minimal' | 'neon' | 'cyberpunk') => void;
   isAccessGranted: boolean;
   isAdmin: boolean;
   onLogout: () => void;
@@ -16,6 +18,8 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({ 
   isDarkMode, 
   toggleTheme, 
+  uiTheme,
+  onThemeChange,
   isAccessGranted,
   isAdmin,
   onLogout,
@@ -23,13 +27,18 @@ export const Header: React.FC<HeaderProps> = ({
   userControl
 }) => {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isThemeOpen, setIsThemeOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const themeRef = useRef<HTMLDivElement>(null);
   const { language, setLanguage, t } = useLanguage();
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsProfileOpen(false);
+      }
+      if (themeRef.current && !themeRef.current.contains(event.target as Node)) {
+        setIsThemeOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -62,7 +71,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-2 sm:gap-4">
           <button
             onClick={() => setLanguage(language === 'mm' ? 'en' : 'mm')}
-            className={`flex items-center justify-center gap-2 px-3 sm:px-4 py-2 rounded-[14px] border transition-all text-[10px] sm:text-[11px] font-extrabold uppercase tracking-widest w-24 sm:w-36 h-10 sm:h-11 shadow-sm shrink-0 ${
+            className={`flex items-center justify-center gap-2 px-3 sm:px-4 py-2 rounded-[14px] border transition-all text-[10px] sm:text-[11px] font-extrabold uppercase tracking-widest w-10 sm:w-36 h-10 sm:h-11 shadow-sm shrink-0 ${
               language === 'mm' 
                 ? 'bg-amber-500/10 text-amber-500 border-amber-500/20 hover:bg-amber-500/20' 
                 : 'bg-indigo-500/10 text-indigo-500 border-indigo-500/20 hover:bg-indigo-500/20'
@@ -70,10 +79,49 @@ export const Header: React.FC<HeaderProps> = ({
             title="Switch Language"
           >
             <Globe size={14} className="shrink-0" />
-            <span className="w-16 sm:w-20 text-center">
+            <span className="hidden sm:inline sm:w-20 text-center">
               {language === 'mm' ? 'BURMESE' : 'ENGLISH'}
             </span>
           </button>
+
+          <div className="relative" ref={themeRef}>
+            <button
+              onClick={() => setIsThemeOpen(!isThemeOpen)}
+              className="p-2 sm:p-2.5 rounded-[12px] hover:bg-slate-100 dark:hover:bg-white/5 transition-all text-slate-500 dark:text-slate-400 border border-transparent hover:border-slate-200 dark:hover:border-white/10"
+              title="UI Theme"
+            >
+              <Palette size={18} className="sm:w-5 sm:h-5" />
+            </button>
+
+            {isThemeOpen && (
+              <div className="absolute right-0 mt-4 w-56 glass-card rounded-[20px] shadow-2xl overflow-hidden z-[60] p-3 space-y-1">
+                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 px-2 pb-1">UI Style</p>
+                {[
+                  { id: 'glassmorphism', label: 'Glassmorphism', emoji: '🪟' },
+                  { id: 'minimal', label: 'Minimal', emoji: '⬜' },
+                  { id: 'neon', label: 'Neon', emoji: '🌟' },
+                  { id: 'cyberpunk', label: 'Cyberpunk', emoji: '⚡' },
+                ].map((theme) => (
+                  <button
+                    key={theme.id}
+                    onClick={() => {
+                      onThemeChange(theme.id as 'glassmorphism' | 'minimal' | 'neon' | 'cyberpunk');
+                      setIsThemeOpen(false);
+                    }}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                      uiTheme === theme.id
+                        ? 'bg-brand-purple text-white'
+                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-white/5'
+                    }`}
+                  >
+                    <span>{theme.emoji}</span>
+                    {theme.label}
+                    {uiTheme === theme.id && <span className="ml-auto text-[10px]">✓</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
           <button
             onClick={toggleTheme}
@@ -90,9 +138,10 @@ export const Header: React.FC<HeaderProps> = ({
                     window.history.pushState({}, '', '/vbs-admin');
                     window.dispatchEvent(new PopStateEvent('popstate'));
                   }}
-                  className="px-3 py-1.5 sm:px-4 sm:py-2 bg-brand-purple/10 dark:bg-brand-purple/20 text-brand-purple border border-brand-purple/20 dark:border-brand-purple/30 rounded-[12px] text-[10px] font-bold uppercase tracking-wider hover:bg-brand-purple hover:text-white transition-all shadow-sm"
+                  className="px-3 py-1.5 sm:px-4 sm:py-2 bg-brand-purple/10 dark:bg-brand-purple/20 text-brand-purple border border-brand-purple/20 dark:border-brand-purple/30 rounded-[12px] text-[10px] font-bold uppercase tracking-wider hover:bg-brand-purple hover:text-white transition-all shadow-sm flex items-center gap-1.5"
                 >
-                  {t('nav.admin')}
+                  <Shield size={14} className="sm:hidden" />
+                  <span className="hidden sm:inline">{t('nav.admin')}</span>
                 </button>
               )}
               

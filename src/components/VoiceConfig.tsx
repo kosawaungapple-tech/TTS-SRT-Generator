@@ -174,8 +174,12 @@ interface SliderProps {
 const Slider: React.FC<SliderProps> = ({ label, value, min, max, step, suffix, onChange, isDarkMode }) => {
   const [localValue, setLocalValue] = useState(value);
 
-  useEffect(() => {
-    setLocalValue((prev) => (prev !== value ? value : prev));
+  const prevValueRef = React.useRef(value);
+  React.useEffect(() => {
+    if (prevValueRef.current !== value) {
+      prevValueRef.current = value;
+      setLocalValue(value);
+    }
   }, [value]);
 
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {

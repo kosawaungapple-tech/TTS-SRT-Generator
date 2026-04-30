@@ -29,7 +29,15 @@ export const GEMINI_MODELS = {
   VERIFY: 'gemini-2.5-flash',
   REWRITE: 'gemini-2.5-flash',
   TRANSLATE: 'gemini-2.5-flash',
-  IMAGE: 'gemini-2.0-flash-preview-image-generation',
+  IMAGE: 'gemini-2.5-flash-image',
   TTS: 'gemini-2.5-flash-preview-tts',
   VIDEO: 'gemini-2.5-flash'
 };
+
+export const ELEVENLABS_VOICES = [
+  { id: 'rachel', name: 'Rachel - Female (English)', voiceId: '21m00Tcm4TlvDq8ikWAM' },
+  { id: 'antoni', name: 'Antoni - Male (English)', voiceId: 'ErXwobaYiN019PkySvjV' },
+  { id: 'bella', name: 'Bella - Female (English)', voiceId: 'EXAVITQu4vr4xnSDxMaL' },
+  { id: 'josh', name: 'Josh - Male (English)', voiceId: 'TxGEqnHWrfWFTfGW9XjX' },
+  { id: 'arnold', name: 'Arnold - Male (English)', voiceId: 'VR6AewLTigWG4xSOukaG' },
+];

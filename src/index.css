@@ -17,6 +17,72 @@
   --color-glass-border: rgba(255, 255, 255, 0.1);
 }
 
+/* MINIMAL THEME */
+.theme-minimal {
+  --color-brand-purple: #6366F1;
+  --color-brand-dark: #F8FAFC;
+  --color-brand-black: #FFFFFF;
+}
+.theme-minimal .glass-card {
+  background: rgba(248, 250, 252, 0.95) !important;
+  backdrop-filter: none !important;
+  border: 1px solid #E2E8F0 !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1) !important;
+}
+.theme-minimal .premium-glass {
+  background: #FFFFFF !important;
+  backdrop-filter: none !important;
+  border: 1px solid #E2E8F0 !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08) !important;
+}
+
+/* NEON THEME */
+.theme-neon {
+  --color-brand-purple: #00F5FF;
+  --color-brand-dark: #000510;
+  --color-brand-black: #000510;
+  --color-neon-indigo: #FF00FF;
+  --color-neon-magenta: #00FF88;
+}
+.theme-neon .glass-card {
+  background: rgba(0, 5, 16, 0.8) !important;
+  border: 1px solid rgba(0, 245, 255, 0.3) !important;
+  box-shadow: 0 0 20px rgba(0, 245, 255, 0.1), inset 0 0 20px rgba(0, 245, 255, 0.05) !important;
+}
+.theme-neon .premium-glass {
+  background: rgba(0, 5, 16, 0.9) !important;
+  border: 1px solid rgba(0, 245, 255, 0.2) !important;
+  box-shadow: 0 0 30px rgba(0, 245, 255, 0.15) !important;
+}
+.theme-neon * {
+  --tw-ring-color: rgba(0, 245, 255, 0.3);
+}
+
+/* CYBERPUNK THEME */
+.theme-cyberpunk {
+  --color-brand-purple: #FFD700;
+  --color-brand-dark: #0A0A1A;
+  --color-brand-black: #050510;
+  --color-neon-indigo: #FF6B00;
+  --color-neon-magenta: #FF0055;
+}
+.theme-cyberpunk .glass-card {
+  background: rgba(10, 10, 26, 0.85) !important;
+  border: 1px solid rgba(255, 215, 0, 0.2) !important;
+  box-shadow: 0 0 20px rgba(255, 215, 0, 0.05) !important;
+  position: relative;
+}
+.theme-cyberpunk .premium-glass {
+  background: rgba(5, 5, 16, 0.95) !important;
+  border: 1px solid rgba(255, 215, 0, 0.15) !important;
+  box-shadow: 4px 4px 0px rgba(255, 215, 0, 0.3) !important;
+}
+.theme-cyberpunk body {
+  background-image: linear-gradient(rgba(255,215,0,0.03) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(255,215,0,0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
 @layer utilities {
   .glass-card {
     @apply bg-white/70 dark:bg-slate-900/60 backdrop-blur-[20px] border border-white/40 dark:border-white/10 shadow-[0_8px_32px_0_rgba(31,38,135,0.07)] dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.3)];

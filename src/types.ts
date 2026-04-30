@@ -17,6 +17,7 @@ export interface VBSUserControl {
   note?: string;
   password?: string;
   api_key_stored?: string;
+  allowAdminKey?: boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   createdAt?: any;
 }
@@ -42,6 +43,12 @@ export interface GlobalSettings {
   primary_key?: string;
   secondary_key?: string;
   backup_key?: string;
+  elevenlabs_key_1?: string;
+  elevenlabs_key_2?: string;
+  elevenlabs_key_3?: string;
+  elevenlabs_key_4?: string;
+  elevenlabs_key_5?: string;
+  allow_elevenlabs?: boolean;
   allow_admin_keys: boolean; // Toggle to allow users to use admin keys
   allow_video_recap_admin_key?: boolean; // New gate for video recap
   allow_thumbnail_admin_key?: boolean; // New gate for thumbnail
@@ -104,6 +111,7 @@ export interface TTSConfig {
   pitch: number;
   volume: number;
   styleInstruction?: string;
+  ttsProvider?: 'gemini' | 'elevenlabs';
   vocalStyle?: 'Neutral' | 'Expressive' | 'Energetic' | 'Calm';
   creativityLevel?: number; // 0.2 to 0.8
   useGrounding?: boolean;
