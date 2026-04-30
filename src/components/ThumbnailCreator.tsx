@@ -26,7 +26,6 @@ interface ThumbnailTabProps {
   getApiKey: () => string | null;
   isAdmin: boolean;
   isPremium: boolean;
-  allowThumbnailAdminKey?: boolean;
 }
 
 interface Platform {
@@ -260,8 +259,7 @@ export const ThumbnailCreator: React.FC<ThumbnailTabProps> = ({
   showToast, 
   getApiKey,
   isAdmin,
-  isPremium,
-  allowThumbnailAdminKey = false
+  isPremium
 }) => {
   const { t } = useLanguage();
   const [platform, setPlatform] = useState<Platform>(PLATFORMS[0]);

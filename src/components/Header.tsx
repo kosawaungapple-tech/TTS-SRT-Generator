@@ -9,6 +9,7 @@ interface HeaderProps {
   onThemeChange: (theme: 'glassmorphism' | 'minimal' | 'neon' | 'cyberpunk') => void;
   isAccessGranted: boolean;
   isAdmin: boolean;
+  apiKeyStatus: { state: 'admin' | 'personal' | 'none'; label: string };
 }
 
 export const Header: React.FC<HeaderProps> = ({ 
@@ -17,7 +18,8 @@ export const Header: React.FC<HeaderProps> = ({
   uiTheme,
   onThemeChange,
   isAccessGranted,
-  isAdmin
+  isAdmin,
+  apiKeyStatus
 }) => {
   const [isThemeOpen, setIsThemeOpen] = useState(false);
   const themeRef = useRef<HTMLDivElement>(null);
@@ -50,9 +52,27 @@ export const Header: React.FC<HeaderProps> = ({
             <h1 className="text-base sm:text-xl font-bold tracking-tight text-slate-900 dark:text-white leading-none">
               Vlogs By Saw
             </h1>
-            <p className="text-[9px] sm:text-[10px] uppercase tracking-[0.2em] bg-clip-text text-transparent bg-gradient-to-r from-brand-purple to-neon-magenta font-bold mt-1 opacity-90">
-              {t('auth.title')}
-            </p>
+            <div className="flex items-center gap-2 mt-1">
+              <p className="text-[9px] sm:text-[10px] uppercase tracking-[0.2em] bg-clip-text text-transparent bg-gradient-to-r from-brand-purple to-neon-magenta font-bold opacity-90 leading-none">
+                {t('auth.title')}
+              </p>
+              
+              {/* API Key Status Dot */}
+              {isAccessGranted && (
+                <div className="flex items-center gap-1 bg-white/50 dark:bg-white/5 px-1.5 py-0.5 rounded-full border border-slate-200 dark:border-white/5">
+                  <div className={`w-1.5 h-1.5 rounded-full ${
+                    apiKeyStatus.state !== 'none' ? 'bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.5)]' : 
+                    'bg-rose-500 animate-pulse shadow-[0_0_5px_rgba(244,63,94,0.5)]'
+                  }`} />
+                  <span className={`text-[8px] font-black uppercase tracking-wider hidden xs:inline ${
+                    apiKeyStatus.state !== 'none' ? 'text-emerald-500' : 
+                    'text-rose-500'
+                  }`}>
+                    {apiKeyStatus.state === 'none' ? 'NO KEY' : apiKeyStatus.state === 'admin' ? 'ADMIN KEY' : 'PERS KEY'}
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

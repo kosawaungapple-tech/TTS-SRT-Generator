@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Clipboard, Mic2, Play, Info, Sparkles, Image as ImageIcon, X } from 'lucide-react';
+import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Clipboard, Mic2, Play, Info, Sparkles, Image as ImageIcon, X, Calendar } from 'lucide-react';
 import { WelcomePage } from './components/WelcomePage';
 import { Header } from './components/Header';
 import { ApiKeyModal } from './components/ApiKeyModal';
@@ -10,6 +10,8 @@ import { OutputPreview } from './components/OutputPreview';
 import { AdminDashboard } from './components/AdminDashboard';
 import { VideoTranscriber } from './components/VideoTranscriber';
 import { ThumbnailCreator } from './components/ThumbnailCreator';
+import { PrivacyPolicy } from './components/PrivacyPolicy';
+import { TermsOfService } from './components/TermsOfService';
 import { AnnouncementPanel } from './components/AnnouncementPanel';
 import { Modal, ModalType } from './components/Modal';
 import { GeminiTTSService } from './services/geminiService';
@@ -75,6 +77,8 @@ export default function App() {
   const [isConfigLoading, setIsConfigLoading] = useState(false); // Default to false to bypass loading screen if env vars missing
   const [isAdminRoute, setIsAdminRoute] = useState(window.location.pathname === '/vbs-admin');
   const [isAdminConfigRoute, setIsAdminConfigRoute] = useState(window.location.pathname === '/vbs-admin-config');
+  const [isPrivacyRoute, setIsPrivacyRoute] = useState(window.location.pathname === '/privacy-policy');
+  const [isTermsRoute, setIsTermsRoute] = useState(window.location.pathname === '/terms-of-service');
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [isSessionSynced, setIsSessionSynced] = useState(false);
 
@@ -326,6 +330,8 @@ export default function App() {
       const path = window.location.pathname;
       setIsAdminRoute(path === '/vbs-admin');
       setIsAdminConfigRoute(path === '/vbs-admin-config');
+      setIsPrivacyRoute(path === '/privacy-policy');
+      setIsTermsRoute(path === '/terms-of-service');
     };
     
     handleLocationChange();
@@ -721,19 +727,6 @@ export default function App() {
       return;
     }
 
-    // Check Expiry
-    if (profile?.expiryDate) {
-      const expiry = new Date(profile.expiryDate);
-      if (expiry < new Date()) {
-        console.warn('Access Code has expired during session');
-        setError('Your account has expired. Please contact Admin Saw for renewal.');
-        setIsAccessGranted(false);
-        localStorage.removeItem('vbs_access_granted');
-        localStorage.removeItem('vbs_access_code');
-        return;
-      }
-    }
-
     // [SINGLE-PASS ESTIMATION - COMMANDER ORDER]
     // Gemini 1.5 Flash uses single-pass with no recursive sync loops
     const effectiveKey = getEffectiveApiKey();
@@ -1085,6 +1078,15 @@ export default function App() {
     return accessCode === ADMIN_CODE;
   }, [accessCode]);
 
+  const apiKeyStatus = useMemo(() => {
+    const info = apiChannelManager.getActiveSourceInfo();
+    if (!info) return { state: 'none', label: 'No API Key' } as const;
+    return {
+      state: info.isShared ? 'admin' : 'personal',
+      label: info.isShared ? 'Admin Key Pool Active' : 'Personal Key Active'
+    } as const;
+  }, [localApiKey, globalSettings.allow_admin_keys]);
+
   const isExpired = useMemo(() => {
     if (!userControl?.expiryDate || isVbsAdmin) return false;
     try {
@@ -1219,6 +1221,7 @@ export default function App() {
         onThemeChange={setUITheme}
         isAccessGranted={isAccessGranted}
         isAdmin={isVbsAdmin}
+        apiKeyStatus={apiKeyStatus}
       />
 
       {isAccessGranted && !isVbsAdmin && (
@@ -1226,17 +1229,19 @@ export default function App() {
       )}
 
       <main className="flex-1 container mx-auto px-4 sm:px-6 py-6 sm:py-8 overflow-x-hidden">
-        <div className="mb-8 text-center sm:text-left">
-          <h1 className="text-3xl sm:text-5xl font-black text-slate-900 dark:text-white mb-2 flex items-center justify-center sm:justify-start gap-3">
-            Vlogs By Saw
-            <span className="text-xs bg-brand-purple/10 text-brand-purple px-3 py-1 rounded-full uppercase tracking-tighter shadow-sm border border-brand-purple/20">
-              Premium AI Narration
-            </span>
-          </h1>
-          <p className="text-slate-500 dark:text-slate-400 font-medium max-w-2xl">
-            Professional Burmese Storytelling & Cinematic AI Voiceover Studio. Engineered for high-end recap content.
-          </p>
-        </div>
+        {!(isPrivacyRoute || isTermsRoute) && (
+          <div className="mb-8 text-center sm:text-left">
+            <h1 className="text-3xl sm:text-5xl font-black text-slate-900 dark:text-white mb-2 flex items-center justify-center sm:justify-start gap-3">
+              Vlogs By Saw
+              <span className="text-xs bg-brand-purple/10 text-brand-purple px-3 py-1 rounded-full uppercase tracking-tighter shadow-sm border border-brand-purple/20">
+                Premium AI Narration
+              </span>
+            </h1>
+            <p className="text-slate-500 dark:text-slate-400 font-medium max-w-2xl">
+              Professional Burmese Storytelling & Cinematic AI Voiceover Studio. Engineered for high-end recap content.
+            </p>
+          </div>
+        )}
 
         {isConfigLoading ? (
           <div className="flex flex-col items-center justify-center py-40">
@@ -1283,6 +1288,20 @@ export default function App() {
             }}
             configOnly={isAdminConfigRoute}
             isSessionSynced={isSessionSynced}
+          />
+        ) : isPrivacyRoute ? (
+          <PrivacyPolicy 
+            onBack={() => {
+              window.history.pushState({}, '', '/');
+              setIsPrivacyRoute(false);
+            }} 
+          />
+        ) : isTermsRoute ? (
+          <TermsOfService 
+            onBack={() => {
+              window.history.pushState({}, '', '/');
+              setIsTermsRoute(false);
+            }} 
           />
         ) : !isAccessGranted ? (
           <div className="flex flex-col items-center justify-center py-20 text-center px-4">
@@ -1668,7 +1687,6 @@ export default function App() {
                      getApiKey={getEffectiveApiKey}
                      isAdmin={isVbsAdmin}
                      isPremium={isPremium}
-                     allowThumbnailAdminKey={globalSettings.allow_thumbnail_admin_key}
                    />
                 </motion.div>
               )}
@@ -1831,6 +1849,14 @@ export default function App() {
                             <ShieldCheck size={16} className="text-brand-purple" />
                             {isPremium ? (language === 'mm' ? 'အဆင့်မြင့် (Premium) အသုံးပြုသူ' : 'Premium Access Active') : (language === 'mm' ? 'သာမန် (Standard) အသုံးပြုသူ' : 'Standard User')}
                           </div>
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            <Calendar size={16} className="text-brand-purple" />
+                            {userControl?.expiryDate ? (
+                              `${t('settings.expiry')} - ${new Date(userControl.expiryDate).toLocaleDateString(language === 'mm' ? 'my-MM' : 'en-US', { day: 'numeric', month: 'short', year: 'numeric' })}`
+                            ) : (
+                              `${t('settings.expiry')} - ${t('settings.unlimited')}`
+                            )}
+                          </div>
                         </div>
                         
                         <div className="pt-6 flex flex-col sm:flex-row gap-4">
@@ -1873,7 +1899,13 @@ export default function App() {
                           )}
                           <div className="flex items-center gap-2">
                             <div className={`w-2 h-2 rounded-full ${localApiKey ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
-                            {localApiKey ? 'CONNECTED' : 'NO API KEY FOUND'}
+                            {apiChannelManager.getSettings().useAdminKeys && apiChannelManager.getSettings().allowSharedKeys && localApiKey && apiChannelManager.getActiveSourceInfo(profile?.role === 'admin')?.isShared ? (
+                              'ADMIN KEY ACTIVE'
+                            ) : localApiKey ? (
+                              'CONNECTED'
+                            ) : (
+                              'NO API KEY FOUND'
+                            )}
                           </div>
                         </div>
                         <ChevronRight size={18} className="text-slate-400 group-hover:translate-x-1 transition-transform" />
@@ -1941,6 +1973,31 @@ export default function App() {
               Premium Myanmar AI Studio 2026
             </span>
           </p>
+          <div className="flex items-center gap-4 text-[9px] sm:text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
+            <button 
+              onClick={() => {
+                window.history.pushState({}, '', '/privacy-policy');
+                setIsPrivacyRoute(true);
+                setIsTermsRoute(false);
+                window.scrollTo(0, 0);
+              }}
+              className="hover:text-brand-purple transition-colors"
+            >
+              {t('settings.privacy')}
+            </button>
+            <span className="opacity-30">•</span>
+            <button 
+              onClick={() => {
+                window.history.pushState({}, '', '/terms-of-service');
+                setIsTermsRoute(true);
+                setIsPrivacyRoute(false);
+                window.scrollTo(0, 0);
+              }}
+              className="hover:text-brand-purple transition-colors"
+            >
+              {t('settings.terms')}
+            </button>
+          </div>
           <div className="flex items-center gap-3 mt-1">
             <div className="w-12 h-px bg-gradient-to-r from-transparent to-brand-purple/50" />
             <div className="w-1.5 h-1.5 rounded-full bg-brand-purple animate-pulse" />

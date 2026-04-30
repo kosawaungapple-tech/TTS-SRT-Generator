@@ -1,3 +1,4 @@
+import { GoogleGenAI } from "@google/genai";
 import { TTSConfig, AudioResult, SRTSubtitle } from "../types";
 import { VOICE_OPTIONS, GEMINI_MODELS } from "../constants";
 import { formatTime } from "../utils/audioUtils";
@@ -18,51 +19,64 @@ interface GeminiResponse {
   }>;
 }
 
-const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
-
 /**
  * GeminiTTSService handles integration with Google Generative AI
  */
 export class GeminiTTSService {
   private apiKey: string;
   private isAdmin: boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private ai: any = null;
 
   constructor(apiKey?: string, isAdmin: boolean = false) {
     this.apiKey = apiKey || '';
     this.isAdmin = isAdmin;
   }
 
-  private async geminiRequest(model: string, body: object): Promise<GeminiResponse> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private getAI(key: string): any {
+    if (!this.ai || this.apiKey !== key) {
+      this.ai = new GoogleGenAI({ apiKey: key });
+    }
+    return this.ai;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async geminiRequest(modelName: string, body: { contents: any[]; generationConfig?: any }): Promise<GeminiResponse> {
     const executeRequest = async (key: string) => {
-      const url = `${GEMINI_BASE}/${model}:generateContent?key=${key}`;
-      console.log(`Gemini Request [${model}]:`, url);
+      const ai = this.getAI(key);
+      const modelPath = modelName.startsWith('models/') ? modelName : `models/${modelName}`;
       
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+      console.log(`Gemini SDK Request [${modelName}]:`, modelPath);
+      
+      const response = await ai.models.generateContent({
+        model: modelPath,
+        contents: body.contents,
+        config: body.generationConfig
       });
-
-      if (!res.ok) {
-        const responseText = await res.text();
-        let err;
-        try {
-          err = JSON.parse(responseText);
-        } catch {
-          err = { error: { message: responseText || res.statusText, status: res.status } };
-        }
-        throw err;
-      }
-
-      return res.json() as Promise<GeminiResponse>;
+      
+      // Map SDK response back to our internal GeminiResponse interface
+      return {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        candidates: response.candidates?.map((c: any) => ({
+          content: {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            parts: c.content?.parts?.map((p: any) => ({
+              text: p.text,
+              inlineData: p.inlineData ? {
+                data: p.inlineData.data,
+                mimeType: p.inlineData.mimeType
+              } : undefined
+            }))
+          }
+        }))
+      } as GeminiResponse;
     };
 
-    // If we have an explicit apiKey passed to constructor, use it
     if (this.apiKey) {
       return executeRequest(this.apiKey);
     }
 
-    // Otherwise use channel manager which handles auto-switching
     return apiChannelManager.callWithAutoSwitch((key) => executeRequest(key), this.isAdmin);
   }
 
@@ -84,6 +98,38 @@ export class GeminiTTSService {
         status: error.error?.status 
       };
     }
+  }
+
+  private convertPCMToWav(base64PCM: string, sampleRate: number = 24000): Blob {
+    const pcmBytes = Uint8Array.from(atob(base64PCM), c => c.charCodeAt(0));
+    const wavBuffer = new ArrayBuffer(44 + pcmBytes.length);
+    const view = new DataView(wavBuffer);
+
+    // WAV header
+    const writeString = (offset: number, str: string) => {
+      for (let i = 0; i < str.length; i++) {
+        view.setUint8(offset + i, str.charCodeAt(i));
+      }
+    };
+
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + pcmBytes.length, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);       // PCM format
+    view.setUint16(22, 1, true);       // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, pcmBytes.length, true);
+
+    // Copy PCM data
+    new Uint8Array(wavBuffer, 44).set(pcmBytes);
+
+    return new Blob([wavBuffer], { type: 'audio/wav' });
   }
 
   async generateTTS(text: string, config: TTSConfig): Promise<AudioResult> {
@@ -117,41 +163,33 @@ export class GeminiTTSService {
     };
 
     const data = await this.geminiRequest(GEMINI_MODELS.TTS, body);
-    const part = data.candidates?.[0]?.content?.parts?.[0];
-    const base64Audio = part?.inlineData?.data;
+    const audioPart = data.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+    const base64Audio = audioPart?.data;
 
     if (!base64Audio) {
       console.error('No audio in response:', JSON.stringify(data));
-      throw new Error('No audio data returned from Gemini candidates');
+      throw new Error('No audio data returned from Gemini candidates. Ensure the model supports TTS and voice config is correct.');
     }
 
-    // [PCM to WAV CONVERSION]
-    const pcmToWavBlob = (base64: string): Blob => {
-      const pcm = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-      const sampleRate = 24000;
-      const buf = new ArrayBuffer(44 + pcm.length);
-      const view = new DataView(buf);
-      const w = (o: number, s: string) => [...s].forEach((c, i) => view.setUint8(o + i, c.charCodeAt(0)));
-      w(0, 'RIFF'); view.setUint32(4, 36 + pcm.length, true);
-      w(8, 'WAVE'); w(12, 'fmt '); view.setUint32(16, 16, true);
-      view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-      view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
-      view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-      w(36, 'data'); view.setUint32(40, pcm.length, true);
-      new Uint8Array(buf).set(pcm, 44);
-      return new Blob([buf], { type: 'audio/wav' });
-    };
-
-    const audioBlob = pcmToWavBlob(base64Audio);
+    // [PCM to WAV CONVERSION] 
+    // Gemini returns raw PCM at 24000Hz, browsers need WAV headers to play correctly
+    const audioBlob = this.convertPCMToWav(base64Audio, 24000);
     const audioUrl = URL.createObjectURL(audioBlob);
     const arrayBuffer = await audioBlob.arrayBuffer();
 
-    // Duration estimation for subtitles (Baseline 1x)
+    // Duration estimation for subtitles
     const AudioContextClass = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext) as typeof AudioContext;
     const audioContext = new AudioContextClass();
-    const decodedBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
-    const totalDuration = decodedBuffer.duration;
-    await audioContext.close();
+    let totalDuration = 0;
+    try {
+      const decodedBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+      totalDuration = decodedBuffer.duration;
+    } catch (e) {
+      console.warn("Failed to decode audio duration, using estimation", e);
+      totalDuration = text.length * 0.08; // Rough estimation
+    } finally {
+      await audioContext.close();
+    }
 
     const subtitles = generateOptimizedSubtitles(text, totalDuration);
 
@@ -253,53 +291,60 @@ export class GeminiTTSService {
     return (data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
   }
 
+  private async fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const base64 = result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = (e) => reject(new Error(`File reading failed: ${e}`));
+      reader.readAsDataURL(file);
+    });
+  }
+
   async transcribeVideoFile(file: File): Promise<string> {
-    return apiChannelManager.callWithAutoSwitch(async (key) => {
-      // 1. Upload file using File API
-      const uploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${key}`;
-      
-      const uploadRes = await fetch(uploadUrl, {
-        method: 'POST',
-        headers: {
-          'X-Goog-Upload-Command': 'start, upload, finalize',
-          'X-Goog-Upload-Header-Content-Length': file.size.toString(),
-          'X-Goog-Upload-Header-Content-Type': file.type,
-          'Content-Type': 'application/octet-stream'
-        },
-        body: file
-      });
+    console.log(`[VBS Video] Starting transcription using inline base64 for: ${file.name} (${file.size} bytes)`);
+    
+    // Check for size limit (Gemini inline data limit is ~20MB)
+    const MAX_INLINE_SIZE = 20 * 1024 * 1024;
+    if (file.size > MAX_INLINE_SIZE) {
+      throw new Error(`File too large for direct processing (${(file.size / 1024 / 1024).toFixed(1)}MB). Please use a file smaller than 20MB.`);
+    }
 
-      if (!uploadRes.ok) {
-        throw new Error(`File upload failed: ${uploadRes.statusText}`);
-      }
+    try {
+      const base64Data = await this.fileToBase64(file);
+      console.log(`[VBS Video] File converted to base64, requesting transcription...`);
 
-      const uploadData = await uploadRes.json();
-      const fileUri = uploadData.file.uri;
-
-      // 2. Generate transcript
-      // We pass null to geminiRequest to force it to use the external callWithAutoSwitch context if needed,
-      // but actually we can just pass the key to geminiRequest if we modify it further,
-      // or just re-implement the request here since we have the key.
-      const url = `${GEMINI_BASE}/${GEMINI_MODELS.VIDEO}:generateContent?key=${key}`;
       const body = {
         contents: [{
           parts: [
-            { fileData: { mimeType: file.type, fileUri } },
-            { text: "Transcribe this video in Myanmar language accurately." }
+            {
+              inlineData: {
+                mimeType: file.type || 'video/mp4',
+                data: base64Data
+              }
+            },
+            { text: "Transcribe this video in Myanmar language accurately. Output only the transcription text, formatted nicely." }
           ]
         }]
       };
 
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
+      const data = await this.geminiRequest(GEMINI_MODELS.VIDEO, body);
+      const resultText = (data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+      
+      if (!resultText) {
+        console.warn(`[VBS Video] Gemini returned empty response`);
+        return "No transcription could be generated for this video.";
+      }
 
-      if (!res.ok) throw new Error("Transcription generation failed");
-      const data = await res.json() as GeminiResponse;
-      return (data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
-    });
+      console.log(`[VBS Video] Transcription successful!`);
+      return resultText;
+    } catch (error) {
+      console.error(`[VBS Video] Error in transcribeVideoFile:`, error);
+      throw error;
+    }
   }
 
   async generateImage(prompt: string): Promise<string> {

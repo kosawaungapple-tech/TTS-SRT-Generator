@@ -18,24 +18,32 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role,
   const [adminChannels, setAdminChannels] = useState<ApiChannel[]>([]);
   const [userChannel, setUserChannel] = useState<ApiChannel | null>(null);
   const [settings, setSettings] = useState(apiChannelManager.getSettings());
+  const [activeSource, setActiveSource] = useState(apiChannelManager.getActiveSourceInfo());
   
   const [newKey, setNewKey] = useState('');
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    if (isOpen) {
+    const handleUpdate = () => {
       setAdminChannels(apiChannelManager.getAdminChannels());
       setUserChannel(apiChannelManager.getUserChannel());
-      const currentSettings = apiChannelManager.getSettings();
+      setSettings(apiChannelManager.getSettings());
+      setActiveSource(apiChannelManager.getActiveSourceInfo());
+    };
+
+    if (isOpen) {
+      handleUpdate();
       
       // Force disable useAdminKeys if user is not premium and it was somehow enabled
+      const currentSettings = apiChannelManager.getSettings();
       if (!isPremium && currentSettings.useAdminKeys) {
         apiChannelManager.updateSettings({ useAdminKeys: false });
         setSettings({ ...currentSettings, useAdminKeys: false });
-      } else {
-        setSettings(currentSettings);
       }
     }
+
+    window.addEventListener('storage', handleUpdate);
+    return () => window.removeEventListener('storage', handleUpdate);
   }, [isOpen, isPremium]);
 
   const handleAddAdminChannel = () => {
@@ -214,6 +222,25 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role,
                         settings.useAdminKeys && settings.allowSharedKeys && isPremium ? 'left-7' : 'left-1'
                       }`} />
                    </button>
+                 </div>
+
+                 {/* Key Connection Status Badge */}
+                 <div className="px-1 pt-1 opacity-90">
+                    {activeSource ? (
+                       <div className="flex items-center gap-2 py-1">
+                          <div className={`w-2 h-2 rounded-full animate-pulse bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]`} />
+                          <span className="text-[11px] font-bold text-emerald-500">
+                             {activeSource.isShared ? '✓ Connected via Admin Key Pool' : '✓ Connected via Personal Key'}
+                          </span>
+                       </div>
+                    ) : (
+                       <div className="flex items-center gap-2 py-1">
+                          <div className="w-2 h-2 rounded-full bg-rose-500 animate-pulse shadow-[0_0_8px_rgba(244,63,94,0.5)]" />
+                          <span className="text-[11px] font-bold text-rose-500">
+                             ✗ No API Key Connected
+                          </span>
+                       </div>
+                    )}
                  </div>
 
                  {!isAdmin && (

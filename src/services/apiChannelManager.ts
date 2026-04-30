@@ -128,9 +128,15 @@ class ApiChannelManager {
 
   private getSharedAdminChannel(): ApiChannel | null {
     const sharedIds = this.settings.sharedChannelIds;
-    if (!this.settings.allowSharedKeys || sharedIds.length === 0) return null;
+    if (!this.settings.allowSharedKeys) return null;
 
-    const sharedChannels = this.adminChannels.filter(ch => sharedIds.includes(ch.id) && ch.status !== 'limit');
+    // If specific shared IDs are provided, filter those. 
+    // If NO specific IDs are provided but sharing is enabled, allow ANY active admin key as fallback.
+    const sharedChannels = this.adminChannels.filter(ch => {
+      const isWhitelisted = sharedIds.length === 0 || sharedIds.includes(ch.id);
+      return isWhitelisted && ch.status !== 'limit';
+    });
+
     if (sharedChannels.length === 0) return null;
 
     if (this.sharedActiveIndex >= sharedChannels.length) this.sharedActiveIndex = 0;
