@@ -2,6 +2,7 @@ import { TTSConfig, AudioResult, SRTSubtitle } from "../types";
 import { VOICE_OPTIONS, GEMINI_MODELS } from "../constants";
 import { formatTime } from "../utils/audioUtils";
 import { generateOptimizedSubtitles } from "../utils/subtitleUtils";
+import { apiChannelManager } from "./apiChannelManager";
 
 interface GeminiResponse {
   candidates?: Array<{
@@ -24,74 +25,49 @@ const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
  */
 export class GeminiTTSService {
   private apiKey: string;
-  private static currentKeyIndex: number = 0;
-  private apiKeys: string[] = [];
+  private isAdmin: boolean;
 
-  constructor(apiKeys?: string | string[]) {
-    if (Array.isArray(apiKeys)) {
-      this.apiKeys = apiKeys.map(k => k.trim()).filter(k => k);
-    } else if (apiKeys && typeof apiKeys === 'string') {
-      this.apiKeys = apiKeys.split(',').map(k => k.trim()).filter(k => k);
-    }
-
-    if (this.apiKeys.length === 0) {
-      const envKey = (typeof process !== 'undefined' ? (process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY) : '') || '';
-      if (envKey.trim()) {
-        this.apiKeys = [envKey.trim()];
-      }
-    }
-
-    if (this.apiKeys.length === 0) {
-      throw new Error("API Key required. Please configure in Settings.");
-    }
-
-    this.apiKey = this.apiKeys[GeminiTTSService.currentKeyIndex] || this.apiKeys[0];
+  constructor(apiKey?: string, isAdmin: boolean = false) {
+    this.apiKey = apiKey || '';
+    this.isAdmin = isAdmin;
   }
 
   private async geminiRequest(model: string, body: object): Promise<GeminiResponse> {
-    const url = `${GEMINI_BASE}/${model}:generateContent?key=${this.apiKey}`;
-    console.log(`Gemini Request [${model}]:`, url);
-    
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
+    const executeRequest = async (key: string) => {
+      const url = `${GEMINI_BASE}/${model}:generateContent?key=${key}`;
+      console.log(`Gemini Request [${model}]:`, url);
+      
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
 
-    if (!res.ok) {
-      const responseText = await res.text();
-      console.error(`TTS Response status: ${res.status}`);
-      console.error(`TTS Response body: ${responseText}`);
+      if (!res.ok) {
+        const responseText = await res.text();
+        let err;
+        try {
+          err = JSON.parse(responseText);
+        } catch {
+          err = { error: { message: responseText || res.statusText, status: res.status } };
+        }
+        throw err;
+      }
 
-      let err;
-      try {
-        err = JSON.parse(responseText);
-      } catch {
-        err = { error: { message: responseText || res.statusText, status: res.status } };
-      }
-      
-      console.error(`Gemini Error [${model}]:`, JSON.stringify(err, null, 2));
-      
-      if (res.status === 429 && this.apiKeys.length > 1) {
-        this.rotateKey();
-        return this.geminiRequest(model, body);
-      }
-      
-      throw err;
+      return res.json() as Promise<GeminiResponse>;
+    };
+
+    // If we have an explicit apiKey passed to constructor, use it
+    if (this.apiKey) {
+      return executeRequest(this.apiKey);
     }
 
-    return res.json() as Promise<GeminiResponse>;
-  }
-
-  private rotateKey(): void {
-    if (this.apiKeys.length <= 1) return;
-    GeminiTTSService.currentKeyIndex = (GeminiTTSService.currentKeyIndex + 1) % this.apiKeys.length;
-    this.apiKey = this.apiKeys[GeminiTTSService.currentKeyIndex];
-    console.log(`GeminiService: Rotated to channel ${GeminiTTSService.currentKeyIndex}`);
+    // Otherwise use channel manager which handles auto-switching
+    return apiChannelManager.callWithAutoSwitch((key) => executeRequest(key), this.isAdmin);
   }
 
   public static getActiveKeyIndex(): number {
-    return GeminiTTSService.currentKeyIndex;
+    return apiChannelManager.getAdminActiveIndex();
   }
 
   async verifyConnection(): Promise<{ isValid: boolean; status?: number; error?: string }> {
@@ -278,38 +254,52 @@ export class GeminiTTSService {
   }
 
   async transcribeVideoFile(file: File): Promise<string> {
-    // 1. Upload file using File API
-    const uploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${this.apiKey}`;
-    
-    const uploadRes = await fetch(uploadUrl, {
-      method: 'POST',
-      headers: {
-        'X-Goog-Upload-Command': 'start, upload, finalize',
-        'X-Goog-Upload-Header-Content-Length': file.size.toString(),
-        'X-Goog-Upload-Header-Content-Type': file.type,
-        'Content-Type': 'application/octet-stream'
-      },
-      body: file
+    return apiChannelManager.callWithAutoSwitch(async (key) => {
+      // 1. Upload file using File API
+      const uploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${key}`;
+      
+      const uploadRes = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+          'X-Goog-Upload-Command': 'start, upload, finalize',
+          'X-Goog-Upload-Header-Content-Length': file.size.toString(),
+          'X-Goog-Upload-Header-Content-Type': file.type,
+          'Content-Type': 'application/octet-stream'
+        },
+        body: file
+      });
+
+      if (!uploadRes.ok) {
+        throw new Error(`File upload failed: ${uploadRes.statusText}`);
+      }
+
+      const uploadData = await uploadRes.json();
+      const fileUri = uploadData.file.uri;
+
+      // 2. Generate transcript
+      // We pass null to geminiRequest to force it to use the external callWithAutoSwitch context if needed,
+      // but actually we can just pass the key to geminiRequest if we modify it further,
+      // or just re-implement the request here since we have the key.
+      const url = `${GEMINI_BASE}/${GEMINI_MODELS.VIDEO}:generateContent?key=${key}`;
+      const body = {
+        contents: [{
+          parts: [
+            { fileData: { mimeType: file.type, fileUri } },
+            { text: "Transcribe this video in Myanmar language accurately." }
+          ]
+        }]
+      };
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      if (!res.ok) throw new Error("Transcription generation failed");
+      const data = await res.json() as GeminiResponse;
+      return (data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
     });
-
-    if (!uploadRes.ok) {
-      throw new Error(`File upload failed: ${uploadRes.statusText}`);
-    }
-
-    const uploadData = await uploadRes.json();
-    const fileUri = uploadData.file.uri;
-
-    // 2. Generate transcript
-    const data = await this.geminiRequest(GEMINI_MODELS.VIDEO, {
-      contents: [{
-        parts: [
-          { fileData: { mimeType: file.type, fileUri } },
-          { text: "Transcribe this video in Myanmar language accurately." }
-        ]
-      }]
-    });
-
-    return (data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
   }
 
   async generateImage(prompt: string): Promise<string> {

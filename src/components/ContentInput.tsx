@@ -15,6 +15,7 @@ interface ContentInputProps {
   retryCountdown: number;
   speed: number;
   hasResult?: boolean;
+  isAdmin: boolean;
 }
 
 export const ContentInput: React.FC<ContentInputProps> = ({ 
@@ -25,7 +26,8 @@ export const ContentInput: React.FC<ContentInputProps> = ({
   engineStatus,
   retryCountdown,
   speed,
-  hasResult
+  hasResult,
+  isAdmin
 }) => {
   const { language, t } = useLanguage();
   const [isRewriting, setIsRewriting] = useState(false);
@@ -87,7 +89,7 @@ export const ContentInput: React.FC<ContentInputProps> = ({
 
     const runRewrite = async (attempt: number): Promise<void> => {
       try {
-        const gemini = new GeminiTTSService(trimmedApiKey);
+        const gemini = new GeminiTTSService(trimmedApiKey, isAdmin);
         const rewrittenText = await gemini.rewriteContent(text, style);
         
         setText(rewrittenText);

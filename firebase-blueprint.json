@@ -77,7 +77,8 @@
         "isBlocked": { "type": "boolean" },
         "membershipStatus": { "type": "string", "enum": ["standard", "premium"] },
         "expiryDate": { "type": "string", "format": "date" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "lastLoginAt": { "type": "string", "format": "date-time" }
       },
       "required": ["vbsId", "dailyUsage", "lastUsedDate", "isUnlimited", "isBlocked"]
     },

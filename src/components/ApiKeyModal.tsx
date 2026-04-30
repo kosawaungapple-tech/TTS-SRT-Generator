@@ -1,93 +1,87 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Key, Eye, EyeOff, Save, CheckCircle2, AlertCircle, ExternalLink, ShieldCheck } from 'lucide-react';
-import { useLanguage } from '../contexts/LanguageContext';
-import { GeminiTTSService } from '../services/geminiService';
+import { X, Eye, Plus, Trash2, ShieldCheck } from 'lucide-react';
+import { apiChannelManager, ApiChannel } from '../services/apiChannelManager';
 
 interface ApiKeyModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (keys: string[]) => void;
-  onClear?: () => void;
-  initialKey?: string;
-  vbsId?: string | null;
-  activeKeyIndex?: number;
+  role?: 'admin' | 'user' | string;
+  membershipStatus?: 'standard' | 'premium' | null;
 }
 
-export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSave, onClear, initialKey = '', vbsId, activeKeyIndex = 0 }) => {
-  const { t } = useLanguage();
-  const [apiKeys, setApiKeys] = useState<string[]>(initialKey ? [initialKey] : ['']);
-  const [showKeys, setShowKeys] = useState<boolean[]>([]);
-  const [validationStatus, setValidationStatus] = useState<'idle' | 'success' | 'error'>('idle');
-  const [errorMessage, setErrorMessage] = useState('');
+export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role, membershipStatus }) => {
+  const isAdmin = role === 'admin';
+  const isPremium = membershipStatus === 'premium' || isAdmin;
+  
+  // State for both views
+  const [adminChannels, setAdminChannels] = useState<ApiChannel[]>([]);
+  const [userChannel, setUserChannel] = useState<ApiChannel | null>(null);
+  const [settings, setSettings] = useState(apiChannelManager.getSettings());
+  
+  const [newKey, setNewKey] = useState('');
+  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (isOpen) {
-      const keys = initialKey ? initialKey.split(',').map(k => k.trim()).filter(k => k) : [''];
-      setApiKeys(keys.length > 0 ? keys : ['']);
-      setShowKeys(new Array(keys.length || 1).fill(false));
-      setValidationStatus('idle');
-      setErrorMessage('');
+      setAdminChannels(apiChannelManager.getAdminChannels());
+      setUserChannel(apiChannelManager.getUserChannel());
+      const currentSettings = apiChannelManager.getSettings();
+      
+      // Force disable useAdminKeys if user is not premium and it was somehow enabled
+      if (!isPremium && currentSettings.useAdminKeys) {
+        apiChannelManager.updateSettings({ useAdminKeys: false });
+        setSettings({ ...currentSettings, useAdminKeys: false });
+      } else {
+        setSettings(currentSettings);
+      }
     }
-  }, [isOpen, initialKey]);
+  }, [isOpen, isPremium]);
 
-  const handleAddField = () => {
-    if (apiKeys.length < 5) {
-      setApiKeys([...apiKeys, '']);
-      setShowKeys([...showKeys, false]);
-    }
+  const handleAddAdminChannel = () => {
+    if (!newKey.trim()) return;
+    apiChannelManager.addAdminChannel(newKey);
+    setAdminChannels(apiChannelManager.getAdminChannels());
+    setNewKey('');
   };
 
-  const handleRemoveField = (index: number) => {
-    const newKeys = apiKeys.filter((_, i) => i !== index);
-    setApiKeys(newKeys.length > 0 ? newKeys : ['']);
-    setShowKeys(showKeys.filter((_, i) => i !== index));
+  const handleSetUserChannel = () => {
+    if (!newKey.trim()) return;
+    apiChannelManager.setUserChannel(newKey);
+    setUserChannel(apiChannelManager.getUserChannel());
+    setNewKey('');
   };
 
-  const handleValueChange = (index: number, value: string) => {
-    const newKeys = [...apiKeys];
-    newKeys[index] = value;
-    setApiKeys(newKeys);
+  const handleDeleteAdminChannel = (id: string) => {
+    apiChannelManager.deleteAdminChannel(id);
+    setAdminChannels(apiChannelManager.getAdminChannels());
+    setSettings(apiChannelManager.getSettings());
   };
 
-  const toggleShowKey = (index: number) => {
-    const newShow = [...showKeys];
-    newShow[index] = !newShow[index];
-    setShowKeys(newShow);
+  const handleToggleAdminKeySharing = () => {
+    const newVal = !settings.allowSharedKeys;
+    apiChannelManager.updateSettings({ allowSharedKeys: newVal });
+    setSettings(prev => ({ ...prev, allowSharedKeys: newVal }));
   };
 
-  const handleClear = () => {
-    if (onClear) {
-      onClear();
-      setApiKeys(['']);
-      setValidationStatus('idle');
-    }
+  const handleToggleSpecificChannelSharing = (id: string) => {
+    apiChannelManager.toggleSharedChannel(id);
+    setSettings(apiChannelManager.getSettings());
   };
 
-  const handleSaveAndTest = (e?: React.FormEvent | React.MouseEvent) => {
-    if (e) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-    
-    const validKeys = apiKeys.map(k => k.trim()).filter(k => k);
-    if (validKeys.length === 0) {
-      onSave([]);
-      onClose();
-      return;
-    }
+  const handleToggleUseAdminKeys = () => {
+    const newVal = !settings.useAdminKeys;
+    apiChannelManager.updateSettings({ useAdminKeys: newVal });
+    setSettings(prev => ({ ...prev, useAdminKeys: newVal }));
+  };
 
-    try {
-      onSave(validKeys);
-      setValidationStatus('success');
-      setTimeout(() => {
-        onClose();
-      }, 600);
-    } catch (err) {
-      console.error("Save failed:", err);
-      setValidationStatus('error');
-      setErrorMessage("သိမ်းဆည်း၍ မရပါ။ (Save Failed)");
-    }
+  const toggleShowKey = (id: string) => {
+    setShowKeys(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const maskKey = (key: string) => {
+    if (key.length <= 8) return "****" + key.slice(-4);
+    return key.slice(0, 4) + "...." + key.slice(-4);
   };
 
   return (
@@ -106,17 +100,16 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
-            className="relative w-full max-w-lg bg-white dark:bg-slate-900 rounded-[32px] shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden"
+            className="relative w-full max-w-2xl bg-white dark:bg-slate-900 rounded-[32px] shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[90vh]"
           >
             {/* Header */}
             <div className="px-8 py-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-white/[0.02]">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-brand-purple/10 rounded-xl flex items-center justify-center text-brand-purple">
-                  <Key size={20} />
-                </div>
+              <div className="flex items-center">
                 <div>
-                  <h2 className="text-xl font-bold text-slate-900 dark:text-white">{t('keyModal.title')}</h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 font-medium uppercase tracking-wider">{t('keyModal.config')}</p>
+                  <h2 className="text-xl font-bold text-slate-900 dark:text-white">API Key Manager ({isAdmin ? 'Admin' : 'User'})</h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 font-medium uppercase tracking-wider">
+                    {isAdmin ? 'Manage Global API Channels' : 'Manage Personal API Key'}
+                  </p>
                 </div>
               </div>
               <button 
@@ -129,143 +122,134 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
             </div>
 
             {/* Content */}
-            <div className="p-8 space-y-6 max-h-[60vh] overflow-y-auto custom-scrollbar">
-              <form 
-                onSubmit={handleSaveAndTest}
-                className="space-y-6"
-              >
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between px-1">
-                    <label className="block text-sm font-bold text-slate-700 dark:text-slate-300">
-                      {t('keyModal.label')}
-                    </label>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-100 dark:bg-white/5 px-2 py-0.5 rounded-full">
-                      {apiKeys.length} / 5 Channels
-                    </span>
-                  </div>
+            <div className="flex-1 p-8 space-y-6 overflow-y-auto custom-scrollbar">
+              
+              {/* ADMIN VIEW */}
+              {isAdmin && (
+                <div className="space-y-6">
+                   <div className="flex items-center justify-between p-4 bg-brand-purple/5 border border-brand-purple/20 rounded-2xl">
+                     <div>
+                        <h4 className="text-sm font-bold text-slate-800 dark:text-white">Shared Key Mode</h4>
+                        <p className="text-[10px] text-slate-500 font-medium">Allow users to utilize your admin API channels when their keys fail.</p>
+                     </div>
+                     <button
+                        onClick={handleToggleAdminKeySharing}
+                        className={`w-12 h-6 rounded-full transition-all relative ${settings.allowSharedKeys ? 'bg-brand-purple' : 'bg-slate-300 dark:bg-slate-700'}`}
+                     >
+                        <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${settings.allowSharedKeys ? 'left-7' : 'left-1'}`} />
+                     </button>
+                   </div>
 
-                  <div className="space-y-3">
-                    {apiKeys.map((key, index) => (
-                      <div key={index} className="space-y-1">
-                        <div className="flex items-center justify-between px-1">
-                          <div className="flex items-center gap-2">
-                             <div className={`w-1.5 h-1.5 rounded-full ${index === activeKeyIndex ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300 dark:bg-slate-700'}`} />
-                             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Channel {index + 1}</span>
-                             {index === activeKeyIndex && (
-                               <span className="text-[9px] bg-emerald-500/10 text-emerald-500 px-1.5 py-0.5 rounded-md font-bold uppercase">သုံးနေသည်</span>
-                             )}
-                          </div>
-                          {apiKeys.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveField(index)}
-                              className="text-[10px] font-bold text-rose-500 hover:underline"
-                            >
-                              ဖျက်ရန်
-                            </button>
-                          )}
-                        </div>
-                        <div className="relative group">
-                          <input
-                            type={showKeys[index] ? "text" : "password"}
-                            value={key}
-                            onChange={(e) => handleValueChange(index, e.target.value)}
-                            placeholder={t('keyModal.placeholder')}
-                            className={`w-full bg-slate-50 dark:bg-slate-950 border rounded-2xl px-6 py-4 text-base font-mono transition-all pr-14 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 text-slate-900 dark:text-white placeholder:text-slate-400 ${
-                              !key.trim() && apiKeys.length === 1
-                                ? 'border-red-500/50' 
-                                : 'border-slate-200 dark:border-slate-800'
-                            }`}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => toggleShowKey(index)}
-                            className="absolute right-4 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-brand-purple transition-colors"
-                          >
-                            {showKeys[index] ? <EyeOff size={18} /> : <Eye size={18} />}
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  
-                  {apiKeys.length < 5 && (
-                    <button
-                      type="button"
-                      onClick={handleAddField}
-                      className="w-full py-3 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-bold text-slate-400 hover:text-brand-purple hover:border-brand-purple/50 transition-all flex items-center justify-center gap-2"
-                    >
-                      + Add Another Key
-                    </button>
-                  )}
-                  
-                  <a 
-                    href="https://aistudio.google.com/app/apikey" 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2 text-xs font-bold text-brand-purple hover:underline px-1 w-fit group"
-                  >
-                    {t('keyModal.getApiKey')}
-                    <ExternalLink size={12} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-                  </a>
-                </div>
-
-                {validationStatus !== 'idle' && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className={`p-4 rounded-2xl border flex items-center gap-3 ${
-                      validationStatus === 'success' 
-                        ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400' 
-                        : 'bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400'
-                    }`}
-                  >
-                    {validationStatus === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-                    <span className="text-sm font-bold">
-                      {validationStatus === 'success' 
-                        ? t('keyModal.verifying')
-                        : errorMessage}
-                    </span>
-                  </motion.div>
-                )}
-
-                <div className="flex gap-3">
-                  {onClear && initialKey && (
-                    <button
-                      type="button"
-                      onClick={handleClear}
-                      className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold text-lg transition-all hover:bg-red-500/10 hover:text-red-500 active:scale-[0.98]"
-                    >
-                      {t('keyModal.clear')}
-                    </button>
-                  )}
-                  <button
-                    type="submit"
-                    className={`${onClear && initialKey ? 'flex-[2]' : 'w-full'} py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg shadow-xl shadow-brand-purple/20 flex items-center justify-center gap-3 transition-all hover:bg-brand-purple/90 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed`}
-                  >
-                    <Save size={22} />
-                    {t('keyModal.save')}
-                  </button>
-                </div>
-              </form>
-            </div>
-            
-            {/* Footer Info */}
-            <div className="px-8 py-6 bg-slate-50 dark:bg-white/[0.02] border-t border-slate-100 dark:border-slate-800 space-y-4">
-              {vbsId && (
-                <div className="flex items-center justify-between p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 bg-brand-purple/10 rounded-md flex items-center justify-center text-brand-purple">
-                      <ShieldCheck size={14} />
-                    </div>
-                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t('keyModal.userIdLabel')}</span>
-                  </div>
-                  <span className="text-xs font-mono font-bold text-brand-purple">{vbsId}</span>
+                   <div className="space-y-4">
+                     <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">Admin Channels</label>
+                     <div className="space-y-2">
+                        {adminChannels.map(ch => (
+                           <div key={ch.id} className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                             <div className="flex-1 truncate pr-4">
+                               <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-xs font-bold text-slate-700 dark:text-slate-200">{ch.label}</span>
+                                  {settings.sharedChannelIds.includes(ch.id) && (
+                                     <span className="text-[9px] bg-emerald-500/10 text-emerald-500 px-1.5 py-0.5 rounded-md font-bold uppercase">Shared</span>
+                                  )}
+                               </div>
+                               <div className="font-mono text-[11px] text-slate-400">
+                                  {showKeys[ch.id] ? ch.key : maskKey(ch.key)}
+                               </div>
+                             </div>
+                             <div className="flex items-center gap-2">
+                                <button 
+                                  onClick={() => handleToggleSpecificChannelSharing(ch.id)}
+                                  className={`p-2 rounded-lg transition-colors ${settings.sharedChannelIds.includes(ch.id) ? 'bg-emerald-500/10 text-emerald-500' : 'bg-slate-100 dark:bg-white/5 text-slate-400'}`}
+                                  title="Toggle Sharing"
+                                >
+                                  <ShieldCheck size={16} />
+                                </button>
+                                <button onClick={() => toggleShowKey(ch.id)} className="p-2 text-slate-400 hover:text-slate-600"><Eye size={16} /></button>
+                                <button onClick={() => handleDeleteAdminChannel(ch.id)} className="p-2 text-slate-400 hover:text-rose-500"><Trash2 size={16} /></button>
+                             </div>
+                           </div>
+                        ))}
+                     </div>
+                     <div className="flex gap-2">
+                        <input
+                          type="password"
+                          value={newKey}
+                          onChange={(e) => setNewKey(e.target.value)}
+                          placeholder="Add new Admin key..."
+                          className="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-2.5 text-sm"
+                        />
+                        <button onClick={handleAddAdminChannel} className="bg-brand-purple text-white px-4 rounded-xl font-bold text-sm"><Plus size={18} /></button>
+                     </div>
+                   </div>
                 </div>
               )}
-              <p className="text-[10px] text-slate-400 dark:text-slate-500 text-center uppercase tracking-widest font-bold">
-                {t('keyModal.localStoreNotice')}
-              </p>
+
+              {/* PREFERENCES & USER VIEW */}
+              <div className="space-y-6">
+                 <div className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${
+                   !settings.allowSharedKeys || !isPremium 
+                     ? 'opacity-50 grayscale' 
+                     : 'bg-brand-purple/5 border-brand-purple/20'
+                 } ${!settings.allowSharedKeys ? 'pointer-events-none' : ''}`}>
+                   <div>
+                      <h4 className="text-sm font-bold text-slate-800 dark:text-white">Use Admin Key Pool</h4>
+                      <p className="text-[10px] text-slate-500 font-medium">Auto-switch to premium admin keys if personal key reaches limit.</p>
+                      {!isPremium && (
+                        <p className="text-[10px] text-amber-600 dark:text-amber-500 font-bold mt-1.5 flex items-center gap-1.5">
+                          <ShieldCheck size={10} />
+                          Premium အသုံးပြုသူများသာ အသုံးပြုနိုင်သည်
+                        </p>
+                      )}
+                   </div>
+                   <button
+                      onClick={handleToggleUseAdminKeys}
+                      disabled={!settings.allowSharedKeys || !isPremium}
+                      className={`w-12 h-6 rounded-full transition-all relative ${
+                        settings.useAdminKeys && settings.allowSharedKeys && isPremium 
+                          ? 'bg-brand-purple' 
+                          : 'bg-slate-300 dark:bg-slate-700'
+                      } ${!isPremium ? 'cursor-not-allowed opacity-50' : ''}`}
+                   >
+                      <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${
+                        settings.useAdminKeys && settings.allowSharedKeys && isPremium ? 'left-7' : 'left-1'
+                      }`} />
+                   </button>
+                 </div>
+
+                 {!isAdmin && (
+                   <div className="space-y-4">
+                     <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">Personal Channel</label>
+                     {userChannel ? (
+                        <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                           <div className="flex-1 truncate pr-4">
+                              <span className="text-xs font-bold block mb-1 text-slate-700 dark:text-slate-200">Personal Key</span>
+                              <div className="font-mono text-[11px] text-slate-400">{maskKey(userChannel.key)}</div>
+                           </div>
+                           <button onClick={() => { apiChannelManager.clearUserChannel(); setUserChannel(null); }} className="p-2 text-slate-400 hover:text-rose-500"><Trash2 size={16} /></button>
+                        </div>
+                     ) : (
+                        <div className="flex gap-2">
+                           <input
+                             type="password"
+                             value={newKey}
+                             onChange={(e) => setNewKey(e.target.value)}
+                             placeholder="Enter personal Gemini key..."
+                             className="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-2.5 text-sm"
+                           />
+                           <button onClick={handleSetUserChannel} className="bg-brand-purple text-white px-4 rounded-xl font-bold text-sm"><Plus size={18} /></button>
+                        </div>
+                     )}
+                   </div>
+                 )}
+              </div>
+
+            </div>
+            
+            {/* Footer */}
+            <div className="px-8 py-6 bg-slate-50 dark:bg-white/[0.02] border-t border-slate-100 dark:border-slate-800">
+               <p className="text-[10px] text-center text-slate-500 dark:text-slate-400 font-medium uppercase tracking-widest">
+                  Key Security: All keys are stored locally on your device.
+               </p>
             </div>
           </motion.div>
         </div>

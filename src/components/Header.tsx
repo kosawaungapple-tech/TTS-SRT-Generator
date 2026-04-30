@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Sun, Moon, Mic2, User, ChevronDown, LogOut, ShieldCheck, UserCircle, Globe, Shield, Palette } from 'lucide-react';
-import { VBSUserControl } from '../types';
+import { Sun, Moon, Mic2, Globe, Shield, Palette } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 
 interface HeaderProps {
@@ -10,9 +9,6 @@ interface HeaderProps {
   onThemeChange: (theme: 'glassmorphism' | 'minimal' | 'neon' | 'cyberpunk') => void;
   isAccessGranted: boolean;
   isAdmin: boolean;
-  onLogout: () => void;
-  profile: VBSUserControl | null;
-  userControl: VBSUserControl | null;
 }
 
 export const Header: React.FC<HeaderProps> = ({ 
@@ -21,22 +17,14 @@ export const Header: React.FC<HeaderProps> = ({
   uiTheme,
   onThemeChange,
   isAccessGranted,
-  isAdmin,
-  onLogout,
-  profile,
-  userControl
+  isAdmin
 }) => {
-  const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isThemeOpen, setIsThemeOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
   const themeRef = useRef<HTMLDivElement>(null);
   const { language, setLanguage, t } = useLanguage();
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsProfileOpen(false);
-      }
       if (themeRef.current && !themeRef.current.contains(event.target as Node)) {
         setIsThemeOpen(false);
       }
@@ -144,64 +132,6 @@ export const Header: React.FC<HeaderProps> = ({
                   <span className="hidden sm:inline">{t('nav.admin')}</span>
                 </button>
               )}
-              
-              {/* User Profile Dropdown */}
-              <div className="relative" ref={dropdownRef}>
-                <button 
-                  onClick={() => setIsProfileOpen(!isProfileOpen)}
-                  className="flex items-center gap-1.5 sm:gap-2 p-1 rounded-[14px] hover:bg-slate-100 dark:hover:bg-white/5 transition-all border border-transparent hover:border-slate-200 dark:hover:border-white/10"
-                >
-                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-[12px] bg-gradient-to-br from-brand-purple to-purple-700 flex items-center justify-center text-white shadow-lg shadow-brand-purple/20">
-                    <User size={16} className="sm:w-5 sm:h-5" />
-                  </div>
-                  <ChevronDown size={14} className={`text-slate-400 transition-transform duration-300 ${isProfileOpen ? 'rotate-180' : ''}`} />
-                </button>
-
-                {isProfileOpen && (
-                  <div className="absolute right-0 mt-4 w-72 glass-card rounded-[24px] shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200 z-[60]">
-                    <div className="p-6">
-                      {/* User Info */}
-                      <div className="flex items-center gap-4 mb-6">
-                        <div className="w-12 h-12 rounded-2xl bg-brand-purple/10 flex items-center justify-center text-brand-purple">
-                          <UserCircle size={32} />
-                        </div>
-                        <div className="overflow-hidden">
-                          <h3 className="font-bold text-slate-900 dark:text-white truncate">
-                            {profile?.note || profile?.label || (language === 'mm' ? 'Saw အသုံးပြုသူ' : 'Saw User')}
-                          </h3>
-                           <div className={`flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.1em] ${
-                            isAdmin 
-                              ? 'text-amber-500' 
-                              : (userControl?.membershipStatus === 'premium' ? 'text-emerald-500' : 'text-slate-500')
-                          }`}>
-                            {isAdmin ? <Shield size={10} className="fill-current" /> : <ShieldCheck size={10} />}
-                            {!isAdmin && (userControl?.membershipStatus === 'premium' ? 'PREMIUM ACCESS' : 'STANDARD USER')}
-                          </div>
-                          {!(isAdmin || profile?.id === 'saw_vlogs_2026' || userControl?.vbsId === 'saw_vlogs_2026') && (
-                            <div className="mt-1.5 text-[10px] font-mono font-bold text-brand-purple/80 bg-brand-purple/5 px-2 py-0.5 rounded-lg border border-brand-purple/10 w-fit">
-                              ID: {profile?.id || userControl?.vbsId || 'Unknown'}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Actions */}
-                      <div className="space-y-2">
-                        <button 
-                          onClick={() => {
-                            setIsProfileOpen(false);
-                            onLogout();
-                          }}
-                          className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-medium text-rose-500 hover:bg-rose-500/10 transition-colors text-left"
-                        >
-                          <LogOut size={16} />
-                          {t('settings.logout')}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
             </div>
           )}
         </div>

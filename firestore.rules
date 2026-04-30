@@ -47,9 +47,17 @@ service cloud.firestore {
     function isValidVBSUserControl(data) {
       return data.vbsId is string && data.vbsId.size() <= 64 &&
              data.dailyUsage is number && data.dailyUsage >= 0 &&
-             data.lastUsedDate is string &&
+             (data.lastUsedDate is string || data.lastUsedDate == null) &&
              data.isUnlimited is bool &&
-             data.isBlocked is bool;
+             data.isBlocked is bool &&
+             (data.membershipStatus == 'standard' || data.membershipStatus == 'premium' || data.membershipStatus == null);
+    }
+
+    function isValidActivityLog(data) {
+      return data.vbsId is string && data.vbsId.size() <= 64 &&
+             data.type is string && data.type.size() <= 32 &&
+             data.details is string && data.details.size() <= 1024 &&
+             data.createdAt is timestamp;
     }
 
     function isValidSession(data) {
@@ -85,7 +93,7 @@ service cloud.firestore {
       // Allow creation of master codes IF they don't exist (Bootstrap phase)
       allow create: if (isAdmin() || vbsId == 'saw_vlogs_2026' || vbsId == 'SAW-ADMIN-2026') && isValidVBSUserControl(incoming());
       
-      allow update: if (isAdmin() || (isSignedIn() && incoming().diff(existing()).affectedKeys().hasOnly(['dailyUsage', 'lastUsedDate', 'updatedAt']))) && isValidVBSUserControl(incoming());
+      allow update: if (isAdmin() || (isSignedIn() && incoming().diff(existing()).affectedKeys().hasOnly(['dailyUsage', 'lastUsedDate', 'updatedAt', 'lastLoginAt']))) && isValidVBSUserControl(incoming());
       
       allow delete: if isAdmin();
     }
@@ -121,7 +129,7 @@ service cloud.firestore {
     // ACTIVITY LOGS: Audit trails
     match /activity_logs/{logId} {
       allow read: if isAdmin();
-      allow create: if isSignedIn(); // Allow logging activity
+      allow create: if isSignedIn() && isValidActivityLog(incoming());
     }
   }
 }

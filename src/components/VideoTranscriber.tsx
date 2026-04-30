@@ -145,7 +145,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
     await incrementUsage();
 
     try {
-      const gemini = new GeminiTTSService(apiKey);
+      const gemini = new GeminiTTSService(apiKey, isAdmin);
       
       // Step 1: Transcribe using File API (Unified multi-step upload)
       const transcription = await gemini.transcribeVideoFile(videoFile);

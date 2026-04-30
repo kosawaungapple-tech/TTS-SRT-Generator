@@ -35,7 +35,7 @@ import {
 } from 'lucide-react';
 import { SystemConfig, PronunciationRule, GlobalSettings, VBSUserControl, ActivityLog, Announcement } from '../types';
 import { db, collection, onSnapshot, query, orderBy, setDoc, doc, deleteDoc, updateDoc, handleFirestoreError, OperationType, getDoc, auth, where, limit, getDocs, serverTimestamp } from '../firebase';
-import { GeminiTTSService } from '../services/geminiService';
+import { apiChannelManager, ApiChannel } from '../services/apiChannelManager';
 import { Toast, ToastType } from './Toast';
 import { Modal, ModalType } from './Modal';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -233,7 +233,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     api_keys: ['']
   });
   const [isSavingSystem, setIsSavingSystem] = useState(false);
-  const [isSavingKeys, setIsSavingKeys] = useState(false);
   const [isSystemLoading, setIsSystemLoading] = useState(true);
   const [showSecrets, setShowSecrets] = useState(false);
 
@@ -245,6 +244,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isDeletingRule, setIsDeletingRule] = useState<string | null>(null);
   const [isRulesLoading, setIsRulesLoading] = useState(true);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+
+  // New Channel Manager State
+  const [adminChannels, setAdminChannels] = useState<ApiChannel[]>(apiChannelManager.getAdminChannels());
+  const [channelSettings, setChannelSettings] = useState(apiChannelManager.getSettings());
+  const [newAdminKey, setNewAdminKey] = useState('');
+  const [showAdminKeys, setShowAdminKeys] = useState<Record<string, boolean>>({});
 
   // Modal State
   const [modal, setModal] = useState<{
@@ -571,43 +576,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleSaveGlobalSettings = async (e: React.FormEvent) => {
-    if (e) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-    setIsSavingKeys(true);
-    
-    // Sync api_keys array with individual keys for backward compatibility
-    const keys = [
-      globalSettings.primary_key || '',
-      globalSettings.secondary_key || '',
-      globalSettings.backup_key || ''
-    ].filter(k => k.trim());
-
-    try {
-      await setDoc(doc(db, 'settings', 'global'), {
-        ...globalSettings,
-        api_keys: keys,
-        updatedAt: serverTimestamp()
-      });
-      setToast({
-        message: 'API Key Settings Saved! 🔑',
-        type: 'success',
-        isVisible: true
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'settings/global');
-      setToast({
-        message: 'Failed to save API key settings.',
-        type: 'error',
-        isVisible: true
-      });
-    } finally {
-      setIsSavingKeys(false);
-    }
-  };
-
   const generateRandomPassword = () => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
     let password = '';
@@ -615,6 +583,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       password += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     setNewPassword(password);
+  };
+
+  // Channel Handlers
+  const handleAddAdminChannel = () => {
+    if (!newAdminKey.trim()) return;
+    apiChannelManager.addAdminChannel(newAdminKey);
+    setAdminChannels(apiChannelManager.getAdminChannels());
+    setNewAdminKey('');
+  };
+
+  const handleDeleteAdminChannel = (id: string) => {
+    apiChannelManager.deleteAdminChannel(id);
+    setAdminChannels(apiChannelManager.getAdminChannels());
+    setChannelSettings(apiChannelManager.getSettings());
+  };
+
+  const handleToggleAdminKeySharing = () => {
+    const newVal = !channelSettings.allowSharedKeys;
+    apiChannelManager.updateSettings({ allowSharedKeys: newVal });
+    setChannelSettings(prev => ({ ...prev, allowSharedKeys: newVal }));
+  };
+
+  const handleToggleSpecificChannelSharing = (id: string) => {
+    apiChannelManager.toggleSharedChannel(id);
+    setChannelSettings(apiChannelManager.getSettings());
   };
 
   const handleCreateId = async (e: React.FormEvent) => {
@@ -1483,7 +1476,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
 
-            <form onSubmit={handleSaveGlobalSettings} className="space-y-6">
+            <div className="space-y-6">
               <div className="bg-slate-50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-6">
                 <div className="flex items-center justify-between">
                   <div className="space-y-1">
@@ -1492,64 +1485,79 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                   <button
                     type="button"
-                    onClick={() => setGlobalSettings({ ...globalSettings, allow_admin_keys: !globalSettings.allow_admin_keys })}
-                    className={`w-12 h-6 rounded-full transition-all relative ${globalSettings.allow_admin_keys ? 'bg-brand-purple' : 'bg-slate-300 dark:bg-slate-700'}`}
+                    onClick={handleToggleAdminKeySharing}
+                    className={`w-12 h-6 rounded-full transition-all relative ${channelSettings.allowSharedKeys ? 'bg-brand-purple' : 'bg-slate-300 dark:bg-slate-700'}`}
                   >
-                    <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${globalSettings.allow_admin_keys ? 'left-7' : 'left-1'}`} />
+                    <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${channelSettings.allowSharedKeys ? 'left-7' : 'left-1'}`} />
                   </button>
                 </div>
 
                 <div className="space-y-6">
-                  <div className="grid grid-cols-1 gap-4">
-                    {/* Primary Key */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between px-1">
-                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t('admin.primaryKey')}</label>
-                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase ${GeminiTTSService.getActiveKeyIndex() === 0 ? 'text-brand-purple bg-brand-purple/10' : 'text-slate-400 bg-slate-100 dark:bg-slate-800'}`}>
-                          {GeminiTTSService.getActiveKeyIndex() === 0 ? t('admin.active') : t('admin.standby')}
-                        </span>
-                      </div>
-                      <input
-                        type={showSecrets ? "text" : "password"}
-                        value={globalSettings.primary_key || ''}
-                        onChange={(e) => setGlobalSettings({ ...globalSettings, primary_key: e.target.value })}
-                        placeholder="Enter Primary Gemini API Key..."
-                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm font-mono text-slate-900 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
-                      />
+                  <div className="space-y-4">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Admin Channels (Unlimited)</label>
+                    <div className="space-y-3">
+                      {adminChannels.map((ch, idx) => (
+                        <div key={ch.id} className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl flex items-center justify-between gap-4">
+                          <div className="flex-1 truncate">
+                            <div className="flex items-center gap-2 mb-1">
+                               <span className="text-xs font-bold text-slate-700 dark:text-slate-200">{ch.label}</span>
+                               {apiChannelManager.getAdminActiveIndex() === idx && (
+                                 <span className="text-[9px] bg-emerald-500 text-white px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider animate-pulse">Active</span>
+                               )}
+                               {channelSettings.sharedChannelIds.includes(ch.id) && (
+                                  <span className="text-[9px] bg-brand-purple/10 text-brand-purple px-1.5 py-0.5 rounded-md font-bold uppercase">Shared</span>
+                               )}
+                            </div>
+                            <div className="font-mono text-[11px] text-slate-400 truncate tracking-tight">
+                               {showAdminKeys[ch.id] ? ch.key : `${ch.key.substring(0, 8)}••••••••${ch.key.slice(-4)}`}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                             <button 
+                               onClick={() => handleToggleSpecificChannelSharing(ch.id)}
+                               className={`p-2 rounded-lg transition-colors ${channelSettings.sharedChannelIds.includes(ch.id) ? 'bg-emerald-500/10 text-emerald-500' : 'bg-slate-100 dark:bg-white/5 text-slate-400'}`}
+                               title="Toggle User Access"
+                             >
+                               <ShieldCheck size={16} />
+                             </button>
+                             <button
+                               onClick={() => setShowAdminKeys(prev => ({ ...prev, [ch.id]: !prev[ch.id] }))}
+                               className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-white"
+                             >
+                               {showAdminKeys[ch.id] ? <EyeOff size={16} /> : <Eye size={16} />}
+                             </button>
+                             <button
+                               onClick={() => handleDeleteAdminChannel(ch.id)}
+                               className="p-2 text-slate-400 hover:text-rose-500"
+                             >
+                               <Trash2 size={16} />
+                             </button>
+                          </div>
+                        </div>
+                      ))}
+
+                      {adminChannels.length === 0 && (
+                        <div className="text-center py-8 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+                           <p className="text-xs text-slate-400 font-medium tracking-wide">No admin channels configured.</p>
+                        </div>
+                      )}
                     </div>
 
-                    {/* Secondary Key */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between px-1">
-                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t('admin.secondaryKey')}</label>
-                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase ${GeminiTTSService.getActiveKeyIndex() === 1 ? 'text-brand-purple bg-brand-purple/10' : 'text-slate-400 bg-slate-100 dark:bg-slate-800'}`}>
-                          {GeminiTTSService.getActiveKeyIndex() === 1 ? t('admin.active') : t('admin.backup1')}
-                        </span>
-                      </div>
-                      <input
-                        type={showSecrets ? "text" : "password"}
-                        value={globalSettings.secondary_key || ''}
-                        onChange={(e) => setGlobalSettings({ ...globalSettings, secondary_key: e.target.value })}
-                        placeholder="Enter Secondary Gemini API Key..."
-                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm font-mono text-slate-900 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
-                      />
-                    </div>
-
-                    {/* Backup Key */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between px-1">
-                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t('admin.backupKey')}</label>
-                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase ${GeminiTTSService.getActiveKeyIndex() === 2 ? 'text-brand-purple bg-brand-purple/10' : 'text-slate-400 bg-slate-100 dark:bg-slate-800'}`}>
-                          {GeminiTTSService.getActiveKeyIndex() === 2 ? t('admin.active') : t('admin.backup2')}
-                        </span>
-                      </div>
-                      <input
-                        type={showSecrets ? "text" : "password"}
-                        value={globalSettings.backup_key || ''}
-                        onChange={(e) => setGlobalSettings({ ...globalSettings, backup_key: e.target.value })}
-                        placeholder="Enter Backup Gemini API Key..."
-                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm font-mono text-slate-900 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
-                      />
+                    <div className="flex gap-2 pt-2">
+                       <input
+                         type="password"
+                         value={newAdminKey}
+                         onChange={(e) => setNewAdminKey(e.target.value)}
+                         placeholder="Add new Admin API Key..."
+                         className="flex-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm"
+                       />
+                       <button
+                         onClick={handleAddAdminChannel}
+                         type="button"
+                         className="bg-brand-purple text-white px-5 rounded-xl font-bold flex items-center justify-center shadow-lg shadow-brand-purple/20"
+                       >
+                         <Plus size={20} />
+                       </button>
                     </div>
                   </div>
 
@@ -1557,34 +1565,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     {t('admin.keyRotationDesc')}
                   </p>
                 </div>
-
-                <button
-                  type="submit"
-                  disabled={isSavingKeys}
-                  className="w-full py-3.5 bg-brand-purple hover:bg-brand-purple/90 text-white rounded-xl text-sm font-bold shadow-lg shadow-brand-purple/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  {isSavingKeys ? (
-                    <div className="flex items-center gap-0.5 h-4">
-                      {[...Array(3)].map((_, i) => (
-                        <motion.div
-                          key={i}
-                          className="w-0.5 bg-white rounded-full"
-                          animate={{
-                            height: [4, 12, 4],
-                          }}
-                          transition={{
-                            duration: 0.6,
-                            repeat: Infinity,
-                            delay: i * 0.1,
-                          }}
-                        />
-                      ))}
-                    </div>
-                  ) : <Save size={18} />}
-                  {t('admin.saveSettings')}
-                </button>
               </div>
-            </form>
+            </div>
+
           </div>
         </div>
       )}

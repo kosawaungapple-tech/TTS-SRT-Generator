@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Clipboard, Mic2, Play, Info, Sparkles, Image as ImageIcon } from 'lucide-react';
+import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Clipboard, Mic2, Play, Info, Sparkles, Image as ImageIcon, X } from 'lucide-react';
 import { WelcomePage } from './components/WelcomePage';
 import { Header } from './components/Header';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { ContentInput } from './components/ContentInput';
-import { PronunciationRules } from './components/PronunciationRules';
 import { VoiceConfig } from './components/VoiceConfig';
 import { OutputPreview } from './components/OutputPreview';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -14,6 +13,7 @@ import { ThumbnailCreator } from './components/ThumbnailCreator';
 import { AnnouncementPanel } from './components/AnnouncementPanel';
 import { Modal, ModalType } from './components/Modal';
 import { GeminiTTSService } from './services/geminiService';
+import { apiChannelManager } from './services/apiChannelManager';
 import { logActivity } from './services/activityService';
 import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, SystemConfig, VBSUserControl, Announcement } from './types';
 import { DEFAULT_RULES } from './constants';
@@ -36,7 +36,7 @@ export default function App() {
     return (localStorage.getItem('vbs_ui_theme') as UITheme) || 'glassmorphism';
   });
   const [text, setText] = useState('');
-  const [customRules, setCustomRules] = useState('');
+  const [customRules] = useState('');
   const [saveToHistory, setSaveToHistory] = useState(false);
   const [config, setConfig] = useState<TTSConfig>({
     voiceId: 'kore',
@@ -54,8 +54,15 @@ export default function App() {
   // Sign in anonymously is restricted in the console, so we skip it for now.
   // The app will function in bypass mode using localStorage for the API Key.
   
-  const [localApiKey, setLocalApiKey] = useState<string | null>(localStorage.getItem('VLOGS_BY_SAW_API_KEY'));
-  const [activeUserKeyIndex, setActiveUserKeyIndex] = useState(0);
+  const [localApiKey, setLocalApiKey] = useState<string | null>(apiChannelManager.getActiveKey());
+
+  useEffect(() => {
+    const handleStorageChange = () => {
+      setLocalApiKey(apiChannelManager.getActiveKey());
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [profile, setProfile] = useState<VBSUserControl | null>(null);
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings>({
@@ -145,11 +152,10 @@ export default function App() {
   }, [profile, globalSettings]);
 
   const getEffectiveApiKey = useCallback(() => {
-    // Priority -1: Immediate LocalStorage fetch (Strict persistence for Admin)
-    const immediateLocalKey = localStorage.getItem('VLOGS_BY_SAW_API_KEY');
+    // Priority -1: Immediate Channel Manager fetch
+    const immediateLocalKey = apiChannelManager.getActiveKey();
     if (immediateLocalKey && immediateLocalKey.trim()) {
-      const userKeys = immediateLocalKey.split(',').map(k => k.trim()).filter(k => k);
-      if (userKeys.length > 0) return userKeys.join(',');
+      return immediateLocalKey;
     }
 
     // [ADMIN PREMIUM KEY PRIORITY - COMMANDER ORDER]
@@ -220,6 +226,39 @@ export default function App() {
   const [isVerifyingCode, setIsVerifyingCode] = useState(false);
   const [accessCode, setAccessCode] = useState<string | null>(() => localStorage.getItem('vbs_access_code'));
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+  const [channelsExhausted, setChannelsExhausted] = useState(false);
+
+  useEffect(() => {
+    const handleSwitch = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      showToast(detail.message, 'success');
+    };
+    const handleExhausted = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      setChannelsExhausted(true);
+      showToast(detail.message, 'error');
+    };
+
+    window.addEventListener('channel-switch', handleSwitch);
+    window.addEventListener('channels-exhausted', handleExhausted);
+    
+    return () => {
+      window.removeEventListener('channel-switch', handleSwitch);
+      window.removeEventListener('channels-exhausted', handleExhausted);
+    };
+  }, [showToast]);
+
+  // Request notification permission on first interaction
+  useEffect(() => {
+    const requestPermission = () => {
+      if (Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+      window.removeEventListener('click', requestPermission);
+    };
+    window.addEventListener('click', requestPermission);
+    return () => window.removeEventListener('click', requestPermission);
+  }, []);
 
   // Modal State
   const [modal, setModal] = useState<{
@@ -673,29 +712,6 @@ export default function App() {
     );
   }, [history, historySearch]);
 
-  const handleClearApiKey = () => {
-    localStorage.removeItem('VLOGS_BY_SAW_API_KEY');
-    setLocalApiKey(null);
-    setToast({ message: 'API Key အောင်မြင်စွာ ဖျက်လိုက်ပါပြီ။ (API Key cleared successfully!)', type: 'success' });
-    setTimeout(() => setToast(null), 3000);
-  };
-
-  const handleSaveApiKeyFromModal = async (keys: string[]) => {
-    const joinedKeys = Array.isArray(keys) ? keys.join(',') : keys;
-    try {
-      // 1. Save to Local Storage ONLY as per safety requirements
-      localStorage.setItem('VLOGS_BY_SAW_API_KEY', joinedKeys);
-      setLocalApiKey(joinedKeys);
-      
-      setToast({ message: 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ (Settings saved successfully!)', type: 'success' });
-      setTimeout(() => setToast(null), 3000);
-    } catch (err: unknown) {
-      console.error('Save API Key Error:', err);
-      setToast({ message: 'Failed to save API Key', type: 'error' });
-      setTimeout(() => setToast(null), 3000);
-    }
-  };
-
   const handleGenerate = async () => {
     setOutputConfig({ speed: config.speed, volume: config.volume });
     console.log("App: Generate Voice Button Clicked");
@@ -749,7 +765,7 @@ export default function App() {
 
     const runGeneration = async (retryAttempt = 0): Promise<void> => {
       try {
-        const ttsService = new GeminiTTSService(effectiveKey);
+        const ttsService = new GeminiTTSService(effectiveKey, profile?.role === 'admin');
         
         const currentController = new AbortController();
         setAbortController(currentController);
@@ -899,10 +915,6 @@ export default function App() {
         
         const isRateLimit = error.message === 'RATE_LIMIT_EXHAUSTED' || error.status === 429;
         if (isRateLimit && retryAttempt < 1) {
-          setActiveUserKeyIndex(prev => {
-            const userKeys = (localStorage.getItem('VLOGS_BY_SAW_API_KEY') || '').split(',').filter(k => k.trim());
-            return userKeys.length > 1 ? (prev + 1) % userKeys.length : prev;
-          });
           setEngineStatus('cooling');
           setRetryCountdown(10);
           const timer = setInterval(() => {
@@ -1087,7 +1099,7 @@ export default function App() {
   }, [userControl?.expiryDate, isVbsAdmin]);
 
   const isPremium = isVbsAdmin || (userControl?.membershipStatus === 'premium' && !isExpired);
-  const canUseThumbnail = isVbsAdmin || (isPremium && !!globalSettings.allow_thumbnail_admin_key);
+  const canUseThumbnail = isPremium;
 
   useEffect(() => {
     if (isExpired && userControl?.isUnlimited) {
@@ -1174,17 +1186,39 @@ export default function App() {
       <div className="fixed top-[-10%] left-[-10%] w-[40%] h-[40%] bg-brand-purple/10 blur-[120px] rounded-full -z-10 animate-pulse-soft" />
       <div className="fixed bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-neon-magenta/10 blur-[120px] rounded-full -z-10 animate-pulse-soft" />
       
+      {/* Channels Exhausted Banner */}
+      <AnimatePresence>
+        {channelsExhausted && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="bg-rose-600 text-white py-2 px-4 text-center text-sm font-bold flex items-center justify-center gap-3 sticky top-0 z-[110]"
+          >
+            <span>All API channels exhausted. Please add a new Gemini API key in Settings.</span>
+            <button 
+              onClick={() => setIsApiKeyModalOpen(true)}
+              className="px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-xs transition-colors"
+            >
+              Adjust Settings
+            </button>
+            <button 
+              onClick={() => setChannelsExhausted(false)}
+              className="p-1 hover:bg-white/20 rounded"
+            >
+              <X size={14} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <Header 
         isDarkMode={isDarkMode} 
         toggleTheme={() => setIsDarkMode(!isDarkMode)} 
         uiTheme={uiTheme}
         onThemeChange={setUITheme}
-        onOpenTools={() => setIsApiKeyModalOpen(true)}
         isAccessGranted={isAccessGranted}
         isAdmin={isVbsAdmin}
-        onLogout={handleLogout}
-        profile={profile}
-        userControl={userControl}
       />
 
       {isAccessGranted && !isVbsAdmin && (
@@ -1404,13 +1438,13 @@ export default function App() {
                     <ContentInput 
                       text={text} 
                       setText={setText} 
-                      isDarkMode={isDarkMode} 
                       getApiKey={getEffectiveApiKey}
                       showToast={showToast}
                       engineStatus={engineStatus}
                       retryCountdown={retryCountdown}
                       speed={config.speed}
                       hasResult={!!result}
+                      isAdmin={profile?.role === 'admin'}
                     />
                     
 
@@ -1827,9 +1861,20 @@ export default function App() {
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
-                        <div className={`flex items-center gap-2 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest ${localApiKey ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                          <div className={`w-2.5 h-2.5 rounded-full ${localApiKey ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
-                          {localApiKey ? 'CONNECTED' : 'No API Key found'}
+                        <div className={`flex items-center gap-3 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest ${localApiKey ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                          {localApiKey && apiChannelManager.getActiveSourceInfo(profile?.role === 'admin') && (
+                            <div className="hidden sm:flex items-center gap-2 text-slate-500 font-medium mr-1">
+                              <span className="text-slate-900 dark:text-white font-bold">{apiChannelManager.getActiveSourceInfo(profile?.role === 'admin')?.label}</span>
+                              <span className="text-slate-300 dark:text-slate-700 mx-1">•</span>
+                              <span className="font-mono lowercase opacity-50 tracking-normal">
+                                {apiChannelManager.getActiveSourceInfo(profile?.role === 'admin')?.key.substring(0, 4)}....{apiChannelManager.getActiveSourceInfo(profile?.role === 'admin')?.key.slice(-4)}
+                              </span>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2">
+                            <div className={`w-2 h-2 rounded-full ${localApiKey ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+                            {localApiKey ? 'CONNECTED' : 'NO API KEY FOUND'}
+                          </div>
                         </div>
                         <ChevronRight size={18} className="text-slate-400 group-hover:translate-x-1 transition-transform" />
                       </div>
@@ -1847,11 +1892,8 @@ export default function App() {
       <ApiKeyModal 
         isOpen={isApiKeyModalOpen}
         onClose={() => setIsApiKeyModalOpen(false)}
-        onSave={handleSaveApiKeyFromModal}
-        onClear={handleClearApiKey}
-        activeKeyIndex={activeUserKeyIndex}
-        initialKey={localApiKey || ''}
-        vbsId={vbsId}
+        role={profile?.role}
+        membershipStatus={userControl?.membershipStatus}
       />
       <AnimatePresence>
         {toast && (
