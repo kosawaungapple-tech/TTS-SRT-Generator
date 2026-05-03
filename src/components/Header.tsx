@@ -10,6 +10,7 @@ interface HeaderProps {
   isAccessGranted: boolean;
   isAdmin: boolean;
   apiKeyStatus: { state: 'admin' | 'personal' | 'none'; label: string };
+  userControl?: import('../types').VBSUserControl | null;
 }
 
 export const Header: React.FC<HeaderProps> = ({ 
@@ -19,7 +20,8 @@ export const Header: React.FC<HeaderProps> = ({
   onThemeChange,
   isAccessGranted,
   isAdmin,
-  apiKeyStatus
+  apiKeyStatus,
+  userControl
 }) => {
   const [isThemeOpen, setIsThemeOpen] = useState(false);
   const themeRef = useRef<HTMLDivElement>(null);
@@ -69,6 +71,18 @@ export const Header: React.FC<HeaderProps> = ({
                     'text-rose-500'
                   }`}>
                     {apiKeyStatus.state === 'none' ? 'NO KEY' : apiKeyStatus.state === 'admin' ? 'ADMIN KEY' : 'PERS KEY'}
+                  </span>
+                </div>
+              )}
+              
+              {/* Credits Display */}
+              {isAccessGranted && userControl && (
+                <div className="flex items-center gap-1.5 bg-brand-purple/5 dark:bg-brand-purple/10 px-2 py-0.5 rounded-full border border-brand-purple/10">
+                  <span className="text-[8px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-tighter">Credits:</span>
+                  <span className={`text-[10px] font-black font-mono ${
+                    (userControl.credits || 0) > 0 ? 'text-brand-purple' : 'text-rose-500'
+                  }`}>
+                    {userControl.credits || 0}
                   </span>
                 </div>
               )}

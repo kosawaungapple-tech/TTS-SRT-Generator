@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Modality } from "@google/genai";
 import { TTSConfig, AudioResult, SRTSubtitle } from "../types";
 import { VOICE_OPTIONS, GEMINI_MODELS } from "../constants";
 import { formatTime } from "../utils/audioUtils";
@@ -45,32 +45,57 @@ export class GeminiTTSService {
   private async geminiRequest(modelName: string, body: { contents: any[]; generationConfig?: any }): Promise<GeminiResponse> {
     const executeRequest = async (key: string) => {
       const ai = this.getAI(key);
-      const modelPath = modelName.startsWith('models/') ? modelName : `models/${modelName}`;
+      const modelPath = modelName;
       
-      console.log(`Gemini SDK Request [${modelName}]:`, modelPath);
+      console.log(`Gemini SDK Request [${modelName}]:`, modelPath, "Key:", key ? `${key.substring(0, 4)}...${key.substring(key.length - 4)}` : "MISSING");
       
-      const response = await ai.models.generateContent({
-        model: modelPath,
-        contents: body.contents,
-        config: body.generationConfig
-      });
-      
-      // Map SDK response back to our internal GeminiResponse interface
-      return {
+      try {
+        const result = await ai.models.generateContent({
+          model: modelPath,
+          contents: body.contents,
+          config: body.generationConfig
+        });
+        
+        // Some SDK versions might wrap the response
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        candidates: response.candidates?.map((c: any) => ({
-          content: {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            parts: c.content?.parts?.map((p: any) => ({
-              text: p.text,
-              inlineData: p.inlineData ? {
-                data: p.inlineData.data,
-                mimeType: p.inlineData.mimeType
-              } : undefined
-            }))
-          }
-        }))
-      } as GeminiResponse;
+        const response = (result as any).response || result;
+        
+        console.log(`Gemini SDK Response Keys [${modelName}]:`, Object.keys(response));
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (!response.candidates && (result as any).candidates) {
+          console.log(`Gemini SDK: Candidates found in root instead of response wrapper`);
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const candidates = response.candidates || (result as any).candidates;
+
+        if (!candidates || candidates.length === 0) {
+          console.warn(`Gemini SDK: No candidates in response for ${modelName}`);
+          // Log more of the response object manually if JSON.stringify is failing us
+          console.log(`Gemini SDK: Full Response Object Keys:`, Object.keys(result));
+          if (response.text) console.log(`Gemini SDK: Response has text:`, response.text.substring(0, 50));
+        }
+        
+        // Map SDK response back to our internal GeminiResponse interface
+        return {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          candidates: candidates?.map((c: any) => ({
+            content: {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              parts: c.content?.parts?.map((p: any) => ({
+                text: p.text,
+                inlineData: p.inlineData ? {
+                  data: p.inlineData.data,
+                  mimeType: p.inlineData.mimeType
+                } : undefined
+              }))
+            }
+          }))
+        } as GeminiResponse;
+      } catch (err) {
+        console.error(`Gemini SDK Error [${modelName}]:`, err);
+        throw err;
+      }
     };
 
     if (this.apiKey) {
@@ -132,7 +157,76 @@ export class GeminiTTSService {
     return new Blob([wavBuffer], { type: 'audio/wav' });
   }
 
-  async generateTTS(text: string, config: TTSConfig): Promise<AudioResult> {
+  async generateTTS(text: string, config: TTSConfig, onFirstChunk?: (result: AudioResult) => void): Promise<AudioResult> {
+    const chunks = this.splitIntoChunks(text, 250); // Split into ~250 char chunks (slightly more than 200 for better context)
+    console.log(`TTS Service: Splitting text into ${chunks.length} chunks for parallel generation...`);
+
+    if (chunks.length <= 1) {
+      return this.generateSingleTTS(text, config);
+    }
+
+    // Generate all chunks in parallel with a timeout
+    const chunkPromises = chunks.map((chunk, index) => {
+      // Wrap each request in a 30s timeout as requested
+      const timeoutPromise = new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error(`TTS chunk ${index} timed out after 30s`)), 30000)
+      );
+
+      return Promise.race([
+        this.generateSingleTTS(chunk, config),
+        timeoutPromise
+      ]);
+    });
+
+    try {
+      // Special handling for first chunk to play fast
+      if (onFirstChunk) {
+        chunkPromises[0].then(firstResult => {
+          console.log("TTS Service: First chunk ready, triggering callback...");
+          onFirstChunk(firstResult);
+        }).catch(err => console.error("TTS Service: First chunk failed:", err));
+      }
+
+      const results = await Promise.all(chunkPromises);
+      console.log(`TTS Service: All ${results.length} chunks generated successfully.`);
+
+      // Combine results
+      return this.mergeAudioResults(results);
+    } catch (error) {
+      console.error("TTS Service: Parallel generation failed, falling back to single request:", error);
+      return this.generateSingleTTS(text, config);
+    }
+  }
+
+  private splitIntoChunks(text: string, maxChars: number): string[] {
+    const chunks: string[] = [];
+    // Split by Myanmar full stop (။), comma (၊), or newline.
+    const sentences = text.split(/([။၊\n])/g);
+    
+    let currentChunk = "";
+    for (let i = 0; i < sentences.length; i++) {
+      const s = sentences[i];
+      if (!s) continue;
+      
+      // If s is just a punctuation mark from the split group
+      if (s === "။" || s === "၊" || s === "\n") {
+        currentChunk += s;
+        continue;
+      }
+
+      if (currentChunk.length + s.length > maxChars) {
+        if (currentChunk.trim()) chunks.push(currentChunk.trim());
+        currentChunk = s;
+      } else {
+        currentChunk += s;
+      }
+    }
+    
+    if (currentChunk.trim()) chunks.push(currentChunk.trim());
+    return chunks;
+  }
+
+  private async generateSingleTTS(text: string, config: TTSConfig): Promise<AudioResult> {
     const voice = VOICE_OPTIONS.find(v => v.id === config.voiceId) || VOICE_OPTIONS[0];
 
     const pitchInstruction = config.pitch > 0
@@ -151,7 +245,7 @@ export class GeminiTTSService {
     const body = {
       contents: [{ parts: [{ text: textWithInstruction }] }],
       generationConfig: {
-        responseModalities: ["AUDIO"],
+        responseModalities: [Modality.AUDIO],
         speechConfig: {
           voiceConfig: {
             prebuiltVoiceConfig: {
@@ -168,16 +262,13 @@ export class GeminiTTSService {
 
     if (!base64Audio) {
       console.error('No audio in response:', JSON.stringify(data));
-      throw new Error('No audio data returned from Gemini candidates. Ensure the model supports TTS and voice config is correct.');
+      throw new Error('No audio data returned from Gemini');
     }
 
-    // [PCM to WAV CONVERSION] 
-    // Gemini returns raw PCM at 24000Hz, browsers need WAV headers to play correctly
     const audioBlob = this.convertPCMToWav(base64Audio, 24000);
     const audioUrl = URL.createObjectURL(audioBlob);
     const arrayBuffer = await audioBlob.arrayBuffer();
 
-    // Duration estimation for subtitles
     const AudioContextClass = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext) as typeof AudioContext;
     const audioContext = new AudioContextClass();
     let totalDuration = 0;
@@ -186,7 +277,7 @@ export class GeminiTTSService {
       totalDuration = decodedBuffer.duration;
     } catch (e) {
       console.warn("Failed to decode audio duration, using estimation", e);
-      totalDuration = text.length * 0.08; // Rough estimation
+      totalDuration = text.length * 0.08;
     } finally {
       await audioContext.close();
     }
@@ -204,6 +295,80 @@ export class GeminiTTSService {
       speed: 1.0,
       duration: totalDuration
     };
+  }
+
+  private mergeAudioResults(results: AudioResult[]): AudioResult {
+    // 1. Merge PCM data
+    let totalLength = 0;
+    const pcmChunks: Uint8Array[] = [];
+    
+    for (const res of results) {
+      const binaryString = atob(res.audioData);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      pcmChunks.push(bytes);
+      totalLength += bytes.length;
+    }
+
+    const mergedPCM = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const chunk of pcmChunks) {
+      mergedPCM.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    // Convert merged PCM to Base64
+    let binary = "";
+    const len = mergedPCM.byteLength;
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(mergedPCM[i]);
+    }
+    const base64Audio = btoa(binary);
+
+    // 2. Merge Subtitles
+    let cumulativeTime = 0;
+    const allSubtitles: SRTSubtitle[] = [];
+    const srtParts: string[] = [];
+    
+    results.forEach((res) => {
+      res.subtitles.forEach((sub) => {
+        const start = this.parseTimestampToSeconds(sub.startTime) + cumulativeTime;
+        const end = this.parseTimestampToSeconds(sub.endTime) + cumulativeTime;
+        
+        const newSub = {
+          ...sub,
+          index: allSubtitles.length + 1,
+          startTime: formatTime(start),
+          endTime: formatTime(end)
+        };
+        allSubtitles.push(newSub);
+        srtParts.push(`${newSub.index}\n${newSub.startTime} --> ${newSub.endTime}\n${newSub.text}\n`);
+      });
+      cumulativeTime += res.duration;
+    });
+
+    const audioBlob = this.convertPCMToWav(base64Audio, 24000);
+    const audioUrl = URL.createObjectURL(audioBlob);
+
+    return {
+      audioUrl,
+      audioData: base64Audio,
+      rawAudio: mergedPCM.buffer,
+      srtContent: srtParts.join('\n'),
+      subtitles: allSubtitles,
+      baseDuration: cumulativeTime,
+      oneXDuration: cumulativeTime,
+      speed: 1.0,
+      duration: cumulativeTime
+    };
+  }
+
+  private parseTimestampToSeconds(timestamp: string): number {
+    const [hms, ms] = timestamp.split(',');
+    const [h, m, s] = hms.split(':').map(Number);
+    return h * 3600 + m * 60 + s + (Number(ms) / 1000);
   }
 
   static parseSRT(srt: string): SRTSubtitle[] {

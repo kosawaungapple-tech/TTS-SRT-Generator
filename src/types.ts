@@ -16,6 +16,11 @@ export interface VBSUserControl {
   isActive?: boolean;
   note?: string;
   password?: string;
+  credits?: number;
+  videosGeneratedToday?: number;
+  dailyVideoLimit?: number;
+  lastVideoDate?: string;
+  admin_override_active?: boolean;
   api_key_stored?: string;
   allowAdminKey?: boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -56,7 +61,20 @@ export interface GlobalSettings {
   mock_mode?: boolean;
   transcription_daily_limit?: number;
   transcription_public_access?: boolean;
+  welcome_credits?: number;
+  recap_cost?: number;
+  tts_cost?: number;
+  rewrite_cost?: number;
   announcements?: Announcement[];
+}
+
+export interface CreditSettings {
+  videoRecapCost: number;
+  ttsGenerationCost: number;
+  aiRewriteCost: number;
+  newPremiumWelcomeCredits: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  updatedAt?: any;
 }
 
 export interface SystemConfig {
@@ -130,6 +148,7 @@ export interface AudioResult {
   oneXDuration: number; // Normalized duration at 1.0x speed for estimation
   speed: number; // Speed at which it was generated
   duration: number; // Duration in seconds
+  isLoadingPartial?: boolean; // Flag to indicate more chunks are coming
 }
 
 export interface ActivityLog {
