@@ -187,25 +187,36 @@ class ApiChannelManager {
 
   getActiveSourceInfo(isAdminContext: boolean = false): { label: string; key: string; isShared: boolean } | null {
     if (isAdminContext) {
-      if (this.adminChannels.length === 0) return null;
+      if (this.adminChannels.length === 0) {
+        // Fallback to env key for admin context if no channels added
+        const envKey = typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : null;
+        if (envKey) return { label: 'System Key', key: envKey, isShared: false };
+        return null;
+      }
       const ch = this.adminChannels[this.adminActiveIndex] || this.adminChannels[0];
       return { label: ch.label, key: ch.key, isShared: false };
     }
 
     // Determine what key to use for normal operations
     const personalKey = this.userChannel?.key;
-    const canUseAdmin = this.settings.useAdminKeys && this.settings.allowSharedKeys;
+    const adminPoolSelected = this.settings.useAdminKeys;
 
-    if (personalKey) {
-      // We always prefer personal key if it exists, UNLESS it's explicitly marked as limit
-      // But getActiveSourceInfo doesn't track live rate limits easily without state. 
-      // For UI purposes, we show what will be tried first.
-      return { label: 'My Key', key: personalKey, isShared: false };
+    // 1. If Admin Pool is selected AND allowed, prioritize it for the status check
+    if (adminPoolSelected && this.settings.allowSharedKeys) {
+      const shared = this.getSharedAdminChannel();
+      if (shared) {
+        return { label: `ADMIN KEY`, key: shared.key, isShared: true };
+      }
+      // If pool is empty/closed but selected, we might still return some indicator or null
+      // Let's return the first available admin key for UI indicator if it exists
+      if (this.adminChannels.length > 0) {
+        return { label: 'ADMIN KEY', key: this.adminChannels[0].key, isShared: true };
+      }
     }
 
-    if (canUseAdmin) {
-      const shared = this.getSharedAdminChannel();
-      if (shared) return { label: `Admin: ${shared.label}`, key: shared.key, isShared: true };
+    // 2. Otherwise (Personal Key mode selected OR fallback), use Personal Key
+    if (personalKey) {
+      return { label: 'MY KEY', key: personalKey, isShared: false };
     }
 
     return null;

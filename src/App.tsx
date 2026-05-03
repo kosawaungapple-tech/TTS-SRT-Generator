@@ -491,6 +491,17 @@ export default function App() {
 
         setGlobalSettings(data);
         
+        // [SYNC MASTER SETTINGS - COMMANDER ORDER]
+        // Explicitly update sharing permissions based on global admin toggle
+        apiChannelManager.updateSettings({ allowSharedKeys: data.allow_admin_keys });
+
+        // If admin disabled pool OR user is no longer premium, force normal users back to personal mode
+        const isUserPremium = profile?.membershipStatus === 'premium' || profile?.role === 'admin';
+        if ((!data.allow_admin_keys || !isUserPremium) && apiChannelManager.getSettings().useAdminKeys && profile?.role !== 'admin') {
+          console.log("App: Admin Pool restricted, forcing user to Personal Mode");
+          apiChannelManager.updateSettings({ useAdminKeys: false });
+        }
+        
         // Sync Admin Keys from Settings to Channel Manager
         const allAdminKeys = [
           data.primary_key || '',
@@ -529,7 +540,7 @@ export default function App() {
       setIsConfigLoading(false);
     });
     return () => unsubscribe();
-  }, [isAccessGranted, isAuthReady]);
+  }, [isAccessGranted, isAuthReady, profile]);
 
   // Listen for System Config
   useEffect(() => {
@@ -2117,26 +2128,32 @@ export default function App() {
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
-                        <div className={`flex items-center gap-3 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest ${localApiKey ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                          {localApiKey && apiChannelManager.getActiveSourceInfo(profile?.role === 'admin') && (
-                            <div className="hidden sm:flex items-center gap-2 text-slate-500 font-medium mr-1">
-                              <span className="text-slate-900 dark:text-white font-bold">{apiChannelManager.getActiveSourceInfo(profile?.role === 'admin')?.label}</span>
-                              <span className="text-slate-300 dark:text-slate-700 mx-1">•</span>
-                              <span className="font-mono lowercase opacity-50 tracking-normal">
-                                {apiChannelManager.getActiveSourceInfo(profile?.role === 'admin')?.key.substring(0, 4)}....{apiChannelManager.getActiveSourceInfo(profile?.role === 'admin')?.key.slice(-4)}
-                              </span>
-                            </div>
-                          )}
-                          <div className="flex items-center gap-2">
-                            <div className={`w-2 h-2 rounded-full ${localApiKey ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
-                            {apiChannelManager.getSettings().useAdminKeys && apiChannelManager.getSettings().allowSharedKeys && localApiKey && apiChannelManager.getActiveSourceInfo(profile?.role === 'admin')?.isShared ? (
-                              'ADMIN KEY ACTIVE'
-                            ) : localApiKey ? (
-                              'CONNECTED'
-                            ) : (
-                              'NO API KEY FOUND'
-                            )}
-                          </div>
+                        <div className={`flex items-center gap-2 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest ${localApiKey ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                          <div className={`w-2 h-2 rounded-full ${localApiKey ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+                          {(() => {
+                            const info = apiChannelManager.getActiveSourceInfo(profile?.role === 'admin');
+                            const settings = apiChannelManager.getSettings();
+                            const isAdminMode = settings.useAdminKeys;
+                            
+                            if (!localApiKey || !info) return 'NO KEY FOUND';
+                            
+                            // Use the label and isShared flag from the channel manager
+                            const label = info.isShared || isAdminMode ? 'ADMIN KEY' : 'MY KEY';
+                            const status = info.isShared || isAdminMode ? 'ACTIVE' : 'CONNECTED';
+                            
+                            return (
+                              <div className="flex items-center gap-1.5">
+                                <span>{label}</span>
+                                <span className="opacity-40">•</span>
+                                <span>{status}</span>
+                                {localApiKey && (
+                                  <span className="hidden md:inline font-mono lowercase opacity-30 font-normal tracking-normal ml-1">
+                                    ({info.key.substring(0, 4)}...{info.key.slice(-2)})
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                         <ChevronRight size={18} className="text-slate-400 group-hover:translate-x-1 transition-transform" />
                       </div>
@@ -2157,6 +2174,7 @@ export default function App() {
         role={profile?.role}
         membershipStatus={userControl?.membershipStatus}
         vbsId={userControl?.vbsId}
+        allowAdminKeys={globalSettings.allow_admin_keys}
       />
       <AnimatePresence>
         {toast && (
