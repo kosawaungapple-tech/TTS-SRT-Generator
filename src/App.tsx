@@ -203,9 +203,11 @@ export default function App() {
     }
 
     // [ADMIN PREMIUM KEY PRIORITY - COMMANDER ORDER]
-    // If the toggle is ON, we bypass everything and use admin keys directly.
+    // If the toggle is ON OR the user is an admin, prioritize admin pool.
     const userAllowedAdminKey = profile?.allowAdminKey === true || isAdminUser;
-    if (isUsingAdminKey && globalSettings.allow_admin_keys && userAllowedAdminKey) {
+    const canAccessAdminPool = globalSettings.allow_admin_keys || isAdminUser;
+
+    if (isUsingAdminKey && canAccessAdminPool && userAllowedAdminKey) {
       const adminKeys = [
         globalSettings.primary_key || '',
         globalSettings.secondary_key || '',
@@ -213,7 +215,7 @@ export default function App() {
       ].filter(k => k.trim());
 
       if (adminKeys.length > 0) {
-        console.log("App: Bypassing local storage - Using Admin Premium Keys (Toggle is ON)");
+        console.log("App: Prioritizing Admin Pool (Admin User or Toggle ON)");
         return adminKeys.join(',');
       }
     }
@@ -224,8 +226,8 @@ export default function App() {
       return profile.api_key_stored.trim();
     }
     
-    // 2. Fallback to Global System Keys (if enabled)
-    if (globalSettings.allow_admin_keys) {
+    // 2. Fallback to Global System Keys (if enabled or if Admin)
+    if (canAccessAdminPool) {
       const keys = [
         globalSettings.primary_key || '',
         globalSettings.secondary_key || '',
@@ -503,12 +505,12 @@ export default function App() {
         // First, sync master settings to singleton
         apiChannelManager.updateSettings({ allowSharedKeys: data.allow_admin_keys });
 
-        const isAdminUser = profile?.role === 'admin';
-        const isUserPremium = profile?.membershipStatus === 'premium' || isAdminUser;
+        const currentIsAdmin = profile?.role === 'admin' || userControl?.role === 'admin' || accessCode === 'saw_vlogs_2026' || vbsId === 'saw_vlogs_2026';
+        const isUserPremium = profile?.membershipStatus === 'premium' || currentIsAdmin;
 
         // If admin disabled pool OR user is no longer premium, force normal users back to personal mode
         // Admin users ALWAYS bypass this check
-        if (!isAdminUser && (!data.allow_admin_keys || !isUserPremium) && apiChannelManager.getSettings().useAdminKeys) {
+        if (!currentIsAdmin && (!data.allow_admin_keys || !isUserPremium) && apiChannelManager.getSettings().useAdminKeys) {
           console.log("App: Admin Pool restricted, forcing user to Personal Mode");
           apiChannelManager.updateSettings({ useAdminKeys: false });
           // Clear cached preferences

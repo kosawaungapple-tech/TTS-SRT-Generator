@@ -166,7 +166,6 @@ class ApiChannelManager {
   // Sync Admin Keys from Firestore
   syncAdminKeys(keys: string[]) {
     const validKeys = keys.filter(k => k && k.trim());
-    if (validKeys.length === 0) return;
 
     // Only update if keys have changed to avoid resetting status
     const currentKeys = this.adminChannels.map(c => c.key);
@@ -188,9 +187,6 @@ class ApiChannelManager {
   getActiveSourceInfo(isAdminContext: boolean = false, isUserAdmin: boolean = false): { label: string; key: string; isShared: boolean } | null {
     if (isAdminContext || isUserAdmin) {
       if (this.adminChannels.length === 0) {
-        // Fallback to env key for admin context if no channels added
-        const envKey = typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : null;
-        if (envKey) return { label: 'System Key', key: envKey, isShared: false };
         return null;
       }
       const ch = this.adminChannels[this.adminActiveIndex] || this.adminChannels[0];
@@ -202,17 +198,14 @@ class ApiChannelManager {
     const adminPoolSelected = this.settings.useAdminKeys;
     const canUseAdminPool = this.settings.allowSharedKeys;
 
-    // 1. If Admin Pool is selected AND allowed (or user is admin - handled above), prioritize it for the status check
+    // 1. If Admin Pool is selected AND allowed, prioritize it for the status check
     if (adminPoolSelected && canUseAdminPool) {
       const shared = this.getSharedAdminChannel();
       if (shared) {
         return { label: `ADMIN KEY`, key: shared.key, isShared: true };
       }
-      // If pool is empty/closed but selected, we might still return some indicator or null
-      // Let's return the first available admin key for UI indicator if it exists
-      if (this.adminChannels.length > 0) {
-        return { label: 'ADMIN KEY', key: this.adminChannels[0].key, isShared: true };
-      }
+      // If pool is empty but selected, return null to force fallback to Personal Key in UI
+      return null;
     }
 
     // 2. Otherwise (Personal Key mode selected OR fallback), use Personal Key
@@ -306,32 +299,31 @@ class ApiChannelManager {
       err?.message?.includes("RESOURCE_EXHAUSTED");
   }
 
-  async callWithAutoSwitch<T>(apiFn: (key: string) => Promise<T>, isAdmin: boolean = false): Promise<T> {
+  async callWithAutoSwitch<T>(apiFn: (key: string) => Promise<T>, isAdmin: boolean = false, isUserAdmin: boolean = false): Promise<T> {
     const personalKey = this.userChannel?.key;
     const adminKeys = this.adminChannels.map(c => c.key);
     const useAdminMode = this.settings.useAdminKeys;
     const canUseAdminPool = this.settings.allowSharedKeys;
 
-    // 1. Personal Mode Logic
-    if (!isAdmin && !useAdminMode) {
+    // 1. Admin Bypass Logic: If it's an admin context or the user is an admin, always allow pool usage
+    const isActuallyAdmin = isAdmin || isUserAdmin;
+
+    // 2. Personal Mode Logic (For users)
+    if (!isActuallyAdmin && !useAdminMode) {
       if (personalKey) {
         return await apiFn(personalKey);
       }
       throw new Error("Personal API Key မရှိသေးပါ။ Key ထည့်ပါ သို့မဟုတ် Admin Pool ပြောင်းပါ။");
     }
 
-    // 2. Admin Pool Mode Logic
+    // 3. Admin Pool Mode Logic (For users)
     // If not in admin context but mode is admin, check if sharing is allowed
-    if (!isAdmin && useAdminMode && !canUseAdminPool) {
+    if (!isActuallyAdmin && useAdminMode && !canUseAdminPool) {
       if (personalKey) return await apiFn(personalKey);
       throw new Error("Admin Pool Sharing ကို Admin မှ ပိတ်ထားပါသည်။ Personal Key ထည့်ပါ။");
     }
 
     if (adminKeys.length === 0) {
-      // Fallback: If no admin keys managed yet, try environment variable (only for real admins or when absolutely needed)
-      if (typeof process !== 'undefined' && process.env.GEMINI_API_KEY) {
-        return await apiFn(process.env.GEMINI_API_KEY);
-      }
       throw new Error("Admin API Keys မရှိသေးပါ။ Admin ထံ ဆက်သွယ်ပါ။");
     }
 
