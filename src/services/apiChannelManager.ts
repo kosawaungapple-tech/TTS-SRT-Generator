@@ -185,8 +185,8 @@ class ApiChannelManager {
     this.saveToStorage();
   }
 
-  getActiveSourceInfo(isAdminContext: boolean = false): { label: string; key: string; isShared: boolean } | null {
-    if (isAdminContext) {
+  getActiveSourceInfo(isAdminContext: boolean = false, isUserAdmin: boolean = false): { label: string; key: string; isShared: boolean } | null {
+    if (isAdminContext || isUserAdmin) {
       if (this.adminChannels.length === 0) {
         // Fallback to env key for admin context if no channels added
         const envKey = typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : null;
@@ -200,9 +200,10 @@ class ApiChannelManager {
     // Determine what key to use for normal operations
     const personalKey = this.userChannel?.key;
     const adminPoolSelected = this.settings.useAdminKeys;
+    const canUseAdminPool = this.settings.allowSharedKeys;
 
-    // 1. If Admin Pool is selected AND allowed, prioritize it for the status check
-    if (adminPoolSelected && this.settings.allowSharedKeys) {
+    // 1. If Admin Pool is selected AND allowed (or user is admin - handled above), prioritize it for the status check
+    if (adminPoolSelected && canUseAdminPool) {
       const shared = this.getSharedAdminChannel();
       if (shared) {
         return { label: `ADMIN KEY`, key: shared.key, isShared: true };
@@ -222,11 +223,12 @@ class ApiChannelManager {
     return null;
   }
 
-  getActiveKey(isAdminContext: boolean = false): string | null {
-    return this.getActiveSourceInfo(isAdminContext)?.key || null;
+  getActiveKey(isAdminContext: boolean = false, isUserAdmin: boolean = false): string | null {
+    return this.getActiveSourceInfo(isAdminContext, isUserAdmin)?.key || null;
   }
 
   private getSharedAdminChannel(): ApiChannel | null {
+    // Note: this internal method is for users. Admins skip this and use getAdminChannels logic.
     if (!this.settings.allowSharedKeys) return null;
     
     const sharedIds = this.settings.sharedChannelIds;

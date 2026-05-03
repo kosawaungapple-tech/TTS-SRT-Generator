@@ -59,22 +59,24 @@ export default function App() {
   // Sign in anonymously is restricted in the console, so we skip it for now.
   // The app will function in bypass mode using localStorage for the API Key.
   
-  const [localApiKey, setLocalApiKey] = useState<string | null>(apiChannelManager.getActiveKey());
-
-  useEffect(() => {
-    const handleStorageChange = () => {
-      setLocalApiKey(apiChannelManager.getActiveKey());
-    };
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, []);
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  const [profile, setProfile] = useState<VBSUserControl | null>(null);
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings>({
     allow_admin_keys: false,
     total_generations: 0,
     api_keys: ['']
   });
+
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [profile, setProfile] = useState<VBSUserControl | null>(null);
+  const [localApiKey, setLocalApiKey] = useState<string | null>(apiChannelManager.getActiveKey(false, profile?.role === 'admin'));
+
+  useEffect(() => {
+    const handleStorageChange = () => {
+      setLocalApiKey(apiChannelManager.getActiveKey(false, profile?.role === 'admin'));
+    };
+    handleStorageChange();
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [globalSettings, profile]);
   const [engineStatus, setEngineStatus] = useState<'ready' | 'cooling' | 'limit'>('ready');
   const [retryCountdown, setRetryCountdown] = useState(0);
   const [isConfigLoading, setIsConfigLoading] = useState(false); // Default to false to bypass loading screen if env vars missing
@@ -161,6 +163,9 @@ export default function App() {
   }, []);
 
   const isUsingAdminKey = useMemo(() => {
+    // 0. Priority bypass for Admins
+    if (profile?.role === 'admin') return true;
+
     // Personal checks
     if (localStorage.getItem('VLOGS_BY_SAW_API_KEY')) return false;
     if (profile?.api_key_stored) return false;
@@ -179,7 +184,7 @@ export default function App() {
 
   const getEffectiveApiKey = useCallback(() => {
     // Priority -1: Immediate Channel Manager fetch
-    const immediateLocalKey = apiChannelManager.getActiveKey();
+    const immediateLocalKey = apiChannelManager.getActiveKey(false, profile?.role === 'admin');
     if (immediateLocalKey && immediateLocalKey.trim()) {
       return immediateLocalKey;
     }
@@ -489,18 +494,24 @@ export default function App() {
           }
         }
 
-        setGlobalSettings(data);
-        
-        // [SYNC MASTER SETTINGS - COMMANDER ORDER]
-        // Explicitly update sharing permissions based on global admin toggle
+        // First, sync master settings to singleton
         apiChannelManager.updateSettings({ allowSharedKeys: data.allow_admin_keys });
 
+        const isAdminUser = profile?.role === 'admin';
+        const isUserPremium = profile?.membershipStatus === 'premium' || isAdminUser;
+
         // If admin disabled pool OR user is no longer premium, force normal users back to personal mode
-        const isUserPremium = profile?.membershipStatus === 'premium' || profile?.role === 'admin';
-        if ((!data.allow_admin_keys || !isUserPremium) && apiChannelManager.getSettings().useAdminKeys && profile?.role !== 'admin') {
+        // Admin users ALWAYS bypass this check
+        if (!isAdminUser && (!data.allow_admin_keys || !isUserPremium) && apiChannelManager.getSettings().useAdminKeys) {
           console.log("App: Admin Pool restricted, forcing user to Personal Mode");
           apiChannelManager.updateSettings({ useAdminKeys: false });
+          // Clear cached preferences
+          localStorage.removeItem('useAdminKeyPool');
+          localStorage.setItem('useAdminKeyPool', 'false'); // Double safeguard
         }
+
+        // Then update React state to trigger UI render
+        setGlobalSettings(data);
         
         // Sync Admin Keys from Settings to Channel Manager
         const allAdminKeys = [
@@ -842,7 +853,11 @@ export default function App() {
 
     const runGeneration = async (retryAttempt = 0): Promise<void> => {
       try {
-        const ttsService = new GeminiTTSService(effectiveKey, profile?.role === 'admin');
+        const isAdminUser = profile?.role === 'admin';
+        // If we have a local key or managed settings, let the service handle auto-switch/rotation
+        // by passing an empty key if it's managed by apiChannelManager
+        const useManaged = isAdminUser || apiChannelManager.getSettings().useAdminKeys;
+        const ttsService = new GeminiTTSService(useManaged ? '' : effectiveKey, isAdminUser);
         
         const currentController = new AbortController();
         setAbortController(currentController);
@@ -2128,10 +2143,19 @@ export default function App() {
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
-                        <div className={`flex items-center gap-2 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest ${localApiKey ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                          <div className={`w-2 h-2 rounded-full ${localApiKey ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+                        <div className={(function() {
+                          const info = apiChannelManager.getActiveSourceInfo(false, profile?.role === 'admin');
+                          const hasActiveKey = !!info?.key;
+                          const colorClass = hasActiveKey ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400';
+                          return `flex items-center gap-2 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest ${colorClass}`;
+                        })()}>
+                          <div className={(function() {
+                             const info = apiChannelManager.getActiveSourceInfo(false, profile?.role === 'admin');
+                             const hasActiveKey = !!info?.key;
+                             return `w-2 h-2 rounded-full ${hasActiveKey ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`;
+                          })()} />
                           {(() => {
-                            const info = apiChannelManager.getActiveSourceInfo(profile?.role === 'admin');
+                            const info = apiChannelManager.getActiveSourceInfo(false, profile?.role === 'admin');
                             const settings = apiChannelManager.getSettings();
                             const isAdminMode = settings.useAdminKeys;
                             

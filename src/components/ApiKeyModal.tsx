@@ -45,7 +45,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role,
 
     window.addEventListener('storage', handleUpdate);
     return () => window.removeEventListener('storage', handleUpdate);
-  }, [isOpen, isPremium]);
+  }, [isOpen, isPremium, allowAdminKeys, isAdmin]);
 
   const handleAddAdminChannel = () => {
     if (!newKey.trim()) return;
