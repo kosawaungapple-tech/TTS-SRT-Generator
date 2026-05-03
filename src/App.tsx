@@ -67,16 +67,28 @@ export default function App() {
 
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [profile, setProfile] = useState<VBSUserControl | null>(null);
-  const [localApiKey, setLocalApiKey] = useState<string | null>(apiChannelManager.getActiveKey(false, profile?.role === 'admin'));
+  const [vbsId, setVbsId] = useState<string | null>(localStorage.getItem('VBS_USER_ID'));
+  const [userControl, setUserControl] = useState<VBSUserControl | null>(null);
+  const [isAccessGranted, setIsAccessGranted] = useState(() => {
+    return localStorage.getItem('vbs_access_granted') === 'true' || 
+           localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
+  }); 
+  const [accessCode, setAccessCode] = useState<string | null>(() => localStorage.getItem('vbs_access_code'));
+  
+  const isAdminUser = useMemo(() => {
+    return profile?.role === 'admin' || userControl?.role === 'admin' || accessCode === 'saw_vlogs_2026' || vbsId === 'saw_vlogs_2026';
+  }, [profile, userControl, accessCode, vbsId]);
+  
+  const [localApiKey, setLocalApiKey] = useState<string | null>(apiChannelManager.getActiveKey(false, isAdminUser));
 
   useEffect(() => {
     const handleStorageChange = () => {
-      setLocalApiKey(apiChannelManager.getActiveKey(false, profile?.role === 'admin'));
+      setLocalApiKey(apiChannelManager.getActiveKey(false, isAdminUser));
     };
     handleStorageChange();
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
-  }, [globalSettings, profile]);
+  }, [globalSettings, profile, userControl, isAdminUser]);
   const [engineStatus, setEngineStatus] = useState<'ready' | 'cooling' | 'limit'>('ready');
   const [retryCountdown, setRetryCountdown] = useState(0);
   const [isConfigLoading, setIsConfigLoading] = useState(false); // Default to false to bypass loading screen if env vars missing
@@ -98,8 +110,9 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [isAuthReady]);
 
-  const [vbsId, setVbsId] = useState<string | null>(localStorage.getItem('VBS_USER_ID'));
-  const [userControl, setUserControl] = useState<VBSUserControl | null>(null);
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+  const [channelsExhausted, setChannelsExhausted] = useState(false);
+  
   const [abortController, setAbortController] = useState<AbortController | null>(null);
 
   useEffect(() => {
@@ -164,7 +177,7 @@ export default function App() {
 
   const isUsingAdminKey = useMemo(() => {
     // 0. Priority bypass for Admins
-    if (profile?.role === 'admin') return true;
+    if (isAdminUser) return true;
 
     // Personal checks
     if (localStorage.getItem('VLOGS_BY_SAW_API_KEY')) return false;
@@ -184,14 +197,14 @@ export default function App() {
 
   const getEffectiveApiKey = useCallback(() => {
     // Priority -1: Immediate Channel Manager fetch
-    const immediateLocalKey = apiChannelManager.getActiveKey(false, profile?.role === 'admin');
+    const immediateLocalKey = apiChannelManager.getActiveKey(false, isAdminUser);
     if (immediateLocalKey && immediateLocalKey.trim()) {
       return immediateLocalKey;
     }
 
     // [ADMIN PREMIUM KEY PRIORITY - COMMANDER ORDER]
     // If the toggle is ON, we bypass everything and use admin keys directly.
-    const userAllowedAdminKey = profile?.allowAdminKey === true || profile?.role === 'admin';
+    const userAllowedAdminKey = profile?.allowAdminKey === true || isAdminUser;
     if (isUsingAdminKey && globalSettings.allow_admin_keys && userAllowedAdminKey) {
       const adminKeys = [
         globalSettings.primary_key || '',
@@ -250,14 +263,7 @@ export default function App() {
   const [accessCodeInput, setAccessCodeInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [isStepTwo, setIsStepTwo] = useState(false);
-  const [isAccessGranted, setIsAccessGranted] = useState(() => {
-    return localStorage.getItem('vbs_access_granted') === 'true' || 
-           localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
-  }); 
   const [isVerifyingCode, setIsVerifyingCode] = useState(false);
-  const [accessCode, setAccessCode] = useState<string | null>(() => localStorage.getItem('vbs_access_code'));
-  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
-  const [channelsExhausted, setChannelsExhausted] = useState(false);
 
   useEffect(() => {
     const handleSwitch = (e: Event) => {
@@ -853,8 +859,7 @@ export default function App() {
 
     const runGeneration = async (retryAttempt = 0): Promise<void> => {
       try {
-        const isAdminUser = profile?.role === 'admin';
-        // If we have a local key or managed settings, let the service handle auto-switch/rotation
+        // if we have a local key or managed settings, let the service handle auto-switch/rotation
         // by passing an empty key if it's managed by apiChannelManager
         const useManaged = isAdminUser || apiChannelManager.getSettings().useAdminKeys;
         const ttsService = new GeminiTTSService(useManaged ? '' : effectiveKey, isAdminUser);
@@ -1189,12 +1194,7 @@ export default function App() {
     }
   };
 
-  const isVbsAdmin = useMemo(() => {
-    const ADMIN_CODE = import.meta.env.VITE_ADMIN_ACCESS_CODE || 'saw_vlogs_2026';
-    const isCodeMatch = accessCode === ADMIN_CODE;
-    const isProfileAdmin = userControl?.role === 'admin' || userControl?.isAdmin === true || userControl?.vbsId === 'saw_vlogs_2026';
-    return isCodeMatch || isProfileAdmin;
-  }, [accessCode, userControl]);
+  const isVbsAdmin = isAdminUser;
 
   const ttsCost = globalSettings.tts_cost || 1;
 
@@ -1600,7 +1600,7 @@ export default function App() {
                       retryCountdown={retryCountdown}
                       speed={config.speed}
                       hasResult={!!result}
-                      isAdmin={profile?.role === 'admin'}
+                      isAdmin={isAdminUser}
                       userControl={userControl}
                       isSharedKey={apiKeyStatus.isShared}
                       rewriteCost={globalSettings.rewrite_cost}
@@ -1622,7 +1622,7 @@ export default function App() {
                       config={config} 
                       setConfig={setConfig} 
                       isDarkMode={isDarkMode} 
-                      isAdmin={profile?.role === 'admin'}
+                      isAdmin={isAdminUser}
                       baseDuration={result?.oneXDuration}
                     />
 
@@ -2144,18 +2144,18 @@ export default function App() {
                       </div>
                       <div className="flex items-center gap-3">
                         <div className={(function() {
-                          const info = apiChannelManager.getActiveSourceInfo(false, profile?.role === 'admin');
+                          const info = apiChannelManager.getActiveSourceInfo(false, isAdminUser);
                           const hasActiveKey = !!info?.key;
                           const colorClass = hasActiveKey ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400';
                           return `flex items-center gap-2 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest ${colorClass}`;
                         })()}>
                           <div className={(function() {
-                             const info = apiChannelManager.getActiveSourceInfo(false, profile?.role === 'admin');
+                             const info = apiChannelManager.getActiveSourceInfo(false, isAdminUser);
                              const hasActiveKey = !!info?.key;
                              return `w-2 h-2 rounded-full ${hasActiveKey ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`;
                           })()} />
                           {(() => {
-                            const info = apiChannelManager.getActiveSourceInfo(false, profile?.role === 'admin');
+                            const info = apiChannelManager.getActiveSourceInfo(false, isAdminUser);
                             const settings = apiChannelManager.getSettings();
                             const isAdminMode = settings.useAdminKeys;
                             
@@ -2195,9 +2195,9 @@ export default function App() {
       <ApiKeyModal 
         isOpen={isApiKeyModalOpen}
         onClose={() => setIsApiKeyModalOpen(false)}
-        role={profile?.role}
+        role={profile?.role || userControl?.role}
         membershipStatus={userControl?.membershipStatus}
-        vbsId={userControl?.vbsId}
+        vbsId={profile?.vbsId || userControl?.vbsId || vbsId}
         allowAdminKeys={globalSettings.allow_admin_keys}
       />
       <AnimatePresence>

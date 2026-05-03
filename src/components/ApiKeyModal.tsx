@@ -12,8 +12,8 @@ interface ApiKeyModalProps {
   allowAdminKeys?: boolean;
 }
 
-export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role, membershipStatus, allowAdminKeys = true }) => {
-  const isAdmin = role === 'admin';
+export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role, membershipStatus, allowAdminKeys = true, vbsId }) => {
+  const isAdmin = role === 'admin' || vbsId === 'saw_vlogs_2026';
   const isPremium = membershipStatus === 'premium' || isAdmin;
   
   // State for both views
