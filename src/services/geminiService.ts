@@ -102,7 +102,7 @@ export class GeminiTTSService {
       return executeRequest(this.apiKey);
     }
 
-    return apiChannelManager.callWithAutoSwitch((key) => executeRequest(key), false, this.isAdmin);
+    return apiChannelManager.callWithAutoSwitch((key) => executeRequest(key), this.isAdmin);
   }
 
   public static getActiveKeyIndex(): number {

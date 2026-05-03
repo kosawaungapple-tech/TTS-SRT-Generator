@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Trash2, Clipboard, Sparkles, RefreshCw, Check, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GeminiTTSService } from '../services/geminiService';
-import { apiChannelManager } from '../services/apiChannelManager';
 import { useLanguage } from '../contexts/LanguageContext';
 import { translateError } from '../utils/errorUtils';
 import { estimateMyanmarDuration, formatMyanmarDuration } from '../utils/audioUtils';
@@ -109,8 +108,7 @@ export const ContentInput: React.FC<ContentInputProps> = ({
           }
         }
 
-        const useManaged = isAdmin || apiChannelManager.getSettings().useAdminKeys;
-        const gemini = new GeminiTTSService(useManaged ? '' : trimmedApiKey, isAdmin);
+        const gemini = new GeminiTTSService(trimmedApiKey, isAdmin);
         const rewrittenText = await gemini.rewriteContent(text, style);
         
         setText(rewrittenText);

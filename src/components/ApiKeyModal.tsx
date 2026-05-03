@@ -9,11 +9,10 @@ interface ApiKeyModalProps {
   role?: 'admin' | 'user' | string;
   membershipStatus?: 'standard' | 'premium' | null;
   vbsId?: string | null;
-  allowAdminKeys?: boolean;
 }
 
-export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role, membershipStatus, allowAdminKeys = true, vbsId }) => {
-  const isAdmin = role === 'admin' || vbsId === 'saw_vlogs_2026';
+export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role, membershipStatus }) => {
+  const isAdmin = role === 'admin';
   const isPremium = membershipStatus === 'premium' || isAdmin;
   
   // State for both views
@@ -27,16 +26,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role,
     const handleUpdate = () => {
       setAdminChannels(apiChannelManager.getAdminChannels());
       setUserChannel(apiChannelManager.getUserChannel());
-      
-      const currentSettings = apiChannelManager.getSettings();
-      // Force personal mode if admin pool is disabled globally or user is not premium
-      if ((!allowAdminKeys || !isPremium) && currentSettings.useAdminKeys && !isAdmin) {
-        console.log("ApiKeyModal: Admin Pool restricted, forcing Personal Mode");
-        apiChannelManager.updateSettings({ useAdminKeys: false });
-        setSettings({ ...currentSettings, useAdminKeys: false });
-      } else {
-        setSettings(currentSettings);
-      }
+      setSettings(apiChannelManager.getSettings());
     };
 
     if (isOpen) {
@@ -45,7 +35,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role,
 
     window.addEventListener('storage', handleUpdate);
     return () => window.removeEventListener('storage', handleUpdate);
-  }, [isOpen, isPremium, allowAdminKeys, isAdmin]);
+  }, [isOpen, isPremium]);
 
   const handleAddAdminChannel = () => {
     if (!newKey.trim()) return;
@@ -197,26 +187,23 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role,
 
               {/* PREFERENCES & USER VIEW */}
               <div className="space-y-6">
-                 {/* Only show pool option if allowed globally or for admins, and only for premium users */}
-                 {(allowAdminKeys || isAdmin) && (isAdmin || isPremium) && (
-                   <div className="space-y-2">
-                     <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-2">API Key Mode</label>
-                     <div className="flex bg-slate-100 dark:bg-slate-950 rounded-[18px] overflow-hidden p-1 border border-slate-200 dark:border-slate-800 shadow-inner">
-                       <button 
-                          onClick={() => handleModeChange('admin')}
-                          className={`flex-1 py-3 text-xs font-black uppercase tracking-tight transition-all rounded-[14px] ${settings.useAdminKeys ? 'bg-[#F5C518] text-black shadow-lg shadow-amber-400/20' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 opacity-60'}`}
-                       >
-                          Admin Pool
-                       </button>
-                       <button 
-                          onClick={() => handleModeChange('personal')}
-                          className={`flex-1 py-3 text-xs font-black uppercase tracking-tight transition-all rounded-[14px] ${!settings.useAdminKeys ? 'bg-[#F5C518] text-black shadow-lg shadow-amber-400/20' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 opacity-60'}`}
-                       >
-                          Personal Key
-                       </button>
-                     </div>
+                 <div className="space-y-2">
+                   <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-2">API Key Mode</label>
+                   <div className="flex bg-slate-100 dark:bg-slate-950 rounded-[18px] overflow-hidden p-1 border border-slate-200 dark:border-slate-800 shadow-inner">
+                     <button 
+                        onClick={() => handleModeChange('admin')}
+                        className={`flex-1 py-3 text-xs font-black uppercase tracking-tight transition-all rounded-[14px] ${settings.useAdminKeys ? 'bg-[#F5C518] text-black shadow-lg shadow-amber-400/20' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 opacity-60'}`}
+                     >
+                        Admin Pool
+                     </button>
+                     <button 
+                        onClick={() => handleModeChange('personal')}
+                        className={`flex-1 py-3 text-xs font-black uppercase tracking-tight transition-all rounded-[14px] ${!settings.useAdminKeys ? 'bg-[#F5C518] text-black shadow-lg shadow-amber-400/20' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 opacity-60'}`}
+                     >
+                        Personal Key
+                     </button>
                    </div>
-                 )}
+                 </div>
 
                  {/* Key Connection Status Indicator */}
                  <div className="px-1 pt-1">
