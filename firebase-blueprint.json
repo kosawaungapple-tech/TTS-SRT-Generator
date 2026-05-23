@@ -18,6 +18,19 @@
       },
       "required": ["uid", "email", "role"]
     },
+    "ApiChannel": {
+      "title": "API Key Channel",
+      "description": "An admin-managed API key channel for rotation and sharing.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "key": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "idle", "limit"] },
+        "label": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "key", "status"]
+    },
     "PronunciationRule": {
       "title": "Pronunciation Rule",
       "description": "A rule for phonetic mapping.",
@@ -208,6 +221,10 @@
     "/adminKeyStats/{keyId}": {
       "schema": "AdminKeyStats",
       "description": "Stats for each admin key."
+    },
+    "/admin_channels/{channelId}": {
+      "schema": "ApiChannel",
+      "description": "Admin API key channels for the global pool."
     }
   }
 }

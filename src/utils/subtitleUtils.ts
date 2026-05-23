@@ -115,7 +115,7 @@ export function generateOptimizedSubtitles(text: string, totalDuration: number):
   let currentTime = 0;
 
   finalBlocks.forEach((lines, index) => {
-    const blockText = lines.join("\n");
+    const blockText = lines.join("\r\n");
     const blockCharCount = lines.join(" ").length;
     let blockDuration = blockCharCount * timePerChar;
     
@@ -145,4 +145,113 @@ export function generateOptimizedSubtitles(text: string, totalDuration: number):
   }
 
   return subtitles;
+}
+
+export function generateSubtitlesFromTimestamps(text: string, totalDuration: number): SRTSubtitle[] {
+  const markerRegex = /\[(\d{1,2}):(\d{1,2})\.(\d{3})\]\s*(.*?)(?=\s*\[|$)/gs;
+  const subtitles: SRTSubtitle[] = [];
+  let match;
+  let index = 1;
+
+  while ((match = markerRegex.exec(text)) !== null) {
+    const minutes = parseInt(match[1]);
+    const seconds = parseInt(match[2]);
+    const milliseconds = parseInt(match[3]);
+    const startTimeInSeconds = minutes * 60 + seconds + milliseconds / 1000;
+    const content = match[4].trim();
+
+    if (content) {
+      subtitles.push({
+        index: index++,
+        startTime: formatTime(startTimeInSeconds),
+        endTime: "", // Will be filled next
+        text: content
+      });
+    }
+  }
+
+  // Set end times
+  for (let i = 0; i < subtitles.length; i++) {
+    if (i < subtitles.length - 1) {
+       subtitles[i].endTime = subtitles[i + 1].startTime;
+    } else {
+       subtitles[i].endTime = formatTime(totalDuration);
+    }
+    
+    // Safety check: if end time < start time (due to malformed input)
+    const start = parseTimestampToSeconds(subtitles[i].startTime);
+    const end = parseTimestampToSeconds(subtitles[i].endTime);
+    if (end <= start) {
+      subtitles[i].endTime = formatTime(start + 2); // Default 2s duration
+    }
+    
+    // Max duration cap to prevent overlap issues
+    if (end > start + 7) {
+      subtitles[i].endTime = formatTime(start + 7);
+    }
+  }
+
+  return subtitles;
+}
+
+export function generateSRT(subtitles: SRTSubtitle[]): string {
+  if (!subtitles || subtitles.length === 0) return "";
+  
+  return subtitles
+    .filter(s => s.text && s.text.trim().length > 0)
+    .map(s => {
+      // Ensure strict format: Index\r\nTime --> Time\r\nText\r\n
+      // Index must be an integer, HH:MM:SS,mmm format for times
+      // Comma separator for milliseconds is standard for SubRip
+      const startTime = s.startTime.replace('.', ',');
+      const endTime = s.endTime.replace('.', ',');
+      return `${s.index}\r\n${startTime} --> ${endTime}\r\n${s.text.trim()}\r\n`;
+    })
+    .join('\r\n'); // Strictly CRLF between blocks
+}
+
+export function generateASS(subtitles: SRTSubtitle[]): string {
+  const header = `[Script Info]\r\nScriptType: v4.00+\r\nCollisions: Normal\r\nPlayResX: 1280\r\nPlayResY: 720\r\n\r\n[V4+ Styles]\r\nFormat: Name, Fontname, Fontsize, PrimaryColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV\r\nStyle: Default,Arial,40,&H00FFFFFF,0,0,1,2,0,2,10,10,10\r\n\r\n[Events]\r\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\r\n`;
+  
+  const formatASSTime = (timeStr: string) => {
+    // Input is HH:MM:SS,mmm
+    const [hms, ms] = timeStr.split(',');
+    const [h, m, s] = hms.split(':');
+    const centiseconds = Math.floor(parseInt(ms) / 10).toString().padStart(2, '0');
+    // ASS format often drops leading zero on hours if it's 0, but H:MM:SS.CC is standard
+    return `${parseInt(h)}:${m}:${s}.${centiseconds}`;
+  };
+
+  const lines = subtitles.map(s => {
+    const startTime = formatASSTime(s.startTime);
+    const endTime = formatASSTime(s.endTime);
+    // Remove \r\n from text for ASS and replace with \N
+    const cleanText = s.text.replace(/\r\n/g, '\\N').replace(/\n/g, '\\N').trim();
+    return `Dialogue: 0,${startTime},${endTime},Default,,0,0,0,,${cleanText}`;
+  });
+
+  return header + lines.join('\r\n');
+}
+
+export function generateLRC(subtitles: SRTSubtitle[]): string {
+  const formatLRCTime = (timeStr: string) => {
+    // Input is HH:MM:SS,mmm
+    const [hms, ms] = timeStr.split(',');
+    const [h, m, s] = hms.split(':');
+    const totalMinutes = parseInt(h) * 60 + parseInt(m);
+    const centiseconds = Math.floor(parseInt(ms) / 10).toString().padStart(2, '0');
+    return `[${totalMinutes.toString().padStart(2, '0')}:${s}.${centiseconds}]`;
+  };
+
+  return subtitles.map(s => {
+    const startTime = formatLRCTime(s.startTime);
+    const cleanText = s.text.replace(/\r\n/g, ' ').replace(/\n/g, ' ');
+    return `${startTime}${cleanText}`;
+  }).join('\r\n');
+}
+
+function parseTimestampToSeconds(timestamp: string): number {
+  const [hms, ms] = timestamp.split(',');
+  const [h, m, s] = hms.split(':').map(Number);
+  return h * 3600 + m * 60 + s + (Number(ms) / 1000);
 }

@@ -56,13 +56,13 @@ export const Modal: React.FC<ModalProps> = ({
       case 'alert':
         return <AlertCircle className="text-red-500" size={24} />;
       case 'confirm':
-        return <HelpCircle className="text-brand-purple" size={24} />;
+        return <HelpCircle className="text-amber-500" size={24} />;
       case 'prompt':
-        if (inputType === 'password') return <Lock className="text-brand-purple" size={24} />;
-        if (inputType === 'date') return <Calendar className="text-brand-purple" size={24} />;
-        return <Key className="text-brand-purple" size={24} />;
+        if (inputType === 'password') return <Lock className="text-amber-500" size={24} />;
+        if (inputType === 'date') return <Calendar className="text-amber-500" size={24} />;
+        return <Key className="text-amber-500" size={24} />;
       case 'info':
-        return <Info className="text-brand-purple" size={24} />;
+        return <Info className="text-amber-500" size={24} />;
       default:
         return <Info className="text-blue-500" size={24} />;
     }
@@ -120,7 +120,7 @@ export const Modal: React.FC<ModalProps> = ({
                     value={inputValue}
                     onChange={(e) => setInputValue(e.target.value)}
                     placeholder={placeholder}
-                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl px-4 py-3.5 text-sm transition-all focus:outline-none focus:ring-2 focus:ring-brand-purple/50 text-slate-900 dark:text-white placeholder:text-slate-400"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl px-4 py-3.5 text-sm transition-all focus:outline-none focus:ring-2 focus:ring-amber-400/50 text-slate-900 dark:text-white placeholder:text-slate-400"
                     autoFocus
                   />
                 </div>
@@ -137,7 +137,7 @@ export const Modal: React.FC<ModalProps> = ({
                 )}
                 <button
                   onClick={handleConfirm}
-                  className="flex-1 py-3.5 bg-brand-purple text-white rounded-2xl font-bold text-sm shadow-lg shadow-brand-purple/20 transition-all hover:bg-brand-purple/90 active:scale-[0.98]"
+                  className="flex-1 py-3.5 bg-amber-400 text-black rounded-2xl font-bold text-sm shadow-lg shadow-amber-400/20 transition-all hover:bg-amber-500 active:scale-[0.98]"
                 >
                   {confirmText}
                 </button>

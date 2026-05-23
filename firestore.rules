@@ -42,13 +42,10 @@ service cloud.firestore {
       );
     }
 
-    // Admin stats — only owner can write
+    // Admin stats — anyone authenticated can log usage
     match /adminKeyStats/{keyId} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null && (
-        exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
-        get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == "saw_vlogs_2026"
-      );
+      allow write: if request.auth != null;
     }
 
     // Settings — only owner can write
@@ -95,6 +92,14 @@ service cloud.firestore {
       );
     }
     
+    // Admin Channels - only owner can read/write
+    match /admin_channels/{channelId} {
+      allow read, write: if request.auth != null && (
+        exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == "saw_vlogs_2026"
+      );
+    }
+
     // Sessions - Users can write their own
     match /sessions/{userId} {
       allow read, write: if request.auth != null
