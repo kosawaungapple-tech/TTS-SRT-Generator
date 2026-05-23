@@ -16,6 +16,11 @@ export interface VBSUserControl {
   isActive?: boolean;
   note?: string;
   password?: string;
+  credits?: number;
+  videosGeneratedToday?: number;
+  dailyVideoLimit?: number;
+  lastVideoDate?: string;
+  admin_override_active?: boolean;
   api_key_stored?: string;
   allowAdminKey?: boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -50,13 +55,27 @@ export interface GlobalSettings {
   elevenlabs_key_5?: string;
   allow_elevenlabs?: boolean;
   allow_admin_keys: boolean; // Toggle to allow users to use admin keys
+  sharedChannelIds?: string[]; // IDs of admin keys allowed in shared pool
   allow_video_recap_admin_key?: boolean; // New gate for video recap
   allow_thumbnail_admin_key?: boolean; // New gate for thumbnail
   total_generations: number;
   mock_mode?: boolean;
   transcription_daily_limit?: number;
   transcription_public_access?: boolean;
+  welcome_credits?: number;
+  recap_cost?: number;
+  tts_cost?: number;
+  rewrite_cost?: number;
   announcements?: Announcement[];
+}
+
+export interface CreditSettings {
+  videoRecapCost: number;
+  ttsGenerationCost: number;
+  aiRewriteCost: number;
+  newPremiumWelcomeCredits: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  updatedAt?: any;
 }
 
 export interface SystemConfig {
@@ -122,14 +141,16 @@ export interface TTSConfig {
 
 export interface AudioResult {
   audioUrl: string; // Blob URL for local preview
-  audioData: string; // base64 for download/upload
-  rawAudio?: ArrayBuffer; // Raw binary data to avoid base64 corruption
+  audioData: string; // base64 for download/upload (WAV format)
+  pcmData?: string; // raw base64 PCM for merging/processing
+  rawAudio?: ArrayBuffer; // Raw binary data to avoid base64 corruption (WAV format)
   srtContent: string;
   subtitles: SRTSubtitle[];
   baseDuration: number; // Actual duration of the generated audio file (already speed-adjusted)
   oneXDuration: number; // Normalized duration at 1.0x speed for estimation
   speed: number; // Speed at which it was generated
   duration: number; // Duration in seconds
+  isLoadingPartial?: boolean; // Flag to indicate more chunks are coming
 }
 
 export interface ActivityLog {
