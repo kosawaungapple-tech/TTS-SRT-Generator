@@ -16,14 +16,15 @@ import { TermsOfService } from './components/TermsOfService';
 import { AnnouncementPanel } from './components/AnnouncementPanel';
 import { Modal, ModalType } from './components/Modal';
 import { GeminiTTSService } from './services/geminiService';
-import { webSpeechService } from './services/webSpeechService';
 import { apiChannelManager } from './services/apiChannelManager';
 import { logActivity } from './services/activityService';
 import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, SystemConfig, VBSUserControl, Announcement } from './types';
+import { checkAndDeductCredits } from './services/creditService';
 import { DEFAULT_RULES } from './constants';
 import { useLanguage } from './contexts/LanguageContext';
 import { formatDate } from './utils/dateUtils';
-import { pcmToWav, formatMyanmarDuration, renderProcessedAudio } from './utils/audioUtils';
+import { translateError } from './utils/errorUtils';
+import { pcmToWav, formatMyanmarDuration, pcmBase64ToWav, renderSpeedAdjustedAudio } from './utils/audioUtils';
 import { generateOptimizedSubtitles } from './utils/subtitleUtils';
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId } from './firebase';
 
@@ -34,6 +35,11 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<Tab>('generate');
   const [hasEntered, setHasEntered] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(true);
+  type UITheme = 'glassmorphism' | 'minimal' | 'neon' | 'cyberpunk';
+  const [uiTheme, setUITheme] = useState<UITheme>(() => {
+    return (localStorage.getItem('vbs_ui_theme') as UITheme) || 'glassmorphism';
+  });
   const [text, setText] = useState('');
   const [customRules] = useState('');
   const [saveToHistory, setSaveToHistory] = useState(false);
@@ -41,12 +47,11 @@ export default function App() {
     voiceId: 'kore',
     speed: 1.0,
     pitch: 0,
-    volume: 0,
+    volume: 80,
     styleInstruction: '',
   });
-  const [outputConfig, setOutputConfig] = useState({ speed: 1.0, pitch: 0, volume: 0 });
+  const [outputConfig, setOutputConfig] = useState({ speed: 1.0, volume: 80 });
   const [isLoading, setIsLoading] = useState(false);
-  const [isBaking, setIsBaking] = useState(false);
   const [isProcessingSpeed, setIsProcessingSpeed] = useState(false);
   const [result, setResult] = useState<AudioResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -54,37 +59,22 @@ export default function App() {
   // Sign in anonymously is restricted in the console, so we skip it for now.
   // The app will function in bypass mode using localStorage for the API Key.
   
-  const [globalSettings, setGlobalSettings] = useState<GlobalSettings>({
-    allow_admin_keys: false,
-    sharedChannelIds: [],
-    total_generations: 0,
-    api_keys: ['']
-  });
-
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  const [profile, setProfile] = useState<VBSUserControl | null>(null);
-  const [vbsId, setVbsId] = useState<string | null>(localStorage.getItem('VBS_USER_ID'));
-  const [userControl, setUserControl] = useState<VBSUserControl | null>(null);
-  const [isAccessGranted, setIsAccessGranted] = useState(() => {
-    return localStorage.getItem('vbs_access_granted') === 'true' || 
-           localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
-  }); 
-  const [accessCode, setAccessCode] = useState<string | null>(() => localStorage.getItem('vbs_access_code'));
-  
-  const isAdminUser = useMemo(() => {
-    return profile?.role === 'admin' || userControl?.role === 'admin' || accessCode === 'saw_vlogs_2026' || vbsId === 'saw_vlogs_2026';
-  }, [profile, userControl, accessCode, vbsId]);
-  
-  const [localApiKey, setLocalApiKey] = useState<string | null>(apiChannelManager.getActiveKey(false, isAdminUser));
+  const [localApiKey, setLocalApiKey] = useState<string | null>(apiChannelManager.getActiveKey());
 
   useEffect(() => {
     const handleStorageChange = () => {
-      setLocalApiKey(apiChannelManager.getActiveKey(false, isAdminUser));
+      setLocalApiKey(apiChannelManager.getActiveKey());
     };
-    handleStorageChange();
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
-  }, [globalSettings, profile, userControl, isAdminUser]);
+  }, []);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [profile, setProfile] = useState<VBSUserControl | null>(null);
+  const [globalSettings, setGlobalSettings] = useState<GlobalSettings>({
+    allow_admin_keys: false,
+    total_generations: 0,
+    api_keys: ['']
+  });
   const [engineStatus, setEngineStatus] = useState<'ready' | 'cooling' | 'limit'>('ready');
   const [retryCountdown, setRetryCountdown] = useState(0);
   const [isConfigLoading, setIsConfigLoading] = useState(false); // Default to false to bypass loading screen if env vars missing
@@ -106,9 +96,8 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [isAuthReady]);
 
-  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
-  const [channelsExhausted, setChannelsExhausted] = useState(false);
-  
+  const [vbsId, setVbsId] = useState<string | null>(localStorage.getItem('VBS_USER_ID'));
+  const [userControl, setUserControl] = useState<VBSUserControl | null>(null);
   const [abortController, setAbortController] = useState<AbortController | null>(null);
 
   useEffect(() => {
@@ -166,74 +155,12 @@ export default function App() {
     }
   }, [vbsId, isAuthReady, auth.currentUser, isSessionSynced]);
 
-  // Re-process audio when sliders change for an existing result
-  useEffect(() => {
-    const shouldReprocess = 
-      result && 
-      !result.isLoadingPartial && 
-      result.baseAudio && 
-      (config.speed !== result.speed || (config.pitch ?? 0) !== (result.pitch ?? 0) || (config.volume ?? 0) !== (result.volume ?? 0));
-
-    if (shouldReprocess) {
-      const timer = setTimeout(async () => {
-        setIsProcessingSpeed(true);
-        try {
-          console.log(`App: Reactive re-processing (Speed: ${config.speed}x, Pitch: ${config.pitch}, Volume: ${config.volume}dB)...`);
-          const sourceBlob = new Blob([result.baseAudio!], { type: 'audio/mpeg' });
-          const { blob: processedBlob, duration: finalDuration } = await renderProcessedAudio(sourceBlob, { 
-            speed: config.speed, 
-            pitch: config.pitch, 
-            volume: config.volume 
-          });
-          
-          const processedBuffer = await processedBlob.arrayBuffer();
-          const reader = new FileReader();
-          const base64Promise = new Promise<string>((resolve) => {
-            reader.onloadend = () => {
-              const base64data = reader.result as string;
-              resolve(base64data.split(',')[1]);
-            };
-          });
-          reader.readAsDataURL(processedBlob);
-          const finalBase64 = await base64Promise;
-
-          setResult(prev => prev ? {
-            ...prev,
-            audioUrl: URL.createObjectURL(processedBlob),
-            audioData: finalBase64,
-            rawAudio: processedBuffer,
-            duration: finalDuration,
-            baseDuration: finalDuration,
-            subtitles: generateOptimizedSubtitles(text, finalDuration),
-            srtContent: generateOptimizedSubtitles(text, finalDuration).map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join(''),
-            speed: config.speed,
-            pitch: config.pitch,
-            volume: config.volume
-          } : null);
-          
-          // Note: Subtitles are NOT re-generated here because they depend on text
-          // and they are already speed-aligned in the duration.
-          // Wait, if duration changes, subtitles MUST be re-aligned.
-          // But generateOptimizedSubtitles is easier to run here too.
-        } catch (err) {
-          console.error("Reactive processing failed:", err);
-        } finally {
-          setIsProcessingSpeed(false);
-        }
-      }, 500); // 500ms debounce
-      return () => clearTimeout(timer);
-    }
-  }, [config.speed, config.pitch, config.volume, result]);
-
   const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   }, []);
 
   const isUsingAdminKey = useMemo(() => {
-    // 0. Priority bypass for Admins
-    if (isAdminUser) return true;
-
     // Personal checks
     if (localStorage.getItem('VLOGS_BY_SAW_API_KEY')) return false;
     if (profile?.api_key_stored) return false;
@@ -252,17 +179,15 @@ export default function App() {
 
   const getEffectiveApiKey = useCallback(() => {
     // Priority -1: Immediate Channel Manager fetch
-    const immediateLocalKey = apiChannelManager.getActiveKey(false, isAdminUser);
+    const immediateLocalKey = apiChannelManager.getActiveKey();
     if (immediateLocalKey && immediateLocalKey.trim()) {
       return immediateLocalKey;
     }
 
     // [ADMIN PREMIUM KEY PRIORITY - COMMANDER ORDER]
-    // If the toggle is ON OR the user is an admin, prioritize admin pool.
-    const userAllowedAdminKey = profile?.allowAdminKey === true || isAdminUser;
-    const canAccessAdminPool = globalSettings.allow_admin_keys || isAdminUser;
-
-    if (isUsingAdminKey && canAccessAdminPool && userAllowedAdminKey) {
+    // If the toggle is ON, we bypass everything and use admin keys directly.
+    const userAllowedAdminKey = profile?.allowAdminKey === true || profile?.role === 'admin';
+    if (isUsingAdminKey && globalSettings.allow_admin_keys && userAllowedAdminKey) {
       const adminKeys = [
         globalSettings.primary_key || '',
         globalSettings.secondary_key || '',
@@ -270,7 +195,7 @@ export default function App() {
       ].filter(k => k.trim());
 
       if (adminKeys.length > 0) {
-        console.log("App: Prioritizing Admin Pool (Admin User or Toggle ON)");
+        console.log("App: Bypassing local storage - Using Admin Premium Keys (Toggle is ON)");
         return adminKeys.join(',');
       }
     }
@@ -281,8 +206,8 @@ export default function App() {
       return profile.api_key_stored.trim();
     }
     
-    // 2. Fallback to Global System Keys (if enabled or if Admin)
-    if (canAccessAdminPool) {
+    // 2. Fallback to Global System Keys (if enabled)
+    if (globalSettings.allow_admin_keys) {
       const keys = [
         globalSettings.primary_key || '',
         globalSettings.secondary_key || '',
@@ -320,7 +245,14 @@ export default function App() {
   const [accessCodeInput, setAccessCodeInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [isStepTwo, setIsStepTwo] = useState(false);
+  const [isAccessGranted, setIsAccessGranted] = useState(() => {
+    return localStorage.getItem('vbs_access_granted') === 'true' || 
+           localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
+  }); 
   const [isVerifyingCode, setIsVerifyingCode] = useState(false);
+  const [accessCode, setAccessCode] = useState<string | null>(() => localStorage.getItem('vbs_access_code'));
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+  const [channelsExhausted, setChannelsExhausted] = useState(false);
 
   useEffect(() => {
     const handleSwitch = (e: Event) => {
@@ -440,8 +372,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    document.documentElement.classList.add('dark');
-  }, []);
+    document.documentElement.classList.toggle('dark', isDarkMode);
+    document.documentElement.classList.remove('theme-minimal', 'theme-neon', 'theme-cyberpunk');
+    if (uiTheme !== 'glassmorphism') {
+      document.documentElement.classList.add(`theme-${uiTheme}`);
+    }
+    localStorage.setItem('vbs_ui_theme', uiTheme);
+  }, [isDarkMode, uiTheme]);
 
   // Ensure session document exists for security rules
   useEffect(() => {
@@ -525,13 +462,6 @@ export default function App() {
     }
   }, [isAuthReady, isSessionSynced]);
 
-  // Initialize API Channel Sync
-  useEffect(() => {
-    if (isAuthReady && auth.currentUser) {
-      apiChannelManager.initializeRealtimeSync();
-    }
-  }, [isAuthReady, auth.currentUser]);
-
   // Listen for Global Settings
   useEffect(() => {
     if (!isAccessGranted || !isAuthReady || !auth.currentUser) return;
@@ -559,35 +489,17 @@ export default function App() {
           }
         }
 
-        // First, sync master settings to singleton
-        apiChannelManager.updateSettings({ 
-          allowSharedKeys: data.allow_admin_keys,
-          sharedChannelIds: data.sharedChannelIds || []
-        });
-
-        const currentIsAdmin = profile?.role === 'admin' || userControl?.role === 'admin' || accessCode === 'saw_vlogs_2026' || vbsId === 'saw_vlogs_2026';
-        const isUserPremium = profile?.membershipStatus === 'premium' || currentIsAdmin;
-        const hasPersonalKey = !!localStorage.getItem('VLOGS_BY_SAW_API_KEY') || !!profile?.api_key_stored;
-
-        // If admin disabled pool OR user is no longer premium, force normal users back to personal mode
-        // Admin users ALWAYS bypass this check
-        if (!currentIsAdmin && (!data.allow_admin_keys || !isUserPremium) && apiChannelManager.getSettings().useAdminKeys) {
-          console.log("App: Admin Pool restricted, forcing user to Personal Mode");
-          apiChannelManager.updateSettings({ useAdminKeys: false });
-          // Clear cached preferences
-          localStorage.removeItem('useAdminKeyPool');
-          localStorage.setItem('useAdminKeyPool', 'false'); // Double safeguard
-        } 
-        // If pool is enabled, user is premium, and has NO personal key, auto-enable Admin Pool
-        else if (!currentIsAdmin && data.allow_admin_keys && isUserPremium && !hasPersonalKey && !apiChannelManager.getSettings().useAdminKeys) {
-          console.log("App: Admin Pool enabled and user is premium with no personal key. Auto-switching...");
-          apiChannelManager.updateSettings({ useAdminKeys: true });
-          localStorage.setItem('useAdminKeyPool', 'true');
-        }
-
-        // Then update React state to trigger UI render
         setGlobalSettings(data);
         
+        // Sync Admin Keys from Settings to Channel Manager
+        const allAdminKeys = [
+          data.primary_key || '',
+          data.secondary_key || '',
+          data.backup_key || '',
+          ...(data.api_keys || [])
+        ].filter(k => k && k.trim());
+        apiChannelManager.syncAdminKeys(allAdminKeys);
+
         setIsConfigLoading(false);
       } else {
         // Fallback for settings if doc doesn't exist yet
@@ -617,7 +529,7 @@ export default function App() {
       setIsConfigLoading(false);
     });
     return () => unsubscribe();
-  }, [isAccessGranted, isAuthReady, profile]);
+  }, [isAccessGranted, isAuthReady]);
 
   // Listen for System Config
   useEffect(() => {
@@ -866,206 +778,251 @@ export default function App() {
   }, [history, historySearch]);
 
   const handleGenerate = async () => {
-    setOutputConfig({ speed: config.speed, pitch: config.pitch, volume: config.volume });
-    console.log("App: Using Web Speech for instant preview...");
+    setOutputConfig({ speed: config.speed, volume: config.volume });
+    console.log("App: Generate Voice Button Clicked");
     
     if (!text.trim()) {
       setError('Please enter some text to generate voiceover.');
       return;
     }
 
+    // [SINGLE-PASS ESTIMATION - COMMANDER ORDER]
+    // Gemini 1.5 Flash uses single-pass with no recursive sync loops
+    const effectiveKey = getEffectiveApiKey();
+    
+    if (!effectiveKey || !effectiveKey.trim()) {
+      console.warn("App: Generation blocked - No API Key found. Opening settings modal.");
+      openModal({
+        title: 'API Key Required',
+        message: 'ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)',
+        type: 'error',
+        confirmText: 'Open Settings',
+        onConfirm: () => setIsApiKeyModalOpen(true)
+      });
+      setError('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)');
+      return;
+    }
+    
+    if (!text || text.trim().length === 0) {
+      showToast("ကျေးဇူးပြု၍ ပြောင်းလဲလိုသော စာသားကို အရင်ရိုက်ထည့်ပါ။ (Please enter text to convert.)", 'error');
+      return;
+    }
+    
     setIsLoading(true);
     setError(null);
     setResult(null);
+    setEngineStatus('ready');
 
-    try {
-      const controller = new AbortController();
-      setAbortController(controller);
-      
-      // 1. Instantly play via Web Speech API (Free, No Rate Limits)
-      // Note: This provides immediate feedback to the user.
-      console.log("App: Triggering Web Speech preview...");
-      
-      // We still need an "AudioResult" to show the OutputPreview UI
-      const estimatedDuration = Math.max(1, text.length * 0.15 / config.speed);
-      const subtitles = generateOptimizedSubtitles(text, estimatedDuration);
-      
-      const mockResult: AudioResult = {
-        audioUrl: '', 
-        audioData: '',
-        srtContent: subtitles.map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join(''),
-        subtitles: subtitles,
-        baseDuration: estimatedDuration,
-        oneXDuration: estimatedDuration,
-        speed: config.speed,
-        pitch: config.pitch,
-        volume: config.volume,
-        duration: estimatedDuration,
-        isLoadingPartial: false
-      };
+    console.log("App: Starting voiceover generation process with key...");
 
-      setResult(mockResult);
-      setIsLoading(false);
+    const activeInfo = apiChannelManager.getActiveSourceInfo();
+    const isShared = activeInfo?.isShared || false;
 
-      // Speak using native API
-      await webSpeechService.speak(text, config);
-      setAbortController(null);
-      
-    } catch (err: unknown) {
-      setAbortController(null);
-      const error = err as { message?: string, name?: string };
-      if (error.name === 'AbortError') return;
-      console.error("Web Speech preview failed:", err);
-      setError("Web Speech API error: " + (error.message || 'Unknown error'));
-      setIsLoading(false);
-    }
-  };
-
-  const handleBakeAudio = async () => {
-    if (!result || !text.trim()) return;
-    
-    setIsBaking(true);
-    setError(null);
-    
-    const effectiveKey = getEffectiveApiKey();
-    if (!effectiveKey) {
-      setIsApiKeyModalOpen(true);
-      setError(t('generate.noApiKey'));
-      setIsBaking(false);
-      return;
+    // Credit Check - Only if using shared admin key
+    // [CREDIT ENFORCEMENT - COMMANDER ORDER]
+    // Only check if using shared key and not admin
+    if (!isVbsAdmin && isShared && userControl?.vbsId) {
+      const creditResult = await checkAndDeductCredits(userControl.vbsId, 'tts');
+      if (!creditResult.success) {
+        showToast(creditResult.message || "Credit ကုန်ဆုံးသွားပါပြီ။", 'error');
+        return;
+      }
     }
 
-    try {
-      const ttsService = new GeminiTTSService(effectiveKey, isAdminUser);
-      console.log("App: Baking final audio for download via Gemini AI...");
-      
-      // Apply pronunciation rules
-      let processedText = text;
-      
-      // 1. Default Rules
-      DEFAULT_RULES.forEach(rule => {
-        const regex = new RegExp(rule.original, 'gi');
-        processedText = processedText.replace(regex, rule.replacement);
-      });
+    const runGeneration = async (retryAttempt = 0): Promise<void> => {
+      try {
+        const ttsService = new GeminiTTSService(effectiveKey, profile?.role === 'admin');
+        
+        const currentController = new AbortController();
+        setAbortController(currentController);
 
-      // 2. Global Rules (from Settings)
-      globalRules.forEach(rule => {
-        const regex = new RegExp(rule.original, 'gi');
-        processedText = processedText.replace(regex, rule.replacement);
-      });
-      
-      // 3. User Custom Rules
-      customRules.split('\n').forEach((line) => {
-        const parts = line.split('->').map(p => p.trim());
-        if (parts.length === 2) {
-          const regex = new RegExp(parts[0], 'gi');
-          processedText = processedText.replace(regex, parts[1]);
+        console.log("App: Applying pronunciation rules...");
+        let processedText = text;
+        
+        DEFAULT_RULES.forEach(rule => {
+          const regex = new RegExp(rule.original, 'gi');
+          processedText = processedText.replace(regex, rule.replacement);
+        });
+
+        globalRules.forEach(rule => {
+          const regex = new RegExp(rule.original, 'gi');
+          processedText = processedText.replace(regex, rule.replacement);
+        });
+        
+        customRules.split('\n').forEach((line) => {
+          const parts = line.split('->').map(p => p.trim());
+          if (parts.length === 2) {
+            const regex = new RegExp(parts[0], 'gi');
+            processedText = processedText.replace(regex, parts[1]);
+          }
+        });
+
+        // [CHUNKED GENERATION - PERFORMANCE OPTIMIZATION]
+        // Split into chunks and generate in parallel for much faster results
+        const generationPromise = ttsService.generateTTS(
+          processedText, 
+          { ...config },
+          (firstChunk) => {
+            // Callback: Play first chunk immediately for responsiveness
+            console.log("App: First chunk ready, setting temporary preview...");
+            // We only show this if the main result isn't ready yet
+            setResult(prev => prev ? prev : {
+              ...firstChunk,
+              isLoadingPartial: true 
+            } as AudioResult);
+          }
+        );
+
+        console.log(`App: Calling TTS service with parallel chunking logic...`);
+        
+        const audioResult = await generationPromise;
+        
+        // [SPEED ADJUSTMENT - CRITICAL FIX]
+        let finalAudioResult = { ...audioResult };
+        if (config.speed && config.speed !== 1.0) {
+          setIsProcessingSpeed(true);
+          try {
+            console.log(`App: Processing audio speed adjustment to ${config.speed}x...`);
+            const wavBlob = pcmBase64ToWav(audioResult.audioData);
+            const { blob: speedAdjustedBlob, duration: finalDuration } = await renderSpeedAdjustedAudio(wavBlob, config.speed);
+            const finalUrl = URL.createObjectURL(speedAdjustedBlob);
+            
+            // Re-generate subtitles for final duration
+            const finalSubtitles = generateOptimizedSubtitles(processedText, finalDuration);
+            const finalSrt = finalSubtitles.map(s => `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}\n`).join('\n');
+            
+            // Convert blob to base64 for history/storage
+            const speedAdjustedBuffer = await speedAdjustedBlob.arrayBuffer();
+            const reader = new FileReader();
+            const base64Promise = new Promise<string>((resolve) => {
+              reader.onloadend = () => {
+                const base64data = reader.result as string;
+                resolve(base64data.split(',')[1]);
+              };
+            });
+            reader.readAsDataURL(speedAdjustedBlob);
+            const finalBase64 = await base64Promise;
+
+            finalAudioResult = {
+              ...audioResult,
+              audioUrl: finalUrl,
+              audioData: finalBase64,
+              rawAudio: speedAdjustedBuffer, // CRITICAL: Update rawAudio to new buffer
+              duration: finalDuration,
+              baseDuration: finalDuration, // Update so OutputPreview sees the final duration
+              subtitles: finalSubtitles,
+              srtContent: finalSrt,
+              speed: config.speed
+            };
+          } catch (err) {
+            console.error("Speed adjustment failed:", err);
+            // Fallback to 1x if processing fails
+          } finally {
+            setIsProcessingSpeed(false);
+          }
         }
-      });
 
-      const audioResult = await ttsService.generateTTS(
-        processedText, 
-        config, 
-        undefined, 
-        undefined, 
-        (seconds) => {
+        // [AUTO-PLAY REMOVED - USER REQUEST]
+        // Playback is now triggered manually by the user in the OutputPreview component
+
+        // IMMEDIATE RELEASE: Show result before any DB writes
+        setResult(finalAudioResult);
+        setError(null);
+        setEngineStatus('ready');
+        setIsLoading(false); 
+        setAbortController(null);
+        
+        // BACKGROUND TASKS: Non-blocking
+        if (accessCode) {
+          logActivity(accessCode, 'tts', `Generated: ${text.substring(0, 50)}`).catch(() => {});
+        }
+
+        if (saveToHistory && accessCode) {
+          const saveHistory = async () => {
+            if (!getCurrentUserId()) {
+              console.warn('[VBS] Skipping history save — anonymous user');
+              return;
+            }
+            try {
+              const audioFileName = `audio/${accessCode}/${Date.now()}.wav`;
+              const audioRef = ref(storage, audioFileName);
+              await uploadString(audioRef, finalAudioResult.audioData, 'base64');
+              const audioStorageUrl = await getDownloadURL(audioRef);
+
+              const srtFileName = `srt/${accessCode}/${Date.now()}.srt`;
+              const srtRef = ref(storage, srtFileName);
+              await uploadString(srtRef, finalAudioResult.srtContent);
+              const srtStorageUrl = await getDownloadURL(srtRef);
+
+              await addDoc(collection(db, 'history'), {
+                userId: accessCode,
+                text: text.length > 5000 ? text.substring(0, 5000) + '...' : text,
+                audioStorageUrl: audioStorageUrl,
+                srtStorageUrl: srtStorageUrl,
+                duration: finalAudioResult.duration,
+                config: { ...config },
+                createdAt: serverTimestamp(),
+              });
+
+              await updateDoc(doc(db, 'settings', 'global'), {
+                total_generations: (globalSettings.total_generations || 0) + 1
+              });
+
+              console.log("App: Generation saved to history successfully.");
+            } catch (err) {
+              console.error("App: Failed to save to history:", err);
+            }
+          };
+          saveHistory();
+        }
+      } catch (err: unknown) {
+        setIsLoading(false);
+        setAbortController(null);
+        
+        const error = err as { message?: string; name?: string; status?: number };
+
+        if (error.message === 'AbortError' || error.name === 'AbortError') {
+          console.log("App: Generation cancelled by user");
+          setEngineStatus('ready');
+          return;
+        }
+        if (error.message?.startsWith('TEXT_TOO_LONG')) {
+          const parts = error.message.split('|');
+          setError(`${t('generate.textTooLong')} (${parts[1]}/${parts[2]})`);
+          return;
+        }
+        
+        const isRateLimit = error.message === 'RATE_LIMIT_EXHAUSTED' || error.status === 429;
+        if (isRateLimit && retryAttempt < 1) {
           setEngineStatus('cooling');
-          setRetryCountdown(seconds);
+          setRetryCountdown(10);
           const timer = setInterval(() => {
             setRetryCountdown(prev => {
-              if (prev <= 1) { clearInterval(timer); setEngineStatus('ready'); return 0; }
+              if (prev <= 1) { clearInterval(timer); return 0; }
               return prev - 1;
             });
           }, 1000);
+          setTimeout(() => runGeneration(retryAttempt + 1), 10000);
+          return;
         }
-      );
-      
-      // Apply effects
-      const sourceBlob = new Blob([audioResult.baseAudio || audioResult.rawAudio!], { type: 'audio/mpeg' });
-      const { blob: processedBlob, duration: finalDuration } = await renderProcessedAudio(sourceBlob, { 
-        speed: config.speed, 
-        pitch: config.pitch, 
-        volume: config.volume 
-      });
-      
-      const processedBuffer = await processedBlob.arrayBuffer();
-      const reader = new FileReader();
-      const base64Promise = new Promise<string>((resolve) => {
-        reader.onloadend = () => {
-          const base64data = reader.result as string;
-          resolve(base64data.split(',')[1]);
-        };
-      });
-      reader.readAsDataURL(processedBlob);
-      const finalBase64 = await base64Promise;
 
-      const finalResult: AudioResult = {
-        ...audioResult,
-        audioUrl: URL.createObjectURL(processedBlob),
-        audioData: finalBase64,
-        rawAudio: processedBuffer, 
-        baseAudio: audioResult.baseAudio,
-        duration: finalDuration,
-        baseDuration: finalDuration, 
-        subtitles: generateOptimizedSubtitles(text, finalDuration),
-        srtContent: generateOptimizedSubtitles(text, finalDuration).map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join(''),
-        speed: config.speed,
-        pitch: config.pitch,
-        volume: config.volume
-      };
+        if (isRateLimit) {
+          setEngineStatus('limit');
+          setError(translateError(err, language));
+        } else {
+          setError(translateError(err, language));
+          showToast(translateError(err, language), 'error');
+        }
+      } 
+    };
 
-      setResult(finalResult);
-      showToast("Audio baked successfully and ready for download!", 'success');
-
-      // BACKGROUND TASKS: Non-blocking History Save
-      if (accessCode) {
-        logActivity(accessCode, 'tts', `Generated: ${text.substring(0, 50)}`).catch(() => {});
-      }
-
-      if (saveToHistory && accessCode) {
-        const saveHistory = async () => {
-          const userId = getCurrentUserId();
-          if (!userId) {
-            console.warn('[VBS] Skipping history save — anonymous user');
-            return;
-          }
-          try {
-            const audioFileName = `audio/${accessCode}/${Date.now()}.mp3`;
-            const audioRef = ref(storage, audioFileName);
-            await uploadString(audioRef, finalResult.audioData, 'base64');
-            const audioStorageUrl = await getDownloadURL(audioRef);
-
-            const srtFileName = `srt/${accessCode}/${Date.now()}.srt`;
-            const srtRef = ref(storage, srtFileName);
-            await uploadString(srtRef, finalResult.srtContent);
-            const srtStorageUrl = await getDownloadURL(srtRef);
-
-            await addDoc(collection(db, 'history'), {
-              userId: accessCode,
-              text: text.length > 5000 ? text.substring(0, 5000) + '...' : text,
-              audioStorageUrl: audioStorageUrl,
-              srtStorageUrl: srtStorageUrl,
-              duration: finalResult.duration,
-              config: { ...config },
-              createdAt: serverTimestamp(),
-            });
-
-            await updateDoc(doc(db, 'settings', 'global'), {
-              total_generations: (globalSettings.total_generations || 0) + 1
-            });
-
-            console.log("App: Generation saved to history successfully.");
-          } catch (err) {
-            console.error("App: Failed to save to history:", err);
-          }
-        };
-        saveHistory();
-      }
-    } catch (err: unknown) {
-      console.error("Baking failed:", err);
-      setError("AI generation failed. Try again later.");
+    try {
+      await runGeneration();
+    } catch (criticalErr) {
+      console.error("Critical Generation Error:", criticalErr);
+      setError("A critical error occurred. Please try again.");
     } finally {
-      setIsBaking(false);
+      setIsLoading(false);
     }
   };
 
@@ -1113,12 +1070,11 @@ export default function App() {
     }
     
     // If it's MP3 data, we don't need pcmToWav
-    const audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
+    const audioBlob = new Blob([bytes], { type: 'audio/mp3' });
     const url = URL.createObjectURL(audioBlob);
     const a = document.createElement('a');
     a.href = url;
-    const downloadName = filename.toLowerCase().endsWith('.wav') ? filename.replace(/\.wav$/i, '.mp3') : filename.toLowerCase().endsWith('.mp3') ? filename : `${filename}.mp3`;
-    a.download = downloadName;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -1130,9 +1086,9 @@ export default function App() {
       content = await response.text();
     }
     
-    // Ensure Windows line endings (CRLF) and pure text/plain without BOM
-    const sanitizedContent = content.replace(/\r?\n/g, '\r\n');
-    const blob = new Blob([sanitizedContent], { type: 'text/plain;charset=utf-8' });
+    // Add UTF-8 BOM for mobile compatibility
+    const BOM = '\uFEFF';
+    const blob = new Blob([BOM + content], { type: 'text/srt;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -1177,9 +1133,9 @@ export default function App() {
       // Check if it's MP3 or PCM (OLD)
       let audioBlob: Blob;
       if (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) { // ID3 (MP3)
-        audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
+        audioBlob = new Blob([bytes], { type: 'audio/mp3' });
       } else if (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) { // Sync Frame (MP3)
-        audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
+        audioBlob = new Blob([bytes], { type: 'audio/mp3' });
       } else {
         // Assume old PCM format
         audioBlob = pcmToWav(bytes, 24000);
@@ -1207,7 +1163,12 @@ export default function App() {
     }
   };
 
-  const isVbsAdmin = isAdminUser;
+  const isVbsAdmin = useMemo(() => {
+    const ADMIN_CODE = import.meta.env.VITE_ADMIN_ACCESS_CODE || 'saw_vlogs_2026';
+    const isCodeMatch = accessCode === ADMIN_CODE;
+    const isProfileAdmin = userControl?.role === 'admin' || userControl?.isAdmin === true || userControl?.vbsId === 'saw_vlogs_2026';
+    return isCodeMatch || isProfileAdmin;
+  }, [accessCode, userControl]);
 
   const ttsCost = globalSettings.tts_cost || 1;
 
@@ -1275,26 +1236,26 @@ export default function App() {
           onClick={onClick}
           onMouseEnter={() => setIsHovered(true)}
           onMouseLeave={() => setIsHovered(false)}
-          className={`px-3 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-[10px] sm:text-sm font-bold transition-all flex items-center justify-center gap-2 relative group flex-1 sm:flex-initial ${
+          className={`px-3 sm:px-6 py-2.5 sm:py-3 rounded-[16px] sm:rounded-[18px] text-xs sm:text-sm font-bold transition-all flex items-center gap-2 relative group ${
             active 
-              ? 'bg-amber-400 text-black shadow-lg shadow-amber-400/20 scale-[1.02] z-10' 
-              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              ? 'bg-brand-purple text-white shadow-[0_0_20px_rgba(139,92,246,0.6)] scale-[1.02] sm:scale-[1.05] z-10' 
+              : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-white/5 dark:hover:bg-white/5'
           }`}
         >
-          <div className={`${active ? 'scale-110' : 'group-hover:scale-110 transition-transform'}`}>
-            {locked && !active ? <Lock size={14} className="text-slate-600" /> : icon}
+          <div className={`${active ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]' : 'group-hover:scale-110 transition-transform'}`}>
+            {locked && !active ? <Lock size={16} className="text-rose-400" /> : icon}
           </div>
-          <span className="hidden md:inline tracking-tight whitespace-nowrap">
+          <span className={`${active ? 'inline' : 'hidden sm:inline'} text-[10px] sm:text-xs tracking-tight whitespace-nowrap`}>
             {label}
           </span>
           {badge && (
-            <span className="absolute -top-1 -right-1 bg-brand-purple text-white text-[8px] px-1.5 py-0.5 rounded-full font-bold scale-90 sm:scale-100 shadow-md">
+            <span className="absolute -top-1 -right-1 bg-violet-500 text-white text-[8px] px-1.5 py-0.5 rounded-full font-black scale-90 sm:scale-100 shadow-lg shadow-violet-500/20">
               {badge}
             </span>
           )}
           
           {active && (
-            <div className="absolute inset-0 bg-brand-purple/20 blur-lg rounded-xl -z-10" />
+            <div className="absolute inset-0 bg-brand-purple/20 blur-xl rounded-full -z-10" />
           )}
         </button>
 
@@ -1323,33 +1284,10 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white selection:bg-amber-400/30 transition-colors duration-500 relative overflow-hidden font-sans">
-      {/* Premium Background Elements */}
-      <div className="fixed inset-0 -z-10 bg-black overflow-hidden pointer-events-none">
-        <div className="noise-overlay absolute inset-0 mix-blend-overlay" />
-        
-        {/* Animated Gradient Orbs */}
-        <motion.div 
-          animate={{ 
-            x: [0, 100, 0], 
-            y: [0, -50, 0],
-            scale: [1, 1.2, 1],
-            opacity: [0.3, 0.4, 0.3]
-          }}
-          transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-          className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-[#EAB308]/10 blur-[140px] rounded-full" 
-        />
-        <motion.div 
-          animate={{ 
-            x: [0, -80, 0], 
-            y: [0, 60, 0],
-            scale: [1, 1.3, 1],
-            opacity: [0.2, 0.3, 0.2]
-          }}
-          transition={{ duration: 25, repeat: Infinity, ease: "linear" }}
-          className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-amber-400/15 blur-[140px] rounded-full" 
-        />
-      </div>
+    <div className={`min-h-screen flex flex-col transition-colors duration-500 relative overflow-hidden ${isDarkMode ? 'dark bg-[#020617] text-white' : 'bg-slate-50 text-slate-900'}`}>
+      {/* Premium Background Glows */}
+      <div className="fixed top-[-10%] left-[-10%] w-[40%] h-[40%] bg-brand-purple/10 blur-[120px] rounded-full -z-10 animate-pulse-soft" />
+      <div className="fixed bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-neon-magenta/10 blur-[120px] rounded-full -z-10 animate-pulse-soft" />
       
       {/* Channels Exhausted Banner */}
       <AnimatePresence>
@@ -1378,21 +1316,36 @@ export default function App() {
       </AnimatePresence>
 
       <Header 
+        isDarkMode={isDarkMode} 
+        toggleTheme={() => setIsDarkMode(!isDarkMode)} 
+        uiTheme={uiTheme}
+        onThemeChange={setUITheme}
         isAccessGranted={isAccessGranted}
         isAdmin={isVbsAdmin}
         apiKeyStatus={apiKeyStatus}
         userControl={userControl}
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
       />
 
-      <div className="flex-1 flex flex-col">
-        {isAccessGranted && !isVbsAdmin && (
-          <AnnouncementPanel announcements={globalSettings.announcements} />
+      {isAccessGranted && !isVbsAdmin && (
+        <AnnouncementPanel announcements={globalSettings.announcements} />
+      )}
+
+      <main className="flex-1 container mx-auto px-4 sm:px-6 py-6 sm:py-8 overflow-x-hidden">
+        {!(isPrivacyRoute || isTermsRoute) && (
+          <div className="mb-8 text-center sm:text-left">
+            <h1 className="text-3xl sm:text-5xl font-black text-slate-900 dark:text-white mb-2 flex items-center justify-center sm:justify-start gap-3">
+              Vlogs By Saw
+              <span className="text-xs bg-brand-purple/10 text-brand-purple px-3 py-1 rounded-full uppercase tracking-tighter shadow-sm border border-brand-purple/20">
+                Premium AI Narration
+              </span>
+            </h1>
+            <p className="text-slate-500 dark:text-slate-400 font-medium max-w-2xl">
+              Professional Burmese Storytelling & Cinematic AI Voiceover Studio. Engineered for high-end recap content.
+            </p>
+          </div>
         )}
 
-        <main className="flex-1 container mx-auto px-4 sm:px-6 py-6 sm:py-8 overflow-x-hidden">
-          {isConfigLoading ? (
+        {isConfigLoading ? (
           <div className="flex flex-col items-center justify-center py-40">
             <div className="flex items-center justify-center gap-1.5 h-12 mb-6">
               {[...Array(8)].map((_, i) => (
@@ -1515,7 +1468,7 @@ export default function App() {
               whileTap={{ scale: 0.98 }}
               type="submit"
               disabled={isVerifyingCode || !accessCodeInput.trim() || !isAuthReady}
-              className="w-full py-4 bg-amber-400 text-black rounded-[20px] font-bold text-lg hover:bg-amber-500 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-amber-400/30 metallic-btn"
+              className="w-full py-4 bg-brand-purple text-white rounded-[20px] font-bold text-lg hover:bg-brand-purple/90 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-brand-purple/30 metallic-btn"
             >
               {isVerifyingCode || !isAuthReady ? (
                 <div className="flex items-center gap-2">
@@ -1535,7 +1488,7 @@ export default function App() {
         ) : (
           <div className="space-y-8">
             {/* Tab Navigation */}
-            <div className="flex items-center gap-1 sm:gap-2 bg-white/5 backdrop-blur-xl border border-white/10 p-1 rounded-xl sm:rounded-2xl w-full sm:w-fit mx-auto shadow-2xl relative z-40 mb-8 sm:mb-10 overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-1 sm:gap-2 glass-card p-1.5 rounded-[22px] w-fit mx-auto shadow-2xl relative z-40">
               <NavTab
                 id="generate"
                 active={activeTab === 'generate'}
@@ -1621,7 +1574,7 @@ export default function App() {
                       retryCountdown={retryCountdown}
                       speed={config.speed}
                       hasResult={!!result}
-                      isAdmin={isAdminUser}
+                      isAdmin={profile?.role === 'admin'}
                       userControl={userControl}
                       isSharedKey={apiKeyStatus.isShared}
                       rewriteCost={globalSettings.rewrite_cost}
@@ -1642,7 +1595,8 @@ export default function App() {
                     <VoiceConfig 
                       config={config} 
                       setConfig={setConfig} 
-                      isAdmin={isAdminUser}
+                      isDarkMode={isDarkMode} 
+                      isAdmin={profile?.role === 'admin'}
                       baseDuration={result?.oneXDuration}
                     />
 
@@ -1670,16 +1624,16 @@ export default function App() {
                           <motion.div 
                             initial={{ opacity: 0, y: 10 }}
                             animate={{ opacity: 1, y: 0 }}
-                            className="mb-6 p-4 rounded-2xl bg-brand-purple/10 border border-brand-purple/20 text-brand-purple shadow-xl shadow-brand-purple/5"
+                            className="mb-6 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 shadow-xl shadow-amber-500/5"
                           >
                             <div className="flex gap-3">
-                              <Info size={18} className="shrink-0 mt-0.5 text-brand-purple" />
+                              <Info size={18} className="shrink-0 mt-0.5 text-amber-500" />
                               <div className="text-[11px] leading-relaxed space-y-1">
                                 <p className="font-bold">အမြန်နှုန်း အရမ်းမြန်ရင် အသံအရည်အသွေး အနည်းငယ် ပြောင်းလဲနိုင်ပါတယ်။</p>
                                 <p className="opacity-80">အကောင်းဆုံး အသံထွက်အတွက် 1.2x မှ 1.5x အတွင်းသာ ထားရှိရန် အကြံပြုပါတယ်။</p>
                                 <button 
                                   onClick={() => setConfig(prev => ({ ...prev, speed: 1.2 }))}
-                                  className="mt-2 flex items-center gap-1.5 px-3 py-1 bg-brand-purple text-white rounded-full font-bold uppercase text-[9px] tracking-wider hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/30"
+                                  className="mt-2 flex items-center gap-1.5 px-3 py-1 bg-amber-500 text-white rounded-full font-bold uppercase text-[9px] tracking-wider hover:bg-amber-600 transition-all shadow-lg shadow-amber-500/30"
                                 >
                                   <Sparkles size={10} />
                                   Optimize to 1.2x
@@ -1755,40 +1709,37 @@ export default function App() {
                           </span>
                         </div>
                     </div>
-                  </div>
 
-                  {/* Full Width Output Preview */}
-                  <AnimatePresence>
-                    {(isLoading || error || (result && activeTab === 'generate')) && (
-                      <motion.div
-                        initial={{ opacity: 0, y: 40, scale: 0.98 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: 20 }}
-                        transition={{ 
-                          type: "spring", 
-                          stiffness: 100, 
-                          damping: 20,
-                          duration: 0.6 
-                        }}
-                        id="output-preview-container"
-                        className="lg:col-span-12 mt-8"
-                      >
-                        <OutputPreview 
-                          playbackSpeed={outputConfig.speed}
-                          result={result} 
-                          isLoading={isLoading} 
-                          isBaking={isBaking}
-                          onBake={handleBakeAudio}
-                          error={error}
-                          onRetry={() => handleGenerate()}
-                          globalVolume={outputConfig.volume}
-                          engineStatus={engineStatus}
-                          retryCountdown={retryCountdown}
-                          showToast={showToast}
-                        />
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+                        <AnimatePresence>
+                          {(isLoading || error || (result && activeTab === 'generate')) && (
+                            <motion.div
+                              initial={{ opacity: 0, y: 40, scale: 0.98 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: 20 }}
+                              transition={{ 
+                                type: "spring", 
+                                stiffness: 100, 
+                                damping: 20,
+                                duration: 0.6 
+                              }}
+                              id="output-preview-container"
+                              className="mt-8"
+                            >
+                              <OutputPreview 
+                                playbackSpeed={outputConfig.speed}
+                                result={result} 
+                                isLoading={isLoading} 
+                                error={error}
+                                onRetry={() => handleGenerate()}
+                                globalVolume={outputConfig.volume}
+                                engineStatus={engineStatus}
+                                retryCountdown={retryCountdown}
+                                showToast={showToast}
+                              />
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                  </div>
                 </motion.div>
               )}
 
@@ -1852,6 +1803,7 @@ export default function App() {
                   exit={{ opacity: 0, y: -20 }}
                 >
                    <ThumbnailCreator 
+                     isDarkMode={isDarkMode} 
                      showToast={showToast}
                      getApiKey={getEffectiveApiKey}
                      isAdmin={isVbsAdmin}
@@ -1974,7 +1926,7 @@ export default function App() {
                                 </button>
                                 <button 
                                   onClick={() => handleDownloadSRT(item.srtStorageUrl || item.srtContent || '', `subtitles-${item.id}.srt`)}
-                                  className="p-3 bg-brand-purple/10 text-brand-purple rounded-[14px] hover:bg-brand-purple hover:text-white transition-all border border-brand-purple/20 shadow-sm"
+                                  className="p-3 bg-amber-500/10 text-amber-500 rounded-[14px] hover:bg-amber-500 hover:text-white transition-all border border-amber-500/20 shadow-sm"
                                   title={t('output.downloadSrt')}
                                 >
                                   <FileText size={18} />
@@ -2165,56 +2117,26 @@ export default function App() {
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
-                        <div className={(function() {
-                          const info = apiChannelManager.getActiveSourceInfo(false, isAdminUser);
-                          const hasActiveKey = !!info?.key;
-                          const colorClass = hasActiveKey ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400';
-                          return `flex items-center gap-2 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest ${colorClass}`;
-                        })()}>
-                          <div className={(function() {
-                             const info = apiChannelManager.getActiveSourceInfo(false, isAdminUser);
-                             const hasActiveKey = !!info?.key;
-                             return `w-2 h-2 rounded-full ${hasActiveKey ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`;
-                          })()} />
-                          {(() => {
-                            const info = apiChannelManager.getActiveSourceInfo(false, isAdminUser);
-                            const settings = apiChannelManager.getSettings();
-                            const isAdminMode = settings.useAdminKeys;
-                            
-                            const isPremium = userControl?.membershipStatus === 'premium' || isAdminUser;
-                            const poolAvailable = (globalSettings.allow_admin_keys || isAdminUser) && isPremium;
-                            
-                            if (!localApiKey || !info) {
-                              if (poolAvailable && isAdminMode && info?.key) {
-                                 return (
-                                   <div className="flex items-center gap-1.5 text-emerald-500">
-                                     <span>ADMIN POOL</span>
-                                     <span className="opacity-40">•</span>
-                                     <span>ACTIVE</span>
-                                   </div>
-                                 );
-                              }
-                              return 'NO KEY FOUND';
-                            }
-                            
-                            // Determine label and status based on mode and source
-                            const isShared = info.isShared || (isAdminMode && isAdminUser);
-                            const label = isShared ? 'ADMIN POOL' : 'MY KEY';
-                            const status = isShared ? 'ACTIVE' : 'CONNECTED';
-                            
-                            return (
-                              <div className="flex items-center gap-1.5">
-                                <span>{label}</span>
-                                <span className="opacity-40">•</span>
-                                <span>{status}</span>
-                                {localApiKey && (
-                                  <span className="hidden md:inline font-mono lowercase opacity-30 font-normal tracking-normal ml-1">
-                                    ({info.key.substring(0, 4)}...{info.key.slice(-2)})
-                                  </span>
-                                )}
-                              </div>
-                            );
-                          })()}
+                        <div className={`flex items-center gap-3 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest ${localApiKey ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                          {localApiKey && apiChannelManager.getActiveSourceInfo(profile?.role === 'admin') && (
+                            <div className="hidden sm:flex items-center gap-2 text-slate-500 font-medium mr-1">
+                              <span className="text-slate-900 dark:text-white font-bold">{apiChannelManager.getActiveSourceInfo(profile?.role === 'admin')?.label}</span>
+                              <span className="text-slate-300 dark:text-slate-700 mx-1">•</span>
+                              <span className="font-mono lowercase opacity-50 tracking-normal">
+                                {apiChannelManager.getActiveSourceInfo(profile?.role === 'admin')?.key.substring(0, 4)}....{apiChannelManager.getActiveSourceInfo(profile?.role === 'admin')?.key.slice(-4)}
+                              </span>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2">
+                            <div className={`w-2 h-2 rounded-full ${localApiKey ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+                            {apiChannelManager.getSettings().useAdminKeys && apiChannelManager.getSettings().allowSharedKeys && localApiKey && apiChannelManager.getActiveSourceInfo(profile?.role === 'admin')?.isShared ? (
+                              'ADMIN KEY ACTIVE'
+                            ) : localApiKey ? (
+                              'CONNECTED'
+                            ) : (
+                              'NO API KEY FOUND'
+                            )}
+                          </div>
                         </div>
                         <ChevronRight size={18} className="text-slate-400 group-hover:translate-x-1 transition-transform" />
                       </div>
@@ -2226,17 +2148,15 @@ export default function App() {
           </div>
         )}
       </main>
-    </div>
 
       {/* Settings Integrated into Tools Tab */}
       {/* Toast Notification */}
       <ApiKeyModal 
         isOpen={isApiKeyModalOpen}
         onClose={() => setIsApiKeyModalOpen(false)}
-        role={profile?.role || userControl?.role}
+        role={profile?.role}
         membershipStatus={userControl?.membershipStatus}
-        vbsId={profile?.vbsId || userControl?.vbsId || vbsId}
-        allowAdminKeys={globalSettings.allow_admin_keys}
+        vbsId={userControl?.vbsId}
       />
       <AnimatePresence>
         {toast && (
@@ -2272,15 +2192,15 @@ export default function App() {
       <footer className="py-12 flex justify-center px-6">
         <div className="flex flex-col items-center gap-3">
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-amber-400 rounded-lg flex items-center justify-center shadow-lg shadow-amber-400/30">
-              <Mic2 size={12} className="text-black" />
+            <div className="w-6 h-6 bg-brand-purple rounded-lg flex items-center justify-center shadow-lg shadow-brand-purple/30">
+              <Mic2 size={12} className="text-white" />
             </div>
-            <p className="text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-amber-200 to-amber-500 font-black text-sm tracking-tight animate-pulse-soft">
+            <p className="text-transparent bg-clip-text bg-gradient-to-r from-brand-purple via-neon-indigo to-neon-magenta font-black text-sm tracking-tight animate-pulse-soft">
               Vlogs By Saw
             </p>
           </div>
           <p className="text-[10px] md:text-xs font-bold tracking-[0.25em] uppercase text-center">
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-slate-400 via-amber-400 to-slate-400">
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-slate-400 via-brand-purple to-slate-400">
               Premium Myanmar AI Studio 2026
             </span>
           </p>
@@ -2292,7 +2212,7 @@ export default function App() {
                 setIsTermsRoute(false);
                 window.scrollTo(0, 0);
               }}
-              className="hover:text-amber-400 transition-colors"
+              className="hover:text-brand-purple transition-colors"
             >
               {t('settings.privacy')}
             </button>
@@ -2304,15 +2224,15 @@ export default function App() {
                 setIsPrivacyRoute(false);
                 window.scrollTo(0, 0);
               }}
-              className="hover:text-amber-400 transition-colors"
+              className="hover:text-brand-purple transition-colors"
             >
               {t('settings.terms')}
             </button>
           </div>
           <div className="flex items-center gap-3 mt-1">
-            <div className="w-12 h-px bg-gradient-to-r from-transparent to-amber-400/50" />
-            <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-            <div className="w-12 h-px bg-gradient-to-l from-transparent to-amber-400/50" />
+            <div className="w-12 h-px bg-gradient-to-r from-transparent to-brand-purple/50" />
+            <div className="w-1.5 h-1.5 rounded-full bg-brand-purple animate-pulse" />
+            <div className="w-12 h-px bg-gradient-to-l from-transparent to-brand-purple/50" />
           </div>
         </div>
       </footer>
