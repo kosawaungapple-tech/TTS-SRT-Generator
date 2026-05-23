@@ -1,62 +1,117 @@
-# Security Specification for VlogsBySaw TTS-Recap
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
 
-## Data Invariants
-1. **User Control**: Every access code must have a corresponding `user_controls` document.
-2. **Session Integrity**: A session document must exist for every authenticated user who has entered a valid access code.
-3. **Identity Ownership**: Users can only read and write their own `history` items based on their `accessCode`.
-4. **Admin Escalation**: Only users with the master access code (`saw_vlogs_2026`) in their session can perform administrative tasks (writing to settings, rules, system config, and other users' records).
-5. **System Config**: Only the `main` document in `system_config` should exist, and it must be admin-only.
+    // Owner/admin has full access
+    match /{document=**} {
+      allow read, write: if request.auth != null 
+        && request.auth.uid == "saw_vlogs_2026";
+    }
 
-## The "Dirty Dozen" Payloads (Denial Tests)
+    // Users can only read/write their own document (legacy users collection)
+    match /users/{userId} {
+      allow read, write: if request.auth != null 
+        && request.auth.uid == userId;
+    }
 
-1. **Self-Promotion**: Anonymously attempting to set `role: 'admin'` in `user_controls/anonymous_user`.
-2. **Settings Poisoning**: Attempting to write to `settings/global` as a standard user.
-3. **Session Hijacking**: Attempting to create a `sessions` document for another user's UID.
-4. **History Scraping**: Attempting to list `history` items without a valid session.
-5. **History Spoofing**: Attempting to write a `history` item with another user's `userId`.
-6. **Rule Tampering**: Attempting to delete or modify `globalRules` as a standard user.
-7. **Control Circumvention**: Attempting to set `isUnlimited: true` on their own `user_controls` document.
-8. **Admin Key Extraction**: Attempting to read `settings/global` (which contains admin API keys) without a session.
-9. **Log Injection**: Attempting to write junk data to `activity_logs`.
-10. **System Config Access**: Attempting to read `system_config/main`.
-11. **ID Poisoning**: Attempting to use a 2MB string as a `vbsId` in `user_controls`.
-12. **State Shortcutting**: Attempting to update `dailyUsage` to a negative number.
+    match /user_controls/{vbsId} {
+      // Required for handleLogin to perform verification
+      allow get: if request.auth != null;
+      
+      // Master admin can list all controls
+      allow list: if request.auth != null && (
+        exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == "saw_vlogs_2026"
+      );
 
-## Test Runner (firestore.rules.test.ts)
+      // Normal read/update if session matches
+      allow read, update: if request.auth != null && (
+        (exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == vbsId) ||
+        (exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == "saw_vlogs_2026")
+      );
+      
+      // Allow initial creation by any auth user (e.g. self-registration if allowed)
+      allow create: if request.auth != null;
+      
+      // Delete only by master admin
+      allow delete: if request.auth != null && (
+         exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == "saw_vlogs_2026"
+      );
+    }
 
-```typescript
-// This is a conceptual test runner for Firebase Security Rules
-// In a real environment, this would run with @firebase/rules-unit-testing
+    // Admin stats — anyone authenticated can log usage
+    match /adminKeyStats/{keyId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
 
-import { assertFails, assertSucceeds, initializeTestEnvironment, RulesTestEnvironment } from '@firebase/rules-unit-testing';
+    // Settings — only owner can write
+    match /settings/{doc} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && (
+        exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == "saw_vlogs_2026"
+      );
+    }
+    
+    // Activity logs - Users can write if authenticated
+    match /activity_logs/{logId} {
+      allow create: if request.auth != null;
+      allow read: if request.auth != null && (
+        exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == "saw_vlogs_2026"
+      );
+    }
 
-let testEnv: RulesTestEnvironment;
+    // Global Rules - only owner can write
+    match /globalRules/{ruleId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && (
+        exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == "saw_vlogs_2026"
+      );
+    }
 
-beforeAll(async () => {
-  testEnv = await initializeTestEnvironment({
-    projectId: 'vbs-tts-recap',
-    firestore: {
-      rules: fs.readFileSync('firestore.rules', 'utf8'),
-    },
-  });
-});
+    // History - Users can read their own
+    match /history/{id} {
+      allow read: if request.auth != null && (
+        (exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == resource.data.userId) ||
+        (exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == "saw_vlogs_2026")
+      );
+      allow create: if request.auth != null;
+      allow delete: if request.auth != null && (
+        (exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == resource.data.userId) ||
+        (exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == "saw_vlogs_2026")
+      );
+    }
+    
+    // Admin Channels - only owner can read/write
+    match /admin_channels/{channelId} {
+      allow read, write: if request.auth != null && (
+        exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == "saw_vlogs_2026"
+      );
+    }
 
-test('Standard anonymous user cannot read settings', async () => {
-  const alice = testEnv.authenticatedContext('alice');
-  await assertFails(getDoc(doc(alice.firestore(), 'settings/global')));
-});
-
-test('Master admin can read and write settings', async () => {
-  const master = testEnv.authenticatedContext('master_uid');
-  // Mock session doc
-  await testEnv.withSecurityRulesDisabled(async (context) => {
-    await setDoc(doc(context.firestore(), 'sessions/master_uid'), { accessCode: 'saw_vlogs_2026' });
-  });
-  await assertSucceeds(getDoc(doc(master.firestore(), 'settings/global')));
-});
-
-test('User cannot read other users controls', async () => {
-  const bob = testEnv.authenticatedContext('bob');
-  await assertFails(getDoc(doc(bob.firestore(), 'user_controls/alice_code')));
-});
-```
+    // Sessions - Users can write their own
+    match /sessions/{userId} {
+      allow read, write: if request.auth != null
+        && request.auth.uid == userId;
+    }
+    
+    // System Config - owner only
+    match /system_config/{doc} {
+      allow read, write: if request.auth != null && (
+        exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == "saw_vlogs_2026"
+      );
+    }
+  }
+}

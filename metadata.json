@@ -1,5 +1,8 @@
-{
-  "name": "30.04.2026 VBS: Professional Myanmar TTS \u0026 Narration Engine",
-  "description": "A high-fidelity narration tool for Myanmar voiceovers using Gemini 2.5 Flash. Features cinematic voice quality and precise phonetic mapping.",
-  "requestFramePermissions": []
-}
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
