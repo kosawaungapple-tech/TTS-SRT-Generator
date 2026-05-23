@@ -1,9 +1,9 @@
-import { GoogleGenAI } from "@google/genai";
 import { TTSConfig, AudioResult, SRTSubtitle } from "../types";
 import { VOICE_OPTIONS, GEMINI_MODELS } from "../constants";
 import { formatTime } from "../utils/audioUtils";
-import { generateOptimizedSubtitles } from "../utils/subtitleUtils";
+import { generateOptimizedSubtitles, generateSubtitlesFromTimestamps } from "../utils/subtitleUtils";
 import { apiChannelManager } from "./apiChannelManager";
+import { getIdToken } from "../firebase";
 
 interface GeminiResponse {
   candidates?: Array<{
@@ -25,8 +25,6 @@ interface GeminiResponse {
 export class GeminiTTSService {
   private apiKey: string;
   private isAdmin: boolean;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private ai: any = null;
 
   constructor(apiKey?: string, isAdmin: boolean = false) {
     this.apiKey = apiKey || '';
@@ -34,50 +32,132 @@ export class GeminiTTSService {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private getAI(key: string): any {
-    if (!this.ai || this.apiKey !== key) {
-      this.ai = new GoogleGenAI({ apiKey: key });
-    }
-    return this.ai;
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private async geminiRequest(modelName: string, body: { contents: any[]; generationConfig?: any }): Promise<GeminiResponse> {
+  private async geminiRequest(modelName: string, body: { contents: any[]; generationConfig?: any }, retryCount: number = 0): Promise<GeminiResponse> {
     const executeRequest = async (key: string) => {
-      const ai = this.getAI(key);
-      const modelPath = modelName.startsWith('models/') ? modelName : `models/${modelName}`;
+      console.log(`Gemini Proxy Request [${modelName}]. Key:`, key ? `${key.substring(0, 4)}...${key.substring(key.length - 4)}` : "ADMIN_POOL (Server-side)");
       
-      console.log(`Gemini SDK Request [${modelName}]:`, modelPath);
-      
-      const response = await ai.models.generateContent({
-        model: modelPath,
-        contents: body.contents,
-        config: body.generationConfig
-      });
-      
-      // Map SDK response back to our internal GeminiResponse interface
-      return {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        candidates: response.candidates?.map((c: any) => ({
-          content: {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            parts: c.content?.parts?.map((p: any) => ({
-              text: p.text,
-              inlineData: p.inlineData ? {
-                data: p.inlineData.data,
-                mimeType: p.inlineData.mimeType
-              } : undefined
-            }))
+      const MAX_RETRIES = 3;
+
+      try {
+        const token = await getIdToken();
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        let response: Response;
+        try {
+          response = await fetch('/api/gemini/proxy', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              model: modelName,
+              contents: body.contents,
+              config: body.generationConfig,
+              apiKey: key
+            })
+          });
+        } catch (fetchErr) {
+          // Network error (Failed to fetch)
+          if (retryCount < MAX_RETRIES) {
+            const delay = Math.pow(2, retryCount) * 2000 + Math.random() * 1000;
+            console.warn(`Gemini Proxy: Network error for ${modelName}. Retrying in ${Math.round(delay)}ms... (${retryCount + 1}/${MAX_RETRIES})`, fetchErr);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            return this.geminiRequest(modelName, body, retryCount + 1);
           }
-        }))
-      } as GeminiResponse;
+          throw fetchErr;
+        }
+
+        const contentType = response.headers.get("content-type");
+        let data: GeminiResponse & { error?: string; message?: string };
+
+        if (contentType && contentType.includes("application/json")) {
+          data = await response.json();
+        } else {
+          // Handle non-JSON response (likely an HTML error page from proxy or infrastructure)
+          const text = await response.text();
+          console.error(`Gemini Proxy: Non-JSON response received [${response.status}]:`, text.substring(0, 500));
+          
+          if ((response.status === 503 || response.status === 504 || response.status === 502) && retryCount < MAX_RETRIES) {
+            const delay = Math.pow(2, retryCount) * 2000 + Math.random() * 1000;
+            console.warn(`Gemini Proxy: Server error (${response.status}) for ${modelName}. Retrying in ${Math.round(delay)}ms... (${retryCount + 1}/${MAX_RETRIES})`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            return this.geminiRequest(modelName, body, retryCount + 1);
+          }
+
+          throw new Error(`Proxy error (${response.status}): Server returned non-JSON response. This might be a temporary infrastructure issue.`);
+        }
+
+        // Handle error status codes with data
+        if (!response.ok) {
+          const status = response.status;
+          const errorMsg = data.error || data.message || response.statusText || "Unknown error";
+          
+          console.error(`Gemini Proxy Error Response [${modelName}] (${status}):`, data);
+
+          // Retry on certain errors: 429 (Rate Limit), 503 (High Demand/Service Unavailable), 504/502 (Gateway)
+          if ((status === 429 || status === 503 || status === 504 || status === 502) && retryCount < MAX_RETRIES) {
+            let delay = Math.pow(2, retryCount) * 2000 + Math.random() * 1000;
+            
+            // If it's a 429, try to parse the retry delay from the error message
+            if (status === 429) {
+              const retryMatch = errorMsg.match(/retry in ([\d.]+)s/i);
+              if (retryMatch && retryMatch[1]) {
+                const waitSeconds = parseFloat(retryMatch[1]);
+                delay = (waitSeconds + 1) * 1000; // Add 1s buffer
+                console.warn(`Gemini Proxy: Rate limited (429). Server requested ${waitSeconds}s wait. Waiting ${Math.round(delay)}ms...`);
+              } else {
+                console.warn(`Gemini Proxy: Status ${status} for ${modelName}. Retrying in ${Math.round(delay)}ms... (${retryCount + 1}/${MAX_RETRIES})`);
+              }
+            } else {
+              console.warn(`Gemini Proxy: Status ${status} for ${modelName}. Retrying in ${Math.round(delay)}ms... (${retryCount + 1}/${MAX_RETRIES})`);
+            }
+            
+            await new Promise(resolve => setTimeout(resolve, delay));
+            return this.geminiRequest(modelName, body, retryCount + 1);
+          }
+          
+          throw new Error(errorMsg);
+        }
+        
+        console.log(`Gemini Proxy Response Keys [${modelName}]:`, Object.keys(data));
+
+        const candidates = data.candidates;
+
+        if (!candidates || candidates.length === 0) {
+          console.warn(`Gemini Proxy: No candidates in response for ${modelName}`);
+        }
+        
+        // Map proxy response back to our internal GeminiResponse interface
+        return {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          candidates: candidates?.map((c: any) => ({
+            content: {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              parts: c.content?.parts?.map((p: any) => ({
+                text: p.text,
+                inlineData: p.inlineData ? {
+                  data: p.inlineData.data,
+                  mimeType: p.inlineData.mimeType
+                } : undefined
+              }))
+            }
+          }))
+        } as GeminiResponse;
+      } catch (err) {
+        console.error(`Gemini Proxy Error [${modelName}]:`, err);
+        throw err;
+      }
     };
 
     if (this.apiKey) {
       return executeRequest(this.apiKey);
     }
 
-    return apiChannelManager.callWithAutoSwitch((key) => executeRequest(key), this.isAdmin);
+    return apiChannelManager.callWithAutoSwitch((key) => executeRequest(key), false, this.isAdmin);
   }
 
   public static getActiveKeyIndex(): number {
@@ -132,7 +212,139 @@ export class GeminiTTSService {
     return new Blob([wavBuffer], { type: 'audio/wav' });
   }
 
-  async generateTTS(text: string, config: TTSConfig): Promise<AudioResult> {
+  async generateTTS(
+    text: string, 
+    config: TTSConfig, 
+    onFirstChunk?: (result: AudioResult) => void,
+    onProgress?: (current: number, total: number, message: string) => void
+  ): Promise<AudioResult> {
+    const chunks = this.splitIntoChunks(text, 1000); 
+    console.log(`TTS Service: Splitting text into ${chunks.length} chunks for controlled generation...`);
+
+    if (chunks.length <= 1) {
+      if (onProgress) onProgress(1, 1, "အသံထုတ်ယူနေပါသည်...");
+      return this.generateSingleTTS(text, config);
+    }
+
+    const results: AudioResult[] = [];
+    const DELAY_BETWEEN_CHUNKS = 10000; // 10 seconds delay to respect 10 RPM limit
+    
+    console.log(`TTS Service: Processing ${chunks.length} chunks sequentially with ${DELAY_BETWEEN_CHUNKS}ms delay...`);
+    
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const chunkNum = i + 1;
+      
+      if (onProgress) onProgress(chunkNum, chunks.length, `အပိုင်း ${chunkNum}/${chunks.length} ကို ထုတ်ယူနေပါသည်...`);
+      
+      let retryCount = 0;
+      const MAX_CHUNK_RETRIES = 3;
+      let success = false;
+      let lastError = null;
+
+      while (retryCount <= MAX_CHUNK_RETRIES && !success) {
+        try {
+          // Wrap request in a 60s timeout
+          const timeoutPromise = new Promise<never>((_, reject) => 
+            setTimeout(() => reject(new Error(`TTS chunk ${i} timed out after 60s`)), 60000)
+          );
+
+          const result = await Promise.race([
+            this.generateSingleTTS(chunk, config),
+            timeoutPromise
+          ]);
+
+          if (i === 0 && onFirstChunk) {
+            onFirstChunk(result);
+          }
+
+          results.push(result);
+          success = true;
+          
+          if (i < chunks.length - 1) {
+            const nextChunkNum = i + 2;
+            if (onProgress) onProgress(chunkNum, chunks.length, `အပိုင်း ${nextChunkNum}/${chunks.length} အတွက် စောင့်ဆိုင်းနေပါသည် (၁၀ စက္ကန့်)...`);
+            await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_CHUNKS));
+          }
+        } catch (error: unknown) {
+          lastError = error;
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          
+          // Check for retryable quota error
+          if (
+            errorMessage.includes("429") || 
+            errorMessage.includes("503") ||
+            errorMessage.includes("quota") || 
+            errorMessage.includes("RESOURCE_EXHAUSTED")
+          ) {
+            // Check if the error message already has a specific wait time parsed from geminiRequest
+            const retryMatch = errorMessage.match(/retry in ([\d.]+)s/i);
+            let backoffDelay = Math.pow(2, retryCount) * 10000; // 10s, 20s, 40s...
+            
+            if (retryMatch && retryMatch[1]) {
+               backoffDelay = (parseFloat(retryMatch[1]) + 2) * 1000;
+            }
+
+            retryCount++;
+            if (retryCount <= MAX_CHUNK_RETRIES) {
+              if (onProgress) onProgress(chunkNum, chunks.length, `API အသုံးပြုမှု များနေပါသည်။ ${Math.round(backoffDelay/1000)} စက္ကန့်အကြာတွင် နောက်တစ်ကြိမ် ကြိုးစားပါမည်...`);
+              await new Promise(resolve => setTimeout(resolve, backoffDelay));
+              continue;
+            }
+          }
+          
+          // Non-retryable or max retries reached
+          console.error(`TTS Service: Generation failed at chunk ${i}:`, errorMessage);
+          if (
+            errorMessage.includes("429") || 
+            errorMessage.includes("quota") || 
+            errorMessage.includes("RESOURCE_EXHAUSTED") ||
+            errorMessage.includes("API quota ကုန်သွားပါပြီ")
+          ) {
+            throw new Error("API အသုံးပြုမှု ကန့်သတ်ချက် ပြည့်နေသည်။ မိနစ်အနည်းငယ် စောင့်ပြီး ထပ်ကြိုးစားပါ");
+          }
+          throw error;
+        }
+      }
+      
+      if (!success && lastError) {
+        throw lastError;
+      }
+    }
+
+    console.log(`TTS Service: All ${results.length} chunks generated successfully.`);
+    return this.mergeAudioResults(results);
+  }
+
+  private splitIntoChunks(text: string, maxChars: number): string[] {
+    const chunks: string[] = [];
+    // Split by Myanmar full stop (။), comma (၊), or newline.
+    const sentences = text.split(/([။၊\n])/g);
+    
+    let currentChunk = "";
+    for (let i = 0; i < sentences.length; i++) {
+      const s = sentences[i];
+      if (!s) continue;
+      
+      // If s is just a punctuation mark from the split group
+      if (s === "။" || s === "၊" || s === "\n") {
+        currentChunk += s;
+        continue;
+      }
+
+      if (currentChunk.length + s.length > maxChars) {
+        if (currentChunk.trim()) chunks.push(currentChunk.trim());
+        currentChunk = s;
+      } else {
+        currentChunk += s;
+      }
+    }
+    
+    if (currentChunk.trim()) chunks.push(currentChunk.trim());
+    return chunks;
+  }
+
+  private async generateSingleTTS(text: string, config: TTSConfig): Promise<AudioResult> {
     const voice = VOICE_OPTIONS.find(v => v.id === config.voiceId) || VOICE_OPTIONS[0];
 
     const pitchInstruction = config.pitch > 0
@@ -144,9 +356,13 @@ export class GeminiTTSService {
     const styleInstruction = config.styleInstruction?.trim() || '';
     const combinedInstruction = `${pitchInstruction}${styleInstruction}`.trim();
 
+    // Check for timestamps to handle them correctly
+    const hasTimestamps = /\[\d{1,2}:\d{1,2}\.\d{3}\]/.test(text);
+    const audioText = hasTimestamps ? text.replace(/\[\d{1,2}:\d{1,2}\.\d{3}\]/g, "").trim() : text;
+
     const textWithInstruction = combinedInstruction
-      ? `[${combinedInstruction}]\n\n${text}`
-      : text;
+      ? `[${combinedInstruction}]\n\n${audioText}`
+      : audioText;
 
     const body = {
       contents: [{ parts: [{ text: textWithInstruction }] }],
@@ -168,16 +384,13 @@ export class GeminiTTSService {
 
     if (!base64Audio) {
       console.error('No audio in response:', JSON.stringify(data));
-      throw new Error('No audio data returned from Gemini candidates. Ensure the model supports TTS and voice config is correct.');
+      throw new Error('No audio data returned from Gemini');
     }
 
-    // [PCM to WAV CONVERSION] 
-    // Gemini returns raw PCM at 24000Hz, browsers need WAV headers to play correctly
     const audioBlob = this.convertPCMToWav(base64Audio, 24000);
     const audioUrl = URL.createObjectURL(audioBlob);
     const arrayBuffer = await audioBlob.arrayBuffer();
 
-    // Duration estimation for subtitles
     const AudioContextClass = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext) as typeof AudioContext;
     const audioContext = new AudioContextClass();
     let totalDuration = 0;
@@ -186,12 +399,14 @@ export class GeminiTTSService {
       totalDuration = decodedBuffer.duration;
     } catch (e) {
       console.warn("Failed to decode audio duration, using estimation", e);
-      totalDuration = text.length * 0.08; // Rough estimation
+      totalDuration = audioText.length * 0.08;
     } finally {
       await audioContext.close();
     }
 
-    const subtitles = generateOptimizedSubtitles(text, totalDuration);
+    const subtitles = hasTimestamps 
+      ? generateSubtitlesFromTimestamps(text, totalDuration)
+      : generateOptimizedSubtitles(audioText, totalDuration);
 
     return {
       audioUrl,
@@ -204,6 +419,80 @@ export class GeminiTTSService {
       speed: 1.0,
       duration: totalDuration
     };
+  }
+
+  private mergeAudioResults(results: AudioResult[]): AudioResult {
+    // 1. Merge PCM data
+    let totalLength = 0;
+    const pcmChunks: Uint8Array[] = [];
+    
+    for (const res of results) {
+      const binaryString = atob(res.audioData);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      pcmChunks.push(bytes);
+      totalLength += bytes.length;
+    }
+
+    const mergedPCM = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const chunk of pcmChunks) {
+      mergedPCM.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    // Convert merged PCM to Base64
+    let binary = "";
+    const len = mergedPCM.byteLength;
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(mergedPCM[i]);
+    }
+    const base64Audio = btoa(binary);
+
+    // 2. Merge Subtitles
+    let cumulativeTime = 0;
+    const allSubtitles: SRTSubtitle[] = [];
+    const srtParts: string[] = [];
+    
+    results.forEach((res) => {
+      res.subtitles.forEach((sub) => {
+        const start = this.parseTimestampToSeconds(sub.startTime) + cumulativeTime;
+        const end = this.parseTimestampToSeconds(sub.endTime) + cumulativeTime;
+        
+        const newSub = {
+          ...sub,
+          index: allSubtitles.length + 1,
+          startTime: formatTime(start),
+          endTime: formatTime(end)
+        };
+        allSubtitles.push(newSub);
+        srtParts.push(`${newSub.index}\n${newSub.startTime} --> ${newSub.endTime}\n${newSub.text}\n`);
+      });
+      cumulativeTime += res.duration;
+    });
+
+    const audioBlob = this.convertPCMToWav(base64Audio, 24000);
+    const audioUrl = URL.createObjectURL(audioBlob);
+
+    return {
+      audioUrl,
+      audioData: base64Audio,
+      rawAudio: mergedPCM.buffer,
+      srtContent: srtParts.join('\n'),
+      subtitles: allSubtitles,
+      baseDuration: cumulativeTime,
+      oneXDuration: cumulativeTime,
+      speed: 1.0,
+      duration: cumulativeTime
+    };
+  }
+
+  private parseTimestampToSeconds(timestamp: string): number {
+    const [hms, ms] = timestamp.split(',');
+    const [h, m, s] = hms.split(':').map(Number);
+    return h * 3600 + m * 60 + s + (Number(ms) / 1000);
   }
 
   static parseSRT(srt: string): SRTSubtitle[] {
@@ -283,8 +572,24 @@ export class GeminiTTSService {
     return textResult.trim();
   }
 
-  async translateContent(text: string): Promise<string> {
-    const prompt = `Translate the following text into natural, cinematic Burmese for high-end video narration: ${text}`;
+  async translateContent(text: string, style: string = 'Movie Recap', tone: string = '', duration: string = 'Medium'): Promise<string> {
+    const prompt = `
+      You are a professional video recap scriptwriter for the Myanmar audience.
+      Translate and adapt the following source text into natural, engaging, and cinematic Burmese video narration.
+
+      STYLE: ${style}
+      TONE/INSTRUCTION: ${tone || 'Professional and engaging'}
+      TARGET DURATION: ${duration}
+
+      Source Text:
+      ${text}
+
+      Guidelines:
+      - Use natural, spoken Burmese (vernacular) instead of overly formal literary Burmese.
+      - Keep and reuse the original timestamps in the translated output (e.g., [00:01.200] Translated Text).
+      - Ensure the flow matches the ${style} style.
+      - Output ONLY the translated Myanmar text with timestamps.
+    `;
     const data = await this.geminiRequest(GEMINI_MODELS.TRANSLATE, {
       contents: [{ parts: [{ text: prompt }] }]
     });
@@ -326,7 +631,7 @@ export class GeminiTTSService {
                 data: base64Data
               }
             },
-            { text: "Transcribe this video in Myanmar language accurately. Output only the transcription text, formatted nicely." }
+            { text: "Transcribe this video in Myanmar language accurately with timestamps. Output the transcription in a clear format like '[00:01.200] စာသား' for each major sentence or phrase. Output only the transcription." }
           ]
         }]
       };

@@ -146,3 +146,56 @@ export function generateOptimizedSubtitles(text: string, totalDuration: number):
 
   return subtitles;
 }
+
+export function generateSubtitlesFromTimestamps(text: string, totalDuration: number): SRTSubtitle[] {
+  const markerRegex = /\[(\d{1,2}):(\d{1,2})\.(\d{3})\]\s*(.*?)(?=\s*\[|$)/gs;
+  const subtitles: SRTSubtitle[] = [];
+  let match;
+  let index = 1;
+
+  while ((match = markerRegex.exec(text)) !== null) {
+    const minutes = parseInt(match[1]);
+    const seconds = parseInt(match[2]);
+    const milliseconds = parseInt(match[3]);
+    const startTimeInSeconds = minutes * 60 + seconds + milliseconds / 1000;
+    const content = match[4].trim();
+
+    if (content) {
+      subtitles.push({
+        index: index++,
+        startTime: formatTime(startTimeInSeconds),
+        endTime: "", // Will be filled next
+        text: content
+      });
+    }
+  }
+
+  // Set end times
+  for (let i = 0; i < subtitles.length; i++) {
+    if (i < subtitles.length - 1) {
+       subtitles[i].endTime = subtitles[i + 1].startTime;
+    } else {
+       subtitles[i].endTime = formatTime(totalDuration);
+    }
+    
+    // Safety check: if end time < start time (due to malformed input)
+    const start = parseTimestampToSeconds(subtitles[i].startTime);
+    const end = parseTimestampToSeconds(subtitles[i].endTime);
+    if (end <= start) {
+      subtitles[i].endTime = formatTime(start + 2); // Default 2s duration
+    }
+    
+    // Max duration cap to prevent overlap issues
+    if (end > start + 7) {
+      subtitles[i].endTime = formatTime(start + 7);
+    }
+  }
+
+  return subtitles;
+}
+
+function parseTimestampToSeconds(timestamp: string): number {
+  const [hms, ms] = timestamp.split(',');
+  const [h, m, s] = hms.split(':').map(Number);
+  return h * 3600 + m * 60 + s + (Number(ms) / 1000);
+}
