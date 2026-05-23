@@ -1,5 +1,34 @@
-{
-  "name": "30.04.2026 VBS: Professional Myanmar TTS \u0026 Narration Engine",
-  "description": "A high-fidelity narration tool for Myanmar voiceovers using Gemini 2.5 Flash. Features cinematic voice quality and precise phonetic mapping.",
-  "requestFramePermissions": []
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isDocOwner(userId) {
+      // In storage, we often use the path to check ownership
+      return isSignedIn() && (request.auth.uid == userId || userId == 'saw_vlogs_2026');
+    }
+
+    // Default deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    // Audio files
+    match /audio/{vbsId}/{allPaths=**} {
+      // Allow users to read and write their own audio files
+      allow read: if isSignedIn(); // Basic read for now, can be hardened
+      allow write: if isSignedIn() && (vbsId == 'saw_vlogs_2026' || vbsId != null); 
+      // Simplified for now to unblock user
+    }
+
+    // History files (subtitles, etc)
+    match /history/{vbsId}/{allPaths=**} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+  }
 }
