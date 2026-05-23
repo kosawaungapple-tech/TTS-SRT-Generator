@@ -1,4 +1,4 @@
-import { db, addDoc, collection, doc, updateDoc, getDoc, serverTimestamp, handleFirestoreError, OperationType, getCurrentUserId } from '../firebase';
+import { db, addDoc, collection, doc, updateDoc, getDoc, serverTimestamp, handleFirestoreError, OperationType, auth } from '../firebase';
 import { ActivityLog, VBSUserControl } from '../types';
 
 /**
@@ -6,10 +6,9 @@ import { ActivityLog, VBSUserControl } from '../types';
  * Wrapped in robust try/catch to prevent breaking the caller.
  */
 export const logActivity = async (vbsId: string, type: ActivityLog['type'], details: string) => {
-  // Guard: Never write with anonymous or null user
-  const userId = getCurrentUserId();
-  if (!userId) {
-    console.warn('[VBS] Skipping activity log — user not authenticated or anonymous');
+  // Guard: Must be signed in to Firebase to write (Anonymous sign-in happens in App.tsx)
+  if (!auth.currentUser) {
+    console.warn('Skipping activity log: Firebase auth not ready yet.');
     return;
   }
 
@@ -36,9 +35,6 @@ export const logActivity = async (vbsId: string, type: ActivityLog['type'], deta
 
     // 2. Update summary in user_controls
     try {
-      // Owner bypass for usage tracking
-      if (vbsId === 'saw_vlogs_2026') return;
-
       const userRef = doc(db, 'user_controls', vbsId);
       const userDoc = await getDoc(userRef);
       

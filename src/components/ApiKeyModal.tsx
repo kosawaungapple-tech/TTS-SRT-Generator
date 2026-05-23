@@ -8,7 +8,6 @@ interface ApiKeyModalProps {
   onClose: () => void;
   role?: 'admin' | 'user' | string;
   membershipStatus?: 'standard' | 'premium' | null;
-  vbsId?: string | null;
 }
 
 export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role, membershipStatus }) => {
@@ -19,6 +18,8 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role,
   const [adminChannels, setAdminChannels] = useState<ApiChannel[]>([]);
   const [userChannel, setUserChannel] = useState<ApiChannel | null>(null);
   const [settings, setSettings] = useState(apiChannelManager.getSettings());
+  const [activeSource, setActiveSource] = useState(apiChannelManager.getActiveSourceInfo());
+  
   const [newKey, setNewKey] = useState('');
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
 
@@ -27,10 +28,18 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role,
       setAdminChannels(apiChannelManager.getAdminChannels());
       setUserChannel(apiChannelManager.getUserChannel());
       setSettings(apiChannelManager.getSettings());
+      setActiveSource(apiChannelManager.getActiveSourceInfo());
     };
 
     if (isOpen) {
       handleUpdate();
+      
+      // Force disable useAdminKeys if user is not premium and it was somehow enabled
+      const currentSettings = apiChannelManager.getSettings();
+      if (!isPremium && currentSettings.useAdminKeys) {
+        apiChannelManager.updateSettings({ useAdminKeys: false });
+        setSettings({ ...currentSettings, useAdminKeys: false });
+      }
     }
 
     window.addEventListener('storage', handleUpdate);
@@ -68,12 +77,10 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role,
     setSettings(apiChannelManager.getSettings());
   };
 
-  const handleModeChange = (mode: 'admin' | 'personal') => {
-    const newVal = mode === 'admin';
+  const handleToggleUseAdminKeys = () => {
+    const newVal = !settings.useAdminKeys;
     apiChannelManager.updateSettings({ useAdminKeys: newVal });
     setSettings(prev => ({ ...prev, useAdminKeys: newVal }));
-    localStorage.setItem("useAdminKeyPool", JSON.stringify(newVal));
-    localStorage.setItem("keyMode", mode);
   };
 
   const toggleShowKey = (id: string) => {
@@ -187,67 +194,65 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role,
 
               {/* PREFERENCES & USER VIEW */}
               <div className="space-y-6">
-                 <div className="space-y-2">
-                   <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-2">API Key Mode</label>
-                   <div className="flex bg-slate-100 dark:bg-slate-950 rounded-[18px] overflow-hidden p-1 border border-slate-200 dark:border-slate-800 shadow-inner">
-                     <button 
-                        onClick={() => handleModeChange('admin')}
-                        className={`flex-1 py-3 text-xs font-black uppercase tracking-tight transition-all rounded-[14px] ${settings.useAdminKeys ? 'bg-[#F5C518] text-black shadow-lg shadow-amber-400/20' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 opacity-60'}`}
-                     >
-                        Admin Pool
-                     </button>
-                     <button 
-                        onClick={() => handleModeChange('personal')}
-                        className={`flex-1 py-3 text-xs font-black uppercase tracking-tight transition-all rounded-[14px] ${!settings.useAdminKeys ? 'bg-[#F5C518] text-black shadow-lg shadow-amber-400/20' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 opacity-60'}`}
-                     >
-                        Personal Key
-                     </button>
+                 <div className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${
+                   !settings.allowSharedKeys || !isPremium 
+                     ? 'opacity-50 grayscale' 
+                     : 'bg-brand-purple/5 border-brand-purple/20'
+                 } ${!settings.allowSharedKeys ? 'pointer-events-none' : ''}`}>
+                   <div>
+                      <h4 className="text-sm font-bold text-slate-800 dark:text-white">Use Admin Key Pool</h4>
+                      <p className="text-[10px] text-slate-500 font-medium">Auto-switch to premium admin keys if personal key reaches limit.</p>
+                      {!isPremium && (
+                        <p className="text-[10px] text-amber-600 dark:text-amber-500 font-bold mt-1.5 flex items-center gap-1.5">
+                          <ShieldCheck size={10} />
+                          Premium အသုံးပြုသူများသာ အသုံးပြုနိုင်သည်
+                        </p>
+                      )}
                    </div>
+                   <button
+                      onClick={handleToggleUseAdminKeys}
+                      disabled={!settings.allowSharedKeys || !isPremium}
+                      className={`w-12 h-6 rounded-full transition-all relative ${
+                        settings.useAdminKeys && settings.allowSharedKeys && isPremium 
+                          ? 'bg-brand-purple' 
+                          : 'bg-slate-300 dark:bg-slate-700'
+                      } ${!isPremium ? 'cursor-not-allowed opacity-50' : ''}`}
+                   >
+                      <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${
+                        settings.useAdminKeys && settings.allowSharedKeys && isPremium ? 'left-7' : 'left-1'
+                      }`} />
+                   </button>
                  </div>
 
-                 {/* Key Connection Status Indicator */}
-                 <div className="px-1 pt-1">
-                    {settings.useAdminKeys ? (
-                      <div className="flex flex-col gap-0.5">
-                        <div className="flex items-center gap-2 py-1">
-                          <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
+                 {/* Key Connection Status Badge */}
+                 <div className="px-1 pt-1 opacity-90">
+                    {activeSource ? (
+                       <div className="flex items-center gap-2 py-1">
+                          <div className={`w-2 h-2 rounded-full animate-pulse bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]`} />
                           <span className="text-[11px] font-bold text-emerald-500">
-                             ✓ Admin Key Pool သုံးနေသည်
+                             {activeSource.isShared ? '✓ Connected via Admin Key Pool' : '✓ Connected via Personal Key'}
                           </span>
-                        </div>
-                        <p className="text-[10px] text-slate-500 font-medium pl-3.5">Auto-rotate between {adminChannels.length || 5} admin keys</p>
-                      </div>
+                       </div>
                     ) : (
-                      <div className="flex items-center gap-2 py-1">
-                        {userChannel ? (
-                          <>
-                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
-                            <span className="text-[11px] font-bold text-emerald-500">✓ Personal Key သုံးနေသည်</span>
-                          </>
-                        ) : (
-                          <>
-                            <div className="w-1.5 h-1.5 rounded-full bg-[#F5C518] shadow-[0_0_8px_rgba(245,197,24,0.4)]" />
-                            <span className="text-[11px] font-bold text-[#F5C518]">⚠ Personal Key မထည့်ရသေးပါ</span>
-                          </>
-                        )}
-                      </div>
+                       <div className="flex items-center gap-2 py-1">
+                          <div className="w-2 h-2 rounded-full bg-rose-500 animate-pulse shadow-[0_0_8px_rgba(244,63,94,0.5)]" />
+                          <span className="text-[11px] font-bold text-rose-500">
+                             ✗ No API Key Connected
+                          </span>
+                       </div>
                     )}
                  </div>
 
-                 {!isAdmin && !settings.useAdminKeys && (
-                   <motion.div 
-                     initial={{ opacity: 0, y: 10 }}
-                     animate={{ opacity: 1, y: 0 }}
-                     className="space-y-4 pt-2"
-                   >
+                 {!isAdmin && (
+                   <div className="space-y-4">
                      <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">Personal Channel</label>
                      {userChannel ? (
-                        <div className="p-5 bg-slate-50 dark:bg-slate-900 rounded-[28px] border border-slate-200 dark:border-slate-800 flex items-center justify-between group">
+                        <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 flex items-center justify-between">
                            <div className="flex-1 truncate pr-4">
-                              <span className="text-xs font-bold block mb-1 text-slate-700 dark:text-slate-200">Personal Gemini Key</span>
+                              <span className="text-xs font-bold block mb-1 text-slate-700 dark:text-slate-200">Personal Key</span>
                               <div className="font-mono text-[11px] text-slate-400">{maskKey(userChannel.key)}</div>
                            </div>
-                           <button onClick={() => { apiChannelManager.clearUserChannel(); setUserChannel(null); }} className="p-3 bg-rose-500/10 text-rose-500 rounded-xl hover:bg-rose-500 hover:text-white transition-all"><Trash2 size={16} /></button>
+                           <button onClick={() => { apiChannelManager.clearUserChannel(); setUserChannel(null); }} className="p-2 text-slate-400 hover:text-rose-500"><Trash2 size={16} /></button>
                         </div>
                      ) : (
                         <div className="flex gap-2">
@@ -256,12 +261,12 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role,
                              value={newKey}
                              onChange={(e) => setNewKey(e.target.value)}
                              placeholder="Enter personal Gemini key..."
-                             className="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-5 py-3 text-sm focus:ring-2 focus:ring-[#F5C518]/20 outline-none transition-all"
+                             className="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-2.5 text-sm"
                            />
-                           <button onClick={handleSetUserChannel} className="bg-[#F5C518] text-black px-6 rounded-xl font-black text-sm hover:scale-105 active:scale-95 transition-all shadow-lg shadow-[#F5C518]/20"><Plus size={22} /></button>
+                           <button onClick={handleSetUserChannel} className="bg-brand-purple text-white px-4 rounded-xl font-bold text-sm"><Plus size={18} /></button>
                         </div>
                      )}
-                   </motion.div>
+                   </div>
                  )}
               </div>
 

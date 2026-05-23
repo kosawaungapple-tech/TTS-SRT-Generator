@@ -6,9 +6,6 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { translateError } from '../utils/errorUtils';
 import { estimateMyanmarDuration, formatMyanmarDuration } from '../utils/audioUtils';
 
-import { VBSUserControl } from '../types';
-import { checkAndDeductCredits } from '../services/creditService';
-
 interface ContentInputProps {
   text: string;
   setText: (text: string) => void;
@@ -19,9 +16,6 @@ interface ContentInputProps {
   speed: number;
   hasResult?: boolean;
   isAdmin: boolean;
-  userControl: VBSUserControl | null;
-  isSharedKey: boolean;
-  rewriteCost?: number;
 }
 
 export const ContentInput: React.FC<ContentInputProps> = ({ 
@@ -33,10 +27,7 @@ export const ContentInput: React.FC<ContentInputProps> = ({
   retryCountdown,
   speed,
   hasResult,
-  isAdmin,
-  userControl,
-  isSharedKey,
-  rewriteCost = 0.5
+  isAdmin
 }) => {
   const { language, t } = useLanguage();
   const [isRewriting, setIsRewriting] = useState(false);
@@ -98,16 +89,6 @@ export const ContentInput: React.FC<ContentInputProps> = ({
 
     const runRewrite = async (attempt: number): Promise<void> => {
       try {
-        // Credit Check - Only if using shared admin key
-        if (!isAdmin && isSharedKey && userControl?.vbsId) {
-          const creditResult = await checkAndDeductCredits(userControl.vbsId, 'rewrite');
-          if (!creditResult.success) {
-            showToast(creditResult.message || "Credit ကုန်ဆုံးသွားပါပြီ။", 'error');
-            setIsRewriting(false);
-            return;
-          }
-        }
-
         const gemini = new GeminiTTSService(trimmedApiKey, isAdmin);
         const rewrittenText = await gemini.rewriteContent(text, style);
         
@@ -269,17 +250,7 @@ export const ContentInput: React.FC<ContentInputProps> = ({
             )}
             {isRewriting 
               ? (currentStatus === 'cooling' ? `${t('generate.coolingDown')} (${currentCountdown}s)` : t('generate.rewriting')) 
-              : (
-                <div className="flex items-center gap-2">
-                  <Sparkles size={16} />
-                  {t('generate.rewriteBtn')}
-                  {!isAdmin && (
-                    <span className="text-[9px] bg-white/20 px-1.5 py-0.5 rounded font-black tracking-tighter">
-                      {isSharedKey ? `${rewriteCost} Cred` : 'FREE'}
-                    </span>
-                  )}
-                </div>
-              )}
+              : t('generate.rewriteBtn')}
           </motion.button>
 
           {/* Style Selector Popup */}
