@@ -685,83 +685,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setNewPassword(password);
   };
 
-  // Sync with singleton state changes
-  useEffect(() => {
-    const handleSync = () => {
-      setAdminChannels(apiChannelManager.getAdminChannels());
-      setChannelSettings(apiChannelManager.getSettings());
-    };
-    
-    const unsubscribe = apiChannelManager.subscribe(handleSync);
-    window.addEventListener('storage', handleSync);
-    
-    // Initial sync
-    handleSync();
-    
-    return () => {
-      unsubscribe();
-      window.removeEventListener('storage', handleSync);
-    };
-  }, []);
-
-  const handleAddAdminChannel = async () => {
+  // Channel Handlers
+  const handleAddAdminChannel = () => {
     if (!newAdminKey.trim()) return;
-    const success = await apiChannelManager.addAdminChannel(newAdminKey);
-    if (success) {
-      setNewAdminKey('');
-    } else {
-      setToast({ message: 'Failed to add key to Firestore', type: 'error', isVisible: true });
-    }
+    apiChannelManager.addAdminChannel(newAdminKey);
+    setAdminChannels(apiChannelManager.getAdminChannels());
+    setNewAdminKey('');
   };
 
-  const handleDeleteAdminChannel = async (id: string) => {
-    const success = await apiChannelManager.deleteAdminChannel(id);
-    if (!success) {
-      setToast({ message: 'Failed to delete key from Firestore', type: 'error', isVisible: true });
-    } else {
-      // Sync the potentially updated shared list to Firestore
-      const updatedSettings = apiChannelManager.getSettings();
-      try {
-        await setDoc(doc(db, 'settings', 'global'), {
-          sharedChannelIds: updatedSettings.sharedChannelIds,
-          updatedAt: serverTimestamp()
-        }, { merge: true });
-      } catch (err) {
-        console.error("Failed to sync shared channel list after deletion:", err);
-      }
-    }
+  const handleDeleteAdminChannel = (id: string) => {
+    apiChannelManager.deleteAdminChannel(id);
+    setAdminChannels(apiChannelManager.getAdminChannels());
+    setChannelSettings(apiChannelManager.getSettings());
   };
 
-  const handleToggleAdminKeySharing = async () => {
+  const handleToggleAdminKeySharing = () => {
     const newVal = !channelSettings.allowSharedKeys;
     apiChannelManager.updateSettings({ allowSharedKeys: newVal });
     setChannelSettings(prev => ({ ...prev, allowSharedKeys: newVal }));
-    
-    // Sync to Firestore global settings
-    try {
-      await setDoc(doc(db, 'settings', 'global'), {
-        allow_admin_keys: newVal,
-        updatedAt: serverTimestamp()
-      }, { merge: true });
-    } catch (err) {
-      console.error("Failed to sync admin key sharing toggle to Firestore:", err);
-    }
   };
 
-  const handleToggleSpecificChannelSharing = async (id: string) => {
+  const handleToggleSpecificChannelSharing = (id: string) => {
     apiChannelManager.toggleSharedChannel(id);
-    const updatedSettings = apiChannelManager.getSettings();
-    setChannelSettings(updatedSettings);
-    
-    // Sync to Firestore global settings
-    try {
-      await setDoc(doc(db, 'settings', 'global'), {
-        sharedChannelIds: updatedSettings.sharedChannelIds,
-        updatedAt: serverTimestamp()
-      }, { merge: true });
-    } catch (err) {
-      console.error("Failed to sync shared channel IDs to Firestore:", err);
-    }
+    setChannelSettings(apiChannelManager.getSettings());
   };
 
   const handleCreateId = async (e: React.FormEvent) => {

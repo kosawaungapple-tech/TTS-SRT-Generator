@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Upload, FileVideo, CheckCircle2, AlertCircle, Sparkles, Trash2, ShieldCheck, Lock } from 'lucide-react';
 import { GeminiTTSService } from '../services/geminiService';
-import { apiChannelManager } from '../services/apiChannelManager';
 import { logActivity } from '../services/activityService';
 import { translateError } from '../utils/errorUtils';
 import { VBSUserControl } from '../types';
@@ -176,8 +175,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
         }
       }
 
-      const useManaged = isAdmin || apiChannelManager.getSettings().useAdminKeys;
-      const gemini = new GeminiTTSService(useManaged ? '' : apiKey, isAdmin);
+      const gemini = new GeminiTTSService(apiKey, isAdmin);
       
       // Step 1: Transcribe using File API (Unified multi-step upload)
       const transcription = await gemini.transcribeVideoFile(videoFile);

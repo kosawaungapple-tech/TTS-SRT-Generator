@@ -55,7 +55,6 @@ export interface GlobalSettings {
   elevenlabs_key_5?: string;
   allow_elevenlabs?: boolean;
   allow_admin_keys: boolean; // Toggle to allow users to use admin keys
-  sharedChannelIds?: string[]; // IDs of admin keys allowed in shared pool
   allow_video_recap_admin_key?: boolean; // New gate for video recap
   allow_thumbnail_admin_key?: boolean; // New gate for thumbnail
   total_generations: number;
@@ -141,20 +140,15 @@ export interface TTSConfig {
 
 export interface AudioResult {
   audioUrl: string; // Blob URL for local preview
-  audioData: string; // base64 for download/upload (WAV/MP3 format)
-  pcmData?: string; // raw base64 PCM for merging/processing
+  audioData: string; // base64 for download/upload
   rawAudio?: ArrayBuffer; // Raw binary data to avoid base64 corruption
-  baseAudio?: ArrayBuffer; // ORIGINAL unprocessed audio for re-rendering effects
   srtContent: string;
   subtitles: SRTSubtitle[];
   baseDuration: number; // Actual duration of the generated audio file (already speed-adjusted)
   oneXDuration: number; // Normalized duration at 1.0x speed for estimation
   speed: number; // Speed at which it was generated
-  pitch?: number;
-  volume?: number;
   duration: number; // Duration in seconds
   isLoadingPartial?: boolean; // Flag to indicate more chunks are coming
-  isFallback?: boolean; // Flag to indicate fallback logic was used
 }
 
 export interface ActivityLog {
