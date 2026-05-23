@@ -55,7 +55,6 @@ export interface GlobalSettings {
   elevenlabs_key_5?: string;
   allow_elevenlabs?: boolean;
   allow_admin_keys: boolean; // Toggle to allow users to use admin keys
-  sharedChannelIds?: string[]; // IDs of admin keys allowed in shared pool
   allow_video_recap_admin_key?: boolean; // New gate for video recap
   allow_thumbnail_admin_key?: boolean; // New gate for thumbnail
   total_generations: number;
