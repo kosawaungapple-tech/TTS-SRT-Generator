@@ -194,6 +194,59 @@ export function generateSubtitlesFromTimestamps(text: string, totalDuration: num
   return subtitles;
 }
 
+export function generateSRT(subtitles: SRTSubtitle[]): string {
+  return subtitles
+    .map(s => {
+      // Ensure strict format: Index\r\nTime --> Time\r\nText\r\n\r\n
+      // formatTime already produces HH:MM:SS,mmm
+      const startTime = s.startTime.replace('.', ',');
+      const endTime = s.endTime.replace('.', ',');
+      return `${s.index}\r\n${startTime} --> ${endTime}\r\n${s.text}\r\n`;
+    })
+    .join('\r\n');
+}
+
+export function generateASS(subtitles: SRTSubtitle[]): string {
+  const header = `[Script Info]\r\nScriptType: v4.00+\r\n\r\n[V4+ Styles]\r\nFormat: Name,Fontname,Fontsize\r\nStyle: Default,Arial,20\r\n\r\n[Events]\r\nFormat: Layer,Start,End,Style,Text\r\n`;
+  
+  const formatASSTime = (timeStr: string) => {
+    // Input is HH:MM:SS,mmm
+    const [hms, ms] = timeStr.split(',');
+    const [h, m, s] = hms.split(':');
+    const centiseconds = Math.floor(parseInt(ms) / 10).toString().padStart(2, '0');
+    // ASS format often drops leading zero on hours if it's 0, but H:MM:SS.CC is standard
+    return `${parseInt(h)}:${m}:${s}.${centiseconds}`;
+  };
+
+  const lines = subtitles.map(s => {
+    const startTime = formatASSTime(s.startTime);
+    const endTime = formatASSTime(s.endTime);
+    // Remove \r\n from text for ASS and replace with \N if needed, 
+    // but usually 1 line is enough or \N for line breaks.
+    const cleanText = s.text.replace(/\r\n/g, '\\N').replace(/\n/g, '\\N');
+    return `Dialogue: 0,${startTime},${endTime},Default,${cleanText}`;
+  });
+
+  return header + lines.join('\r\n');
+}
+
+export function generateLRC(subtitles: SRTSubtitle[]): string {
+  const formatLRCTime = (timeStr: string) => {
+    // Input is HH:MM:SS,mmm
+    const [hms, ms] = timeStr.split(',');
+    const [h, m, s] = hms.split(':');
+    const totalMinutes = parseInt(h) * 60 + parseInt(m);
+    const centiseconds = Math.floor(parseInt(ms) / 10).toString().padStart(2, '0');
+    return `[${totalMinutes.toString().padStart(2, '0')}:${s}.${centiseconds}]`;
+  };
+
+  return subtitles.map(s => {
+    const startTime = formatLRCTime(s.startTime);
+    const cleanText = s.text.replace(/\r\n/g, ' ').replace(/\n/g, ' ');
+    return `${startTime}${cleanText}`;
+  }).join('\r\n');
+}
+
 function parseTimestampToSeconds(timestamp: string): number {
   const [hms, ms] = timestamp.split(',');
   const [h, m, s] = hms.split(':').map(Number);

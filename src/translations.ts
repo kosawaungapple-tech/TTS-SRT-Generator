@@ -44,8 +44,8 @@ export const translations = {
   generate: {
     inputTitle: { en: "Narration Script", mm: "ဇာတ်လမ်းစာသား" },
     inputPlaceholder: { en: "Type or paste your story content here...", mm: "ဇာတ်လမ်းစာသားများကို ဤနေရာတွင် ရိုက်ထည့်ပါ သို့မဟုတ် ကူးထည့်ပါ..." },
-    generateBtn: { en: "Generate Voiceover", mm: "AI အသံထုတ်ယူမည်" },
-    generating: { en: "Generating...", mm: "🔊 အသံဖိုင် ဖန်တီးနေသည်..." },
+    generateBtn: { en: "Instant Preview (Free)", mm: "အသံစမ်းသပ် နားထောင်မည်" },
+    generating: { en: "Preparing Preview...", mm: "🔊 အသံစမ်းသပ်ရန် ပြင်ဆင်နေသည်..." },
     saveToHistory: { en: "Save to History", mm: "မှတ်တမ်းသိမ်းဆည်းမည်" },
     saveToHistoryDesc: { en: "Keep a record of this generation for later access", mm: "နောင်ပြန်လည်အသုံးပြုနိုင်ရန် ဤမှတ်တမ်းကို သိမ်းဆည်းထားမည်" },
     contentStudio: { en: "Content Studio", mm: "Content Studio" },
@@ -152,9 +152,9 @@ export const translations = {
     generating: { en: "AI Narrator is crafting your voice...", mm: "🔊 အသံဖိုင် ဖန်တီးနေသည်..." },
     tuning: { en: "Fine-tuning the cinematic tone and synchronizing every millisecond.", mm: "အသံနေအထားနှင့် အချိန်ကိုက်မှုများကို အကောင်းဆုံးဖြစ်အောင် ချိန်ညှိနေပါသည်။" },
     emptyTitle: { en: "Output Preview", mm: "Output Preview" },
-    emptySubtitle: { en: "Generated audio and subtitles will appear here after you click generate.", mm: "အသံနှင့် စာတန်းထိုးများကို ထုတ်ယူပြီးပါက ဤနေရာတွင် မြင်တွေ့ရမည်ဖြစ်သည်။" },
+    emptySubtitle: { en: "Instant preview and subtitles will appear here after you click generate.", mm: "အသံစမ်းသပ်မှုနှင့် စာတန်းထိုးများကို ဤနေရာတွင် မြင်တွေ့ရမည်ဖြစ်သည်။" },
     srtPreview: { en: "Subtitle Preview (SRT)", mm: "စာတန်းထိုး နမူနာ (SRT)" },
-    downloadMp3: { en: "Download MP3", mm: "MP3 ရယူမည်" },
+    downloadMp3: { en: "Bake & Download", mm: "အချောသတ်၍ ရယူမည်" },
     downloadSrt: { en: "Download SRT", mm: "SRT ရယူမည်" }
   },
 

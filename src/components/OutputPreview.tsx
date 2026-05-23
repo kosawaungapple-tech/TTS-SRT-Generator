@@ -4,10 +4,14 @@ import { Headphones, Play, Pause, FileText, Music, RefreshCw, Sparkles, Clipboar
 import { AudioResult } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { formatTime, formatMyanmarDuration, pcmToMp3 } from '../utils/audioUtils';
+import { webSpeechService } from '../services/webSpeechService';
+import { generateSRT, generateASS, generateLRC } from '../utils/subtitleUtils';
 
 interface OutputPreviewProps {
   result: AudioResult | null;
   isLoading: boolean;
+  isBaking?: boolean;
+  onBake?: () => void;
   globalVolume?: number;
   engineStatus?: 'ready' | 'cooling' | 'limit';
   retryCountdown?: number;
@@ -49,6 +53,8 @@ const LoadingWaveform = () => {
 export const OutputPreview: React.FC<OutputPreviewProps> = ({ 
   result, 
   isLoading, 
+  isBaking = false,
+  onBake,
   globalVolume,
   engineStatus = 'ready',
   retryCountdown = 0,
@@ -317,6 +323,28 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   }, [isPlaying, duration]);
 
   const togglePlay = async () => {
+    // 1. Check if we are in "Preview Mode" (Local Synthesis)
+    if (result && !result.audioUrl) {
+      if (isPlaying) {
+        webSpeechService.stop();
+        setIsPlaying(false);
+      } else {
+        setIsPlaying(true);
+        // Extract text from subtitles or result if available
+        const textToSpeak = result.subtitles.map(s => s.text).join(' ');
+        webSpeechService.speak(textToSpeak, { 
+          speed: result.speed, 
+          pitch: result.pitch || 0, 
+          volume: result.volume || 0,
+          voiceId: ''
+        }).then(() => {
+          setIsPlaying(false);
+          setCurrentTime(0);
+        });
+      }
+      return;
+    }
+
     if (isFallback) {
       if (!fallbackAudioRef.current) return;
       
@@ -383,6 +411,13 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
 
   const handleDownloadAudio = async () => {
     if (!result) return;
+    
+    // If audio is not baked yet, trigger baking
+    if (!result.audioData) {
+      if (onBake) onBake();
+      return;
+    }
+
     try {
       showToast(t('output.tuning'), 'success');
       
@@ -416,26 +451,21 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
     }
   };
 
-  const downloadFile = (content: string | Blob, fileName: string) => {
-    let blob: Blob;
-    if (typeof content === 'string') {
-      if (fileName.endsWith('.srt')) {
-        // Ensure Windows line endings (CRLF) and pure text/plain without BOM
-        const sanitizedContent = content.replace(/\r?\n/g, '\r\n');
-        blob = new Blob([sanitizedContent], { type: 'text/plain;charset=utf-8' });
-      } else {
-        blob = new Blob([content], { type: 'text/plain' });
-      }
-    } else {
-      blob = content;
-    }
+  const downloadFile = (content: string, fileName: string, mimeType: string = 'text/plain;charset=utf-8') => {
+    // Strict formatting for SRT/ASS/LRC
+    // 1. CRLF line endings
+    const sanitizedContent = content.replace(/\r?\n/g, '\r\n');
+    
+    // 2. UTF-8 without BOM (default Blob behavior)
+    const blob = new Blob([sanitizedContent], { type: mimeType });
     
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = fileName.toLowerCase(); // Ensure lowercase .srt
+    a.download = fileName;
     a.click();
     URL.revokeObjectURL(url);
+    showToast(`Downloaded ${fileName}`, 'success');
   };
 
   const handleCopy = async (textToCopy: string, type: 'srt' | 'text') => {
@@ -640,18 +670,59 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
               <div className="grid grid-cols-1 gap-4">
                 <button
                   onClick={handleDownloadAudio}
-                  className="flex items-center justify-center gap-4 py-6 bg-amber-400 text-black rounded-[24px] font-black uppercase tracking-widest hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-amber-400/5 group"
+                  disabled={isBaking}
+                  className={`flex items-center justify-center gap-4 py-6 rounded-[24px] font-black uppercase tracking-widest transition-all shadow-xl group ${
+                    !result.audioData 
+                      ? 'bg-brand-purple text-white hover:scale-[1.02] active:scale-[0.98]' 
+                      : 'bg-amber-400 text-black hover:scale-[1.02] active:scale-[0.98]'
+                  }`}
                 >
-                  <Music size={24} />
-                  {t('output.downloadMp3')}
+                  {isBaking ? (
+                    <RefreshCw size={24} className="animate-spin" />
+                  ) : !result.audioData ? (
+                    <Sparkles size={24} />
+                  ) : (
+                    <Music size={24} />
+                  )}
+                  {isBaking ? "Baking Audio..." : !result.audioData ? "Bake & Download (AI)" : t('output.downloadMp3')}
                 </button>
                 <button
-                  onClick={() => downloadFile(currentSrt, `vlogs-by-saw-subs.srt`)}
+                  onClick={() => {
+                    if (result) {
+                      const srt = generateSRT(result.subtitles);
+                      downloadFile(srt, `audio-subs-universal.srt`);
+                    }
+                  }}
                   className="flex items-center justify-center gap-4 py-6 bg-white/5 text-white rounded-[24px] font-black uppercase tracking-widest border border-white/10 hover:bg-white/10 transition-all group"
                 >
                   <FileText size={24} />
-                  {t('output.downloadSrt')}
+                  Download SRT (Universal)
                 </button>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <button
+                    onClick={() => {
+                      if (result) {
+                        const ass = generateASS(result.subtitles);
+                        downloadFile(ass, `audio-subs-ios.ass`);
+                      }
+                    }}
+                    className="flex items-center justify-center gap-3 py-4 bg-white/5 text-slate-300 rounded-[20px] font-black uppercase tracking-widest border border-white/10 hover:bg-white/10 transition-all text-xs"
+                  >
+                    iOS ASS
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (result) {
+                        const lrc = generateLRC(result.subtitles);
+                        downloadFile(lrc, `audio-lyrics.lrc`);
+                      }
+                    }}
+                    className="flex items-center justify-center gap-3 py-4 bg-white/5 text-slate-300 rounded-[20px] font-black uppercase tracking-widest border border-white/10 hover:bg-white/10 transition-all text-xs"
+                  >
+                    LRC Lyrics
+                  </button>
+                </div>
               </div>
             </div>
 

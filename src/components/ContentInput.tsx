@@ -337,6 +337,21 @@ export const ContentInput: React.FC<ContentInputProps> = ({
         </div>
       )}
 
+      {/* Workflow Explanation Notice */}
+      <div className="mt-8 bg-brand-purple/5 border border-brand-purple/20 rounded-2xl p-4 sm:p-5 flex items-start gap-4">
+        <Sparkles size={20} className="text-brand-purple shrink-0 mt-0.5" />
+        <div className="space-y-1">
+          <p className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white leading-snug">
+            {language === 'mm' ? 'လက်တလော အသံနားထောင်ခြင်း (Instant Preview) စနစ်' : 'Instant Web Speech Preview Active'}
+          </p>
+          <p className="text-[10px] sm:text-[11px] text-slate-500 font-medium leading-relaxed">
+            {language === 'mm' 
+              ? 'Rate Limit မရှိစေရန် အသံကို ပထမဦးစွာ Browser ဖြင့် အခမဲ့နားထောင်နိုင်ပါသည်။ စိတ်ကြိုက်ဖြစ်ပါက AI ဖြင့် အချောသတ် "Bake" ပြီးမှ Download ရယူပါ။' 
+              : 'Listen to an instant preview using your browser vocals (No limits). When ready, click "Bake" to generate high-quality AI audio for download.'}
+          </p>
+        </div>
+      </div>
+
       <div className="mt-8 flex items-center justify-between">
         <div className="flex-1">
           {currentStatus === 'limit' && (

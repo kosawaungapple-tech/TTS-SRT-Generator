@@ -16,14 +16,13 @@ import { TermsOfService } from './components/TermsOfService';
 import { AnnouncementPanel } from './components/AnnouncementPanel';
 import { Modal, ModalType } from './components/Modal';
 import { GeminiTTSService } from './services/geminiService';
+import { webSpeechService } from './services/webSpeechService';
 import { apiChannelManager } from './services/apiChannelManager';
 import { logActivity } from './services/activityService';
 import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, SystemConfig, VBSUserControl, Announcement } from './types';
-import { checkAndDeductCredits } from './services/creditService';
 import { DEFAULT_RULES } from './constants';
 import { useLanguage } from './contexts/LanguageContext';
 import { formatDate } from './utils/dateUtils';
-import { translateError } from './utils/errorUtils';
 import { pcmToWav, formatMyanmarDuration, renderProcessedAudio } from './utils/audioUtils';
 import { generateOptimizedSubtitles } from './utils/subtitleUtils';
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId } from './firebase';
@@ -47,6 +46,7 @@ export default function App() {
   });
   const [outputConfig, setOutputConfig] = useState({ speed: 1.0, pitch: 0, volume: 0 });
   const [isLoading, setIsLoading] = useState(false);
+  const [isBaking, setIsBaking] = useState(false);
   const [isProcessingSpeed, setIsProcessingSpeed] = useState(false);
   const [result, setResult] = useState<AudioResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -867,261 +867,205 @@ export default function App() {
 
   const handleGenerate = async () => {
     setOutputConfig({ speed: config.speed, pitch: config.pitch, volume: config.volume });
-    console.log("App: Generate Voice Button Clicked");
+    console.log("App: Using Web Speech for instant preview...");
     
     if (!text.trim()) {
       setError('Please enter some text to generate voiceover.');
       return;
     }
 
-    // [SINGLE-PASS ESTIMATION - COMMANDER ORDER]
-    // Gemini 1.5 Flash uses single-pass with no recursive sync loops
-    const effectiveKey = getEffectiveApiKey();
-    
-    if (!effectiveKey || !effectiveKey.trim()) {
-      console.warn("App: Generation blocked - No API Key found. Opening settings modal.");
-      openModal({
-        title: 'API Key Required',
-        message: t('generate.noApiKey'),
-        type: 'error',
-        confirmText: 'Open Settings',
-        onConfirm: () => setIsApiKeyModalOpen(true)
-      });
-      setError(t('generate.noApiKey'));
-      return;
-    }
-    
-    if (!text || text.trim().length === 0) {
-      showToast("ကျေးဇူးပြု၍ ပြောင်းလဲလိုသော စာသားကို အရင်ရိုက်ထည့်ပါ။ (Please enter text to convert.)", 'error');
-      return;
-    }
-    
     setIsLoading(true);
     setError(null);
     setResult(null);
-    setEngineStatus('ready');
 
-    console.log("App: Starting voiceover generation process with key...");
+    try {
+      const controller = new AbortController();
+      setAbortController(controller);
+      
+      // 1. Instantly play via Web Speech API (Free, No Rate Limits)
+      // Note: This provides immediate feedback to the user.
+      console.log("App: Triggering Web Speech preview...");
+      
+      // We still need an "AudioResult" to show the OutputPreview UI
+      const estimatedDuration = Math.max(1, text.length * 0.15 / config.speed);
+      const subtitles = generateOptimizedSubtitles(text, estimatedDuration);
+      
+      const mockResult: AudioResult = {
+        audioUrl: '', 
+        audioData: '',
+        srtContent: subtitles.map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join(''),
+        subtitles: subtitles,
+        baseDuration: estimatedDuration,
+        oneXDuration: estimatedDuration,
+        speed: config.speed,
+        pitch: config.pitch,
+        volume: config.volume,
+        duration: estimatedDuration,
+        isLoadingPartial: false
+      };
 
-    const activeInfo = apiChannelManager.getActiveSourceInfo();
-    const isShared = activeInfo?.isShared || false;
+      setResult(mockResult);
+      setIsLoading(false);
 
-    // Credit Check - Only if using shared admin key
-    // [CREDIT ENFORCEMENT - COMMANDER ORDER]
-    // Only check if using shared key and not admin
-    if (!isVbsAdmin && isShared && userControl?.vbsId) {
-      const creditResult = await checkAndDeductCredits(userControl.vbsId, 'tts');
-      if (!creditResult.success) {
-        showToast(creditResult.message || "Credit ကုန်ဆုံးသွားပါပြီ။", 'error');
-        return;
-      }
+      // Speak using native API
+      await webSpeechService.speak(text, config);
+      setAbortController(null);
+      
+    } catch (err: unknown) {
+      setAbortController(null);
+      const error = err as { message?: string, name?: string };
+      if (error.name === 'AbortError') return;
+      console.error("Web Speech preview failed:", err);
+      setError("Web Speech API error: " + (error.message || 'Unknown error'));
+      setIsLoading(false);
+    }
+  };
+
+  const handleBakeAudio = async () => {
+    if (!result || !text.trim()) return;
+    
+    setIsBaking(true);
+    setError(null);
+    
+    const effectiveKey = getEffectiveApiKey();
+    if (!effectiveKey) {
+      setIsApiKeyModalOpen(true);
+      setError(t('generate.noApiKey'));
+      setIsBaking(false);
+      return;
     }
 
-    const runGeneration = async (retryAttempt = 0): Promise<void> => {
-      try {
-        // if we have a local key or managed settings, let the service handle auto-switch/rotation
-        // by passing an empty key if it's managed by apiChannelManager
-        const useManaged = isAdminUser || apiChannelManager.getSettings().useAdminKeys;
-        const ttsService = new GeminiTTSService(useManaged ? '' : effectiveKey, isAdminUser);
-        
-        const currentController = new AbortController();
-        setAbortController(currentController);
+    try {
+      const ttsService = new GeminiTTSService(effectiveKey, isAdminUser);
+      console.log("App: Baking final audio for download via Gemini AI...");
+      
+      // Apply pronunciation rules
+      let processedText = text;
+      
+      // 1. Default Rules
+      DEFAULT_RULES.forEach(rule => {
+        const regex = new RegExp(rule.original, 'gi');
+        processedText = processedText.replace(regex, rule.replacement);
+      });
 
-        console.log("App: Applying pronunciation rules...");
-        let processedText = text;
-        
-        DEFAULT_RULES.forEach(rule => {
-          const regex = new RegExp(rule.original, 'gi');
-          processedText = processedText.replace(regex, rule.replacement);
-        });
-
-        globalRules.forEach(rule => {
-          const regex = new RegExp(rule.original, 'gi');
-          processedText = processedText.replace(regex, rule.replacement);
-        });
-        
-        customRules.split('\n').forEach((line) => {
-          const parts = line.split('->').map(p => p.trim());
-          if (parts.length === 2) {
-            const regex = new RegExp(parts[0], 'gi');
-            processedText = processedText.replace(regex, parts[1]);
-          }
-        });
-
-        // [CHUNKED GENERATION - PERFORMANCE OPTIMIZATION]
-        // Split into chunks and generate in parallel for much faster results
-        const generationPromise = ttsService.generateTTS(
-          processedText, 
-          { ...config },
-          (firstChunk) => {
-            // Callback: Play first chunk immediately for responsiveness
-            console.log("App: First chunk ready, setting temporary preview...");
-            // We only show this if the main result isn't ready yet
-            setResult(prev => prev ? prev : {
-              ...firstChunk,
-              isLoadingPartial: true 
-            } as AudioResult);
-          }
-        );
-
-        console.log(`App: Calling TTS service with parallel chunking logic...`);
-        
-        const audioResult = await generationPromise;
-        
-        // [SPEED, PITCH, VOLUME ADJUSTMENT - CRITICAL FIX]
-        let finalAudioResult = { ...audioResult };
-        if (config.speed !== 1.0 || config.pitch !== 0 || config.volume !== 0) {
-          setIsProcessingSpeed(true);
-          try {
-            console.log(`App: Processing audio effects (Speed: ${config.speed}x, Pitch: ${config.pitch}, Volume: ${config.volume}dB)...`);
-            // We use the base (original) audio for processing
-            const sourceBuffer = audioResult.baseAudio || audioResult.rawAudio;
-            if (!sourceBuffer) throw new Error("No source audio buffer for processing");
-            
-            const sourceBlob = new Blob([sourceBuffer], { type: 'audio/mpeg' });
-            const { blob: processedBlob, duration: finalDuration } = await renderProcessedAudio(sourceBlob, { 
-              speed: config.speed, 
-              pitch: config.pitch, 
-              volume: config.volume 
-            });
-            const finalUrl = URL.createObjectURL(processedBlob);
-            
-            // Re-generate subtitles for final duration
-            const finalSubtitles = generateOptimizedSubtitles(processedText, finalDuration);
-            const finalSrt = finalSubtitles.map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join('');
-            
-            // Convert blob to base64 for history/storage
-            const processedBuffer = await processedBlob.arrayBuffer();
-            
-            const reader = new FileReader();
-            const base64Promise = new Promise<string>((resolve) => {
-              reader.onloadend = () => {
-                const base64data = reader.result as string;
-                resolve(base64data.split(',')[1]);
-              };
-            });
-            reader.readAsDataURL(processedBlob);
-            const finalBase64 = await base64Promise;
-
-            finalAudioResult = {
-              ...audioResult,
-              audioUrl: finalUrl,
-              audioData: finalBase64,
-              rawAudio: processedBuffer, 
-              baseAudio: audioResult.baseAudio, // Preserve original
-              duration: finalDuration,
-              baseDuration: finalDuration, 
-              subtitles: finalSubtitles,
-              srtContent: finalSrt,
-              speed: config.speed,
-              pitch: config.pitch,
-              volume: config.volume
-            };
-          } catch (err) {
-            console.error("Audio processing failed:", err);
-          } finally {
-            setIsProcessingSpeed(false);
-          }
+      // 2. Global Rules (from Settings)
+      globalRules.forEach(rule => {
+        const regex = new RegExp(rule.original, 'gi');
+        processedText = processedText.replace(regex, rule.replacement);
+      });
+      
+      // 3. User Custom Rules
+      customRules.split('\n').forEach((line) => {
+        const parts = line.split('->').map(p => p.trim());
+        if (parts.length === 2) {
+          const regex = new RegExp(parts[0], 'gi');
+          processedText = processedText.replace(regex, parts[1]);
         }
+      });
 
-        // IMMEDIATE RELEASE: Show result before any DB writes
-        setResult(finalAudioResult);
-        setError(null);
-        setEngineStatus('ready');
-        setIsLoading(false); 
-        setAbortController(null);
-        
-        // BACKGROUND TASKS: Non-blocking
-        if (accessCode) {
-          logActivity(accessCode, 'tts', `Generated: ${text.substring(0, 50)}`).catch(() => {});
-        }
-
-        if (saveToHistory && accessCode) {
-          const saveHistory = async () => {
-            if (!getCurrentUserId()) {
-              console.warn('[VBS] Skipping history save — anonymous user');
-              return;
-            }
-            try {
-              const audioFileName = `audio/${accessCode}/${Date.now()}.mp3`;
-              const audioRef = ref(storage, audioFileName);
-              await uploadString(audioRef, finalAudioResult.audioData, 'base64');
-              const audioStorageUrl = await getDownloadURL(audioRef);
-
-              const srtFileName = `srt/${accessCode}/${Date.now()}.srt`;
-              const srtRef = ref(storage, srtFileName);
-              await uploadString(srtRef, finalAudioResult.srtContent);
-              const srtStorageUrl = await getDownloadURL(srtRef);
-
-              await addDoc(collection(db, 'history'), {
-                userId: accessCode,
-                text: text.length > 5000 ? text.substring(0, 5000) + '...' : text,
-                audioStorageUrl: audioStorageUrl,
-                srtStorageUrl: srtStorageUrl,
-                duration: finalAudioResult.duration,
-                config: { ...config },
-                createdAt: serverTimestamp(),
-              });
-
-              await updateDoc(doc(db, 'settings', 'global'), {
-                total_generations: (globalSettings.total_generations || 0) + 1
-              });
-
-              console.log("App: Generation saved to history successfully.");
-            } catch (err) {
-              console.error("App: Failed to save to history:", err);
-            }
-          };
-          saveHistory();
-        }
-      } catch (err: unknown) {
-        setIsLoading(false);
-        setAbortController(null);
-        
-        const error = err as { message?: string; name?: string; status?: number };
-
-        if (error.message === 'AbortError' || error.name === 'AbortError') {
-          console.log("App: Generation cancelled by user");
-          setEngineStatus('ready');
-          return;
-        }
-        if (error.message?.startsWith('TEXT_TOO_LONG')) {
-          const parts = error.message.split('|');
-          setError(`${t('generate.textTooLong')} (${parts[1]}/${parts[2]})`);
-          return;
-        }
-        
-        const isRateLimit = error.message === 'RATE_LIMIT_EXHAUSTED' || error.status === 429;
-        if (isRateLimit && retryAttempt < 1) {
+      const audioResult = await ttsService.generateTTS(
+        processedText, 
+        config, 
+        undefined, 
+        undefined, 
+        (seconds) => {
           setEngineStatus('cooling');
-          setRetryCountdown(10);
+          setRetryCountdown(seconds);
           const timer = setInterval(() => {
             setRetryCountdown(prev => {
-              if (prev <= 1) { clearInterval(timer); return 0; }
+              if (prev <= 1) { clearInterval(timer); setEngineStatus('ready'); return 0; }
               return prev - 1;
             });
           }, 1000);
-          setTimeout(() => runGeneration(retryAttempt + 1), 10000);
-          return;
         }
+      );
+      
+      // Apply effects
+      const sourceBlob = new Blob([audioResult.baseAudio || audioResult.rawAudio!], { type: 'audio/mpeg' });
+      const { blob: processedBlob, duration: finalDuration } = await renderProcessedAudio(sourceBlob, { 
+        speed: config.speed, 
+        pitch: config.pitch, 
+        volume: config.volume 
+      });
+      
+      const processedBuffer = await processedBlob.arrayBuffer();
+      const reader = new FileReader();
+      const base64Promise = new Promise<string>((resolve) => {
+        reader.onloadend = () => {
+          const base64data = reader.result as string;
+          resolve(base64data.split(',')[1]);
+        };
+      });
+      reader.readAsDataURL(processedBlob);
+      const finalBase64 = await base64Promise;
 
-        if (isRateLimit) {
-          setEngineStatus('limit');
-          setError(translateError(err, language));
-        } else {
-          setError(translateError(err, language));
-          showToast(translateError(err, language), 'error');
-        }
-      } 
-    };
+      const finalResult: AudioResult = {
+        ...audioResult,
+        audioUrl: URL.createObjectURL(processedBlob),
+        audioData: finalBase64,
+        rawAudio: processedBuffer, 
+        baseAudio: audioResult.baseAudio,
+        duration: finalDuration,
+        baseDuration: finalDuration, 
+        subtitles: generateOptimizedSubtitles(text, finalDuration),
+        srtContent: generateOptimizedSubtitles(text, finalDuration).map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join(''),
+        speed: config.speed,
+        pitch: config.pitch,
+        volume: config.volume
+      };
 
-    try {
-      await runGeneration();
-    } catch (criticalErr) {
-      console.error("Critical Generation Error:", criticalErr);
-      setError("A critical error occurred. Please try again.");
+      setResult(finalResult);
+      showToast("Audio baked successfully and ready for download!", 'success');
+
+      // BACKGROUND TASKS: Non-blocking History Save
+      if (accessCode) {
+        logActivity(accessCode, 'tts', `Generated: ${text.substring(0, 50)}`).catch(() => {});
+      }
+
+      if (saveToHistory && accessCode) {
+        const saveHistory = async () => {
+          const userId = getCurrentUserId();
+          if (!userId) {
+            console.warn('[VBS] Skipping history save — anonymous user');
+            return;
+          }
+          try {
+            const audioFileName = `audio/${accessCode}/${Date.now()}.mp3`;
+            const audioRef = ref(storage, audioFileName);
+            await uploadString(audioRef, finalResult.audioData, 'base64');
+            const audioStorageUrl = await getDownloadURL(audioRef);
+
+            const srtFileName = `srt/${accessCode}/${Date.now()}.srt`;
+            const srtRef = ref(storage, srtFileName);
+            await uploadString(srtRef, finalResult.srtContent);
+            const srtStorageUrl = await getDownloadURL(srtRef);
+
+            await addDoc(collection(db, 'history'), {
+              userId: accessCode,
+              text: text.length > 5000 ? text.substring(0, 5000) + '...' : text,
+              audioStorageUrl: audioStorageUrl,
+              srtStorageUrl: srtStorageUrl,
+              duration: finalResult.duration,
+              config: { ...config },
+              createdAt: serverTimestamp(),
+            });
+
+            await updateDoc(doc(db, 'settings', 'global'), {
+              total_generations: (globalSettings.total_generations || 0) + 1
+            });
+
+            console.log("App: Generation saved to history successfully.");
+          } catch (err) {
+            console.error("App: Failed to save to history:", err);
+          }
+        };
+        saveHistory();
+      }
+    } catch (err: unknown) {
+      console.error("Baking failed:", err);
+      setError("AI generation failed. Try again later.");
     } finally {
-      setIsLoading(false);
+      setIsBaking(false);
     }
   };
 
@@ -1833,6 +1777,8 @@ export default function App() {
                           playbackSpeed={outputConfig.speed}
                           result={result} 
                           isLoading={isLoading} 
+                          isBaking={isBaking}
+                          onBake={handleBakeAudio}
                           error={error}
                           onRetry={() => handleGenerate()}
                           globalVolume={outputConfig.volume}
