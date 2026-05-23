@@ -1,3 +1,5 @@
+import * as lamejs from 'lamejs';
+
 /**
  * Converts raw PCM data (16-bit, mono, 24000Hz) to a WAV file Blob.
  */
@@ -33,6 +35,34 @@ export function pcmToWav(pcmData: Uint8Array, sampleRate: number = 24000): Blob 
   view.setUint32(40, pcmData.length, true);
 
   return new Blob([header, pcmData], { type: 'audio/wav' });
+}
+
+/**
+ * Converts raw PCM data (16-bit, mono, 24000Hz) to an MP3 file Blob.
+ */
+export function pcmToMp3(pcmData: Uint8Array, sampleRate: number = 24000): Blob {
+  // Ensure the length is even for 16-bit PCM
+  const length = Math.floor(pcmData.length / 2);
+  const pcmShorts = new Int16Array(pcmData.buffer, pcmData.byteOffset, length);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mp3encoder = new (lamejs as any).Mp3Encoder(1, sampleRate, 128);
+  const mp3Data = [];
+  
+  const sampleBlockSize = 1152;
+  for (let i = 0; i < pcmShorts.length; i += sampleBlockSize) {
+    const sampleChunk = pcmShorts.subarray(i, i + sampleBlockSize);
+    const mp3buf = mp3encoder.encodeBuffer(sampleChunk);
+    if (mp3buf.length > 0) {
+      mp3Data.push(new Uint8Array(mp3buf));
+    }
+  }
+  
+  const mp3buf = mp3encoder.flush();
+  if (mp3buf.length > 0) {
+    mp3Data.push(new Uint8Array(mp3buf));
+  }
+  
+  return new Blob(mp3Data, { type: 'audio/mpeg' });
 }
 
 /**
@@ -106,6 +136,55 @@ export function audioBufferToWav(buffer: AudioBuffer): Blob {
   return new Blob([buffer_out], { type: "audio/wav" });
 }
 
+/**
+ * Converts an AudioBuffer to an MP3 Blob.
+ */
+export function audioBufferToMp3(buffer: AudioBuffer): Blob {
+  const numberOfChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mp3encoder = new (lamejs as any).Mp3Encoder(numberOfChannels, sampleRate, 128);
+  const mp3Data = [];
+
+  const left = buffer.getChannelData(0);
+  const right = numberOfChannels > 1 ? buffer.getChannelData(1) : null;
+
+  // Convert Float32 to Int16
+  const toInt16 = (f32: Float32Array) => {
+    const i16 = new Int16Array(f32.length);
+    for (let i = 0; i < f32.length; i++) {
+        const s = Math.max(-1, Math.min(1, f32[i]));
+        i16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+    return i16;
+  };
+
+  const leftI16 = toInt16(left);
+  const rightI16 = right ? toInt16(right) : null;
+
+  const sampleBlockSize = 1152;
+  for (let i = 0; i < leftI16.length; i += sampleBlockSize) {
+    const leftChunk = leftI16.subarray(i, i + sampleBlockSize);
+    let mp3buf;
+    if (rightI16) {
+      const rightChunk = rightI16.subarray(i, i + sampleBlockSize);
+      mp3buf = mp3encoder.encodeBuffer(leftChunk, rightChunk);
+    } else {
+      mp3buf = mp3encoder.encodeBuffer(leftChunk);
+    }
+    if (mp3buf.length > 0) {
+      mp3Data.push(new Uint8Array(mp3buf));
+    }
+  }
+
+  const mp3buf = mp3encoder.flush();
+  if (mp3buf.length > 0) {
+    mp3Data.push(new Uint8Array(mp3buf));
+  }
+
+  return new Blob(mp3Data, { type: 'audio/mpeg' });
+}
+
 function writeString(view: DataView, offset: number, string: string) {
   for (let i = 0; i < string.length; i++) {
     view.setUint8(offset + i, string.charCodeAt(i));
@@ -124,27 +203,27 @@ export function parseSRTTime(timeStr: string): number {
 }
 
 /**
- * Applies speed using OfflineAudioContext with Pitch Preservation.
- * Uses native source.preservesPitch if available for best quality.
+ * Applies speed, pitch, and volume adjustments using OfflineAudioContext.
+ * Uses native preservesPitch for high-quality time-stretching.
+ * 
+ * @param audioBlob The source audio blob (MP3 or WAV)
+ * @param config Processing options: speed (0.5x-2x), pitch (-10 to +10 semitones), volume (0dB to +20dB)
  */
-export async function renderSpeedAdjustedAudio(wavBlob: Blob, speed: number): Promise<{ blob: Blob; duration: number }> {
-  if (speed === 1.0) {
-    const arrayBuffer = await wavBlob.arrayBuffer();
-    const AudioContextClass = (window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext) as typeof AudioContext;
-    const audioCtx = new AudioContextClass();
-    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-    const duration = audioBuffer.duration;
-    await audioCtx.close();
-    return { blob: wavBlob, duration };
-  }
+export async function renderProcessedAudio(
+  audioBlob: Blob, 
+  config: { speed: number; pitch: number; volume: number }
+): Promise<{ blob: Blob; duration: number }> {
+  const { speed = 1.0, pitch = 0, volume = 0 } = config;
   
-  console.log(`audioUtils: Rendering pitch-preserved audio at ${speed}x using native preservesPitch...`);
-  const arrayBuffer = await wavBlob.arrayBuffer();
+  console.log(`audioUtils: Rendering processed audio (Speed: ${speed}x, Pitch: ${pitch}, Volume: ${volume}dB)`);
+  
+  const arrayBuffer = await audioBlob.arrayBuffer();
   const AudioContextClass = (window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext) as typeof AudioContext;
   const audioCtx = new AudioContextClass();
   const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
   await audioCtx.close();
   
+  // Calculate output duration based on speed
   const outputLength = Math.ceil(audioBuffer.length / speed);
   const sampleRate = audioBuffer.sampleRate;
   const numberOfChannels = audioBuffer.numberOfChannels;
@@ -157,21 +236,38 @@ export async function renderSpeedAdjustedAudio(wavBlob: Blob, speed: number): Pr
   
   const source = offlineCtx.createBufferSource();
   source.buffer = audioBuffer;
+  
+  // 1. Apply Speed (Playback Rate)
   source.playbackRate.setValueAtTime(speed, offlineCtx.currentTime);
   
-  // NATIVE PITCH PRESERVATION (Most modern browsers)
-  // This is the most robust way to change speed without changing pitch
+  // 2. Apply Pitch (Tone)
+  // We use detune for semitones (1 semitone = 100 cents)
+  // To keep speed and pitch independent, we use preservesPitch
   if ('preservesPitch' in source) {
     (source as AudioBufferSourceNode & { preservesPitch: boolean }).preservesPitch = true;
+    source.detune.setValueAtTime(pitch * 100, offlineCtx.currentTime);
+  } else {
+    // Fallback: If preservesPitch is not supported, detune will change speed too
+    // but at least it still shifts the pitch.
+    source.detune.setValueAtTime(pitch * 100, offlineCtx.currentTime);
   }
   
-  source.connect(offlineCtx.destination);
+  // 3. Apply Volume Booster (Gain)
+  // gain = 10^(dB/20)
+  const gainNode = offlineCtx.createGain();
+  const gainValue = Math.pow(10, volume / 20);
+  gainNode.gain.setValueAtTime(gainValue, offlineCtx.currentTime);
+  
+  // Chain: Source -> Gain -> Destination
+  source.connect(gainNode);
+  gainNode.connect(offlineCtx.destination);
+  
   source.start(0);
   
   const renderedBuffer = await offlineCtx.startRendering();
-  console.log(`audioUtils: Rendered duration: ${renderedBuffer.duration}s with pitch correction (Native)`);
+  console.log(`audioUtils: Rendered duration: ${renderedBuffer.duration}s`);
   
-  const finalBlob = audioBufferToWav(renderedBuffer);
+  const finalBlob = audioBufferToMp3(renderedBuffer);
   return { blob: finalBlob, duration: renderedBuffer.duration };
 }
 

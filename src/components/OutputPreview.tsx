@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { Headphones, Play, Pause, FileText, Music, RefreshCw, Sparkles, Clipboard, Check, AlertCircle } from 'lucide-react';
 import { AudioResult } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
-import { formatTime, formatMyanmarDuration } from '../utils/audioUtils';
+import { formatTime, formatMyanmarDuration, pcmToMp3 } from '../utils/audioUtils';
 
 interface OutputPreviewProps {
   result: AudioResult | null;
@@ -149,8 +149,16 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   }, [result]);
 
   const setupFallbackAudio = (data: ArrayBuffer) => {
-    // Gemini returns WAV
-    const blob = new Blob([data], { type: 'audio/wav' });
+    // Check if it's MP3 or WAV
+    const bytes = new Uint8Array(data);
+    let mimeType = 'audio/wav';
+    if (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) { // ID3 (MP3)
+      mimeType = 'audio/mpeg';
+    } else if (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) { // Sync Frame (MP3)
+      mimeType = 'audio/mpeg';
+    }
+    
+    const blob = new Blob([data], { type: mimeType });
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
     audio.playbackRate = 1.0; 
@@ -379,22 +387,27 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
       showToast(t('output.tuning'), 'success');
       
       let audioBlob: Blob;
-      if (result.rawAudio) {
-        audioBlob = new Blob([result.rawAudio], { type: 'audio/wav' });
+      const binaryStr = window.atob(result.audioData);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      
+      // Determine if it's MP3 or WAV (PCM needs conversion)
+      if (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) { // ID3 (MP3)
+        audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
+      } else if (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) { // Sync Frame (MP3)
+        audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
       } else {
-        const binaryStr = window.atob(result.audioData);
-        const bytes = new Uint8Array(binaryStr.length);
-        for (let i = 0; i < binaryStr.length; i++) {
-          bytes[i] = binaryStr.charCodeAt(i);
-        }
-        audioBlob = new Blob([bytes], { type: 'audio/wav' });
+        // Assume old PCM and convert to MP3 for consistency
+        audioBlob = pcmToMp3(bytes, 24000);
       }
 
       const filename = `vlogs-by-saw-audio`;
       const url = URL.createObjectURL(audioBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${filename}.wav`;
+      a.download = `${filename}.mp3`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -407,10 +420,9 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
     let blob: Blob;
     if (typeof content === 'string') {
       if (fileName.endsWith('.srt')) {
-        // Ensure Windows line endings (CRLF) and Add UTF-8 BOM for mobile compatibility
+        // Ensure Windows line endings (CRLF) and pure text/plain without BOM
         const sanitizedContent = content.replace(/\r?\n/g, '\r\n');
-        const BOM = '\uFEFF';
-        blob = new Blob([BOM + sanitizedContent], { type: 'text/plain;charset=utf-8' });
+        blob = new Blob([sanitizedContent], { type: 'text/plain;charset=utf-8' });
       } else {
         blob = new Blob([content], { type: 'text/plain' });
       }

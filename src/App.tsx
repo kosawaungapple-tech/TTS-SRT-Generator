@@ -24,7 +24,7 @@ import { DEFAULT_RULES } from './constants';
 import { useLanguage } from './contexts/LanguageContext';
 import { formatDate } from './utils/dateUtils';
 import { translateError } from './utils/errorUtils';
-import { pcmToWav, formatMyanmarDuration, pcmBase64ToWav, renderSpeedAdjustedAudio } from './utils/audioUtils';
+import { pcmToWav, formatMyanmarDuration, renderProcessedAudio } from './utils/audioUtils';
 import { generateOptimizedSubtitles } from './utils/subtitleUtils';
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId } from './firebase';
 
@@ -42,10 +42,10 @@ export default function App() {
     voiceId: 'kore',
     speed: 1.0,
     pitch: 0,
-    volume: 80,
+    volume: 0,
     styleInstruction: '',
   });
-  const [outputConfig, setOutputConfig] = useState({ speed: 1.0, volume: 80 });
+  const [outputConfig, setOutputConfig] = useState({ speed: 1.0, pitch: 0, volume: 0 });
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessingSpeed, setIsProcessingSpeed] = useState(false);
   const [result, setResult] = useState<AudioResult | null>(null);
@@ -165,6 +165,65 @@ export default function App() {
       console.log('[VBS] Auth ready, waiting for session sync if needed...');
     }
   }, [vbsId, isAuthReady, auth.currentUser, isSessionSynced]);
+
+  // Re-process audio when sliders change for an existing result
+  useEffect(() => {
+    const shouldReprocess = 
+      result && 
+      !result.isLoadingPartial && 
+      result.baseAudio && 
+      (config.speed !== result.speed || (config.pitch ?? 0) !== (result.pitch ?? 0) || (config.volume ?? 0) !== (result.volume ?? 0));
+
+    if (shouldReprocess) {
+      const timer = setTimeout(async () => {
+        setIsProcessingSpeed(true);
+        try {
+          console.log(`App: Reactive re-processing (Speed: ${config.speed}x, Pitch: ${config.pitch}, Volume: ${config.volume}dB)...`);
+          const sourceBlob = new Blob([result.baseAudio!], { type: 'audio/mpeg' });
+          const { blob: processedBlob, duration: finalDuration } = await renderProcessedAudio(sourceBlob, { 
+            speed: config.speed, 
+            pitch: config.pitch, 
+            volume: config.volume 
+          });
+          
+          const processedBuffer = await processedBlob.arrayBuffer();
+          const reader = new FileReader();
+          const base64Promise = new Promise<string>((resolve) => {
+            reader.onloadend = () => {
+              const base64data = reader.result as string;
+              resolve(base64data.split(',')[1]);
+            };
+          });
+          reader.readAsDataURL(processedBlob);
+          const finalBase64 = await base64Promise;
+
+          setResult(prev => prev ? {
+            ...prev,
+            audioUrl: URL.createObjectURL(processedBlob),
+            audioData: finalBase64,
+            rawAudio: processedBuffer,
+            duration: finalDuration,
+            baseDuration: finalDuration,
+            subtitles: generateOptimizedSubtitles(text, finalDuration),
+            srtContent: generateOptimizedSubtitles(text, finalDuration).map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join(''),
+            speed: config.speed,
+            pitch: config.pitch,
+            volume: config.volume
+          } : null);
+          
+          // Note: Subtitles are NOT re-generated here because they depend on text
+          // and they are already speed-aligned in the duration.
+          // Wait, if duration changes, subtitles MUST be re-aligned.
+          // But generateOptimizedSubtitles is easier to run here too.
+        } catch (err) {
+          console.error("Reactive processing failed:", err);
+        } finally {
+          setIsProcessingSpeed(false);
+        }
+      }, 500); // 500ms debounce
+      return () => clearTimeout(timer);
+    }
+  }, [config.speed, config.pitch, config.volume, result]);
 
   const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -807,7 +866,7 @@ export default function App() {
   }, [history, historySearch]);
 
   const handleGenerate = async () => {
-    setOutputConfig({ speed: config.speed, volume: config.volume });
+    setOutputConfig({ speed: config.speed, pitch: config.pitch, volume: config.volume });
     console.log("App: Generate Voice Button Clicked");
     
     if (!text.trim()) {
@@ -909,22 +968,31 @@ export default function App() {
         
         const audioResult = await generationPromise;
         
-        // [SPEED ADJUSTMENT - CRITICAL FIX]
+        // [SPEED, PITCH, VOLUME ADJUSTMENT - CRITICAL FIX]
         let finalAudioResult = { ...audioResult };
-        if (config.speed && config.speed !== 1.0) {
+        if (config.speed !== 1.0 || config.pitch !== 0 || config.volume !== 0) {
           setIsProcessingSpeed(true);
           try {
-            console.log(`App: Processing audio speed adjustment to ${config.speed}x...`);
-            const wavBlob = pcmBase64ToWav(audioResult.audioData);
-            const { blob: speedAdjustedBlob, duration: finalDuration } = await renderSpeedAdjustedAudio(wavBlob, config.speed);
-            const finalUrl = URL.createObjectURL(speedAdjustedBlob);
+            console.log(`App: Processing audio effects (Speed: ${config.speed}x, Pitch: ${config.pitch}, Volume: ${config.volume}dB)...`);
+            // We use the base (original) audio for processing
+            const sourceBuffer = audioResult.baseAudio || audioResult.rawAudio;
+            if (!sourceBuffer) throw new Error("No source audio buffer for processing");
+            
+            const sourceBlob = new Blob([sourceBuffer], { type: 'audio/mpeg' });
+            const { blob: processedBlob, duration: finalDuration } = await renderProcessedAudio(sourceBlob, { 
+              speed: config.speed, 
+              pitch: config.pitch, 
+              volume: config.volume 
+            });
+            const finalUrl = URL.createObjectURL(processedBlob);
             
             // Re-generate subtitles for final duration
             const finalSubtitles = generateOptimizedSubtitles(processedText, finalDuration);
-            const finalSrt = finalSubtitles.map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n`).join('\r\n');
+            const finalSrt = finalSubtitles.map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join('');
             
             // Convert blob to base64 for history/storage
-            const speedAdjustedBuffer = await speedAdjustedBlob.arrayBuffer();
+            const processedBuffer = await processedBlob.arrayBuffer();
+            
             const reader = new FileReader();
             const base64Promise = new Promise<string>((resolve) => {
               reader.onloadend = () => {
@@ -932,30 +1000,29 @@ export default function App() {
                 resolve(base64data.split(',')[1]);
               };
             });
-            reader.readAsDataURL(speedAdjustedBlob);
+            reader.readAsDataURL(processedBlob);
             const finalBase64 = await base64Promise;
 
             finalAudioResult = {
               ...audioResult,
               audioUrl: finalUrl,
               audioData: finalBase64,
-              rawAudio: speedAdjustedBuffer, // CRITICAL: Update rawAudio to new buffer
+              rawAudio: processedBuffer, 
+              baseAudio: audioResult.baseAudio, // Preserve original
               duration: finalDuration,
-              baseDuration: finalDuration, // Update so OutputPreview sees the final duration
+              baseDuration: finalDuration, 
               subtitles: finalSubtitles,
               srtContent: finalSrt,
-              speed: config.speed
+              speed: config.speed,
+              pitch: config.pitch,
+              volume: config.volume
             };
           } catch (err) {
-            console.error("Speed adjustment failed:", err);
-            // Fallback to 1x if processing fails
+            console.error("Audio processing failed:", err);
           } finally {
             setIsProcessingSpeed(false);
           }
         }
-
-        // [AUTO-PLAY REMOVED - USER REQUEST]
-        // Playback is now triggered manually by the user in the OutputPreview component
 
         // IMMEDIATE RELEASE: Show result before any DB writes
         setResult(finalAudioResult);
@@ -976,7 +1043,7 @@ export default function App() {
               return;
             }
             try {
-              const audioFileName = `audio/${accessCode}/${Date.now()}.wav`;
+              const audioFileName = `audio/${accessCode}/${Date.now()}.mp3`;
               const audioRef = ref(storage, audioFileName);
               await uploadString(audioRef, finalAudioResult.audioData, 'base64');
               const audioStorageUrl = await getDownloadURL(audioRef);
@@ -1102,11 +1169,12 @@ export default function App() {
     }
     
     // If it's MP3 data, we don't need pcmToWav
-    const audioBlob = new Blob([bytes], { type: 'audio/mp3' });
+    const audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
     const url = URL.createObjectURL(audioBlob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = filename;
+    const downloadName = filename.toLowerCase().endsWith('.wav') ? filename.replace(/\.wav$/i, '.mp3') : filename.toLowerCase().endsWith('.mp3') ? filename : `${filename}.mp3`;
+    a.download = downloadName;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -1118,10 +1186,9 @@ export default function App() {
       content = await response.text();
     }
     
-    // Ensure Windows line endings (CRLF) and Add UTF-8 BOM for mobile compatibility
+    // Ensure Windows line endings (CRLF) and pure text/plain without BOM
     const sanitizedContent = content.replace(/\r?\n/g, '\r\n');
-    const BOM = '\uFEFF';
-    const blob = new Blob([BOM + sanitizedContent], { type: 'text/plain;charset=utf-8' });
+    const blob = new Blob([sanitizedContent], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -1166,9 +1233,9 @@ export default function App() {
       // Check if it's MP3 or PCM (OLD)
       let audioBlob: Blob;
       if (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) { // ID3 (MP3)
-        audioBlob = new Blob([bytes], { type: 'audio/mp3' });
+        audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
       } else if (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) { // Sync Frame (MP3)
-        audioBlob = new Blob([bytes], { type: 'audio/mp3' });
+        audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
       } else {
         // Assume old PCM format
         audioBlob = pcmToWav(bytes, 24000);

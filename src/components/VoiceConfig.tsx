@@ -145,9 +145,9 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
             <Slider
               label={t('voiceConfig.speed')}
               value={config.speed}
-              min={0.25}
-              max={4.0}
-              step={0.25}
+              min={0.5}
+              max={2.0}
+              step={0.1}
               suffix="x"
               onChange={(v) => handleChange('speed', v)}
             />
@@ -162,9 +162,9 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
           <Slider
             label={t('voiceConfig.pitch')}
             value={config.pitch}
-            min={-20.0}
-            max={20.0}
-            step={0.5}
+            min={-10.0}
+            max={10.0}
+            step={1}
             suffix=""
             onChange={(v) => handleChange('pitch', v)}
           />
@@ -172,9 +172,9 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
             label={t('voiceConfig.volume')}
             value={config.volume}
             min={0}
-            max={100}
+            max={20}
             step={1}
-            suffix="%"
+            suffix=" dB"
             onChange={(v) => handleChange('volume', v)}
           />
         </div>

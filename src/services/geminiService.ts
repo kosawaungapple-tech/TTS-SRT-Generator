@@ -1,6 +1,6 @@
 import { TTSConfig, AudioResult, SRTSubtitle } from "../types";
 import { VOICE_OPTIONS, GEMINI_MODELS } from "../constants";
-import { formatTime, pcmBase64ToWav, pcmToWav } from "../utils/audioUtils";
+import { formatTime, pcmToMp3 } from "../utils/audioUtils";
 import { generateOptimizedSubtitles, generateSubtitlesFromTimestamps } from "../utils/subtitleUtils";
 import { apiChannelManager } from "./apiChannelManager";
 import { getIdToken } from "../firebase";
@@ -374,12 +374,18 @@ export class GeminiTTSService {
       throw new Error('No audio data returned from Gemini');
     }
 
-    const audioBlob = pcmBase64ToWav(base64PCM, 24000);
+    const binaryPCM = atob(base64PCM);
+    const pcmBytes = new Uint8Array(binaryPCM.length);
+    for (let i = 0; i < binaryPCM.length; i++) {
+      pcmBytes[i] = binaryPCM.charCodeAt(i);
+    }
+
+    const audioBlob = pcmToMp3(pcmBytes, 24000);
     const audioUrl = URL.createObjectURL(audioBlob);
     const arrayBuffer = await audioBlob.arrayBuffer();
 
-    // Generate base64 for the WAV file, not raw PCM
-    const wavBase64 = await new Promise<string>((resolve) => {
+    // Convert MP3 Blob to Base64
+    const mp3Base64 = await new Promise<string>((resolve) => {
       const reader = new FileReader();
       reader.onloadend = () => {
         const base64 = (reader.result as string).split(',')[1];
@@ -392,6 +398,7 @@ export class GeminiTTSService {
     const audioContext = new AudioContextClass();
     let totalDuration = 0;
     try {
+      // Decode audio for duration - AudioContext can decode MP3
       const decodedBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
       totalDuration = decodedBuffer.duration;
     } catch (e) {
@@ -407,15 +414,16 @@ export class GeminiTTSService {
 
     const result: AudioResult = {
       audioUrl,
-      audioData: wavBase64,
+      audioData: mp3Base64,
       pcmData: base64PCM,
       rawAudio: arrayBuffer,
-      srtContent: subtitles.map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n`).join('\r\n'),
+      srtContent: subtitles.map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join(''),
       subtitles,
       baseDuration: totalDuration,
       oneXDuration: totalDuration,
       speed: 1.0,
-      duration: totalDuration
+      duration: totalDuration,
+      baseAudio: arrayBuffer
     };
 
     // Save to Cache (non-blocking)
@@ -447,13 +455,13 @@ export class GeminiTTSService {
       offset += chunk.length;
     }
 
-    // Convert merged PCM to WAV Blob
-    const audioBlob = pcmToWav(mergedPCM, 24000);
+    // Convert merged PCM to MP3 Blob
+    const audioBlob = pcmToMp3(mergedPCM, 24000);
     const audioUrl = URL.createObjectURL(audioBlob);
     const arrayBuffer = await audioBlob.arrayBuffer();
 
-    // Convert WAV Blob to Base64
-    const wavBase64 = await new Promise<string>((resolve) => {
+    // Convert MP3 Blob to Base64
+    const mp3Base64 = await new Promise<string>((resolve) => {
       const reader = new FileReader();
       reader.onloadend = () => {
         const base64 = (reader.result as string).split(',')[1];
@@ -489,22 +497,23 @@ export class GeminiTTSService {
           endTime: formatTime(end)
         };
         allSubtitles.push(newSub);
-        srtParts.push(`${newSub.index}\r\n${newSub.startTime} --> ${newSub.endTime}\r\n${newSub.text}\r\n`);
+        srtParts.push(`${newSub.index}\r\n${newSub.startTime} --> ${newSub.endTime}\r\n${newSub.text}\r\n\r\n`);
       });
       cumulativeTime += res.duration;
     });
 
     return {
       audioUrl,
-      audioData: wavBase64,
+      audioData: mp3Base64,
       pcmData: pcmBase64,
       rawAudio: arrayBuffer,
-      srtContent: srtParts.join('\r\n'),
+      srtContent: srtParts.join(''),
       subtitles: allSubtitles,
       baseDuration: cumulativeTime,
       oneXDuration: cumulativeTime,
       speed: 1.0,
-      duration: cumulativeTime
+      duration: cumulativeTime,
+      baseAudio: arrayBuffer
     };
   }
 
