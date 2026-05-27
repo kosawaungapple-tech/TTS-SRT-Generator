@@ -1,5 +1,5 @@
 
-import { db, setDoc, doc, serverTimestamp, increment, getCurrentUserId } from '../firebase';
+import { db, setDoc, doc, serverTimestamp, increment, getCurrentUserId, collection, onSnapshot, deleteDoc } from '../firebase';
 
 /**
  * API Key Channel Manager - Redesigned for Admin/User Roles
@@ -32,7 +32,9 @@ class ApiChannelManager {
 
   private adminActiveIndex: number = 0;
   private sharedActiveIndex: number = 0;
+  private isSyncInitialized: boolean = false;
   private static currentRotateIndex: number = 0;
+  private listeners: (() => void)[] = [];
 
   constructor() {
     this.loadFromStorage();
@@ -41,6 +43,52 @@ class ApiChannelManager {
       this.adminActiveIndex = parseInt(savedIndex, 10);
       ApiChannelManager.currentRotateIndex = this.adminActiveIndex;
     }
+  }
+
+  // Event System
+  subscribe(listener: () => void) {
+    this.listeners.push(listener);
+    return () => {
+      this.listeners = this.listeners.filter(l => l !== listener);
+    };
+  }
+
+  private notify() {
+    this.listeners.forEach(l => l());
+  }
+
+  // Real-time Sync with Firestore
+  initializeRealtimeSync() {
+    if (this.isSyncInitialized) return;
+    this.isSyncInitialized = true;
+
+    console.log("[VBS] Initializing Admin Channels Sync...");
+    
+    // 1. Sync Admin Channels Collection
+    // Security: ONLY admins should sync these keys to their browser.
+    // Regular users will use the server-side proxy pool without seeing the keys.
+    onSnapshot(collection(db, 'admin_channels'), (snapshot) => {
+      const channels: ApiChannel[] = snapshot.docs.map(d => ({
+        ...d.data() as ApiChannel,
+        id: d.id
+      }));
+      
+      console.log(`[VBS] Synced ${channels.length} Admin Channels from Firestore`);
+      this.adminChannels = channels.sort((a, b) => a.label.localeCompare(b.label));
+      
+      if (this.adminActiveIndex >= this.adminChannels.length) {
+        this.adminActiveIndex = 0;
+      }
+      
+      this.saveToStorage();
+      this.notify();
+    }, () => {
+      // It is EXPECTED that regular users fail this sync.
+      // They will rely on the server-side proxy.
+      console.log("[VBS] Admin Channels sync restricted (User is not Admin). Using server-side pool.");
+    });
+
+    // 2. Sync Settings (Partial - just the admin pieces if needed, though App.tsx handles globalSettings)
   }
 
   async logKeyUsage(id: string, status: 'success' | 'rate_limited' | 'error') {
@@ -163,29 +211,8 @@ class ApiChannelManager {
   getSettings() { return { ...this.settings }; }
   getAdminActiveIndex() { return this.adminActiveIndex; }
 
-  // Sync Admin Keys from Firestore
-  syncAdminKeys(keys: string[]) {
-    const validKeys = keys.filter(k => k && k.trim());
-    if (validKeys.length === 0) return;
-
-    // Only update if keys have changed to avoid resetting status
-    const currentKeys = this.adminChannels.map(c => c.key);
-    if (JSON.stringify(currentKeys) === JSON.stringify(validKeys)) return;
-
-    this.adminChannels = validKeys.map(key => ({
-      id: crypto.randomUUID(),
-      key: key.trim(),
-      status: 'idle',
-      label: `Admin Key`
-    }));
-    
-    if (this.adminActiveIndex >= this.adminChannels.length) {
-      this.adminActiveIndex = 0;
-    }
-    this.saveToStorage();
-  }
-
-  getActiveSourceInfo(isAdminContext: boolean = false): { label: string; key: string; isShared: boolean } | null {
+  getActiveSourceInfo(isAdminContext: boolean = false, isUserAdmin: boolean = false): { label: string; key: string; isShared: boolean } | null {
+    // 1. If we are in an admin-only context (e.g. Admin Dashboard), always use the admin pool
     if (isAdminContext) {
       if (this.adminChannels.length === 0) return null;
       const ch = this.adminChannels[this.adminActiveIndex] || this.adminChannels[0];
@@ -194,28 +221,39 @@ class ApiChannelManager {
 
     // Determine what key to use for normal operations
     const personalKey = this.userChannel?.key;
-    const canUseAdmin = this.settings.useAdminKeys && this.settings.allowSharedKeys;
+    const adminPoolSelected = this.settings.useAdminKeys;
+    const canUseAdminPool = this.settings.allowSharedKeys || isUserAdmin; // Admins always have access to their own pool
 
-    if (personalKey) {
-      // We always prefer personal key if it exists, UNLESS it's explicitly marked as limit
-      // But getActiveSourceInfo doesn't track live rate limits easily without state. 
-      // For UI purposes, we show what will be tried first.
-      return { label: 'My Key', key: personalKey, isShared: false };
+    // 2. If Admin Pool is selected AND allowed, prioritize it
+    if (adminPoolSelected && canUseAdminPool) {
+      if (isUserAdmin) {
+        // Admin user using their own pool
+        if (this.adminChannels.length === 0) return null;
+        const ch = this.adminChannels[this.adminActiveIndex] || this.adminChannels[0];
+        return { label: ch.label, key: ch.key, isShared: false };
+      } else {
+        // Regular user using shared pool
+        const shared = this.getSharedAdminChannel();
+        if (shared) {
+          return { label: `ADMIN KEY`, key: shared.key, isShared: true };
+        }
+      }
     }
 
-    if (canUseAdmin) {
-      const shared = this.getSharedAdminChannel();
-      if (shared) return { label: `Admin: ${shared.label}`, key: shared.key, isShared: true };
+    // 3. Otherwise (Personal Key mode selected OR fallback), use Personal Key
+    if (personalKey) {
+      return { label: 'MY KEY', key: personalKey, isShared: false };
     }
 
     return null;
   }
 
-  getActiveKey(isAdminContext: boolean = false): string | null {
-    return this.getActiveSourceInfo(isAdminContext)?.key || null;
+  getActiveKey(isAdminContext: boolean = false, isUserAdmin: boolean = false): string | null {
+    return this.getActiveSourceInfo(isAdminContext, isUserAdmin)?.key || null;
   }
 
   private getSharedAdminChannel(): ApiChannel | null {
+    // Note: this internal method is for users. Admins skip this and use getAdminChannels logic.
     if (!this.settings.allowSharedKeys) return null;
     
     const sharedIds = this.settings.sharedChannelIds;
@@ -237,24 +275,47 @@ class ApiChannelManager {
   updateSettings(newSettings: Partial<ChannelSettings>) {
     this.settings = { ...this.settings, ...newSettings };
     this.saveToStorage();
+    this.notify();
   }
 
   // Admin Pool
-  addAdminChannel(key: string, label?: string) {
+  async addAdminChannel(key: string, label?: string) {
+    const id = crypto.randomUUID();
     const ch: ApiChannel = {
-      id: crypto.randomUUID(),
+      id,
       key: key.trim(),
       status: 'idle',
       label: label || `Admin CH ${this.adminChannels.length + 1}`
     };
-    this.adminChannels.push(ch);
-    this.saveToStorage();
+    
+    try {
+      await setDoc(doc(db, 'admin_channels', id), {
+        ...ch,
+        createdAt: serverTimestamp()
+      });
+      // We don't push locally, onSnapshot will handle it, but we can notify to refresh UI if needed
+      // Actually onSnapshot is quite fast.
+      return true;
+    } catch (err) {
+      console.error("Failed to add admin channel to Firestore:", err);
+      return false;
+    }
   }
 
-  deleteAdminChannel(id: string) {
-    this.adminChannels = this.adminChannels.filter(ch => ch.id !== id);
-    this.settings.sharedChannelIds = this.settings.sharedChannelIds.filter(sid => sid !== id);
-    this.saveToStorage();
+  async deleteAdminChannel(id: string) {
+    try {
+      await deleteDoc(doc(db, 'admin_channels', id));
+      
+      // Update local shared list too if it was there
+      if (this.settings.sharedChannelIds.includes(id)) {
+        this.settings.sharedChannelIds = this.settings.sharedChannelIds.filter(sid => sid !== id);
+        this.saveToStorage();
+      }
+      return true;
+    } catch (err) {
+      console.error("Failed to delete admin channel from Firestore:", err);
+      return false;
+    }
   }
 
   toggleSharedChannel(id: string) {
@@ -265,6 +326,7 @@ class ApiChannelManager {
       this.settings.sharedChannelIds.push(id);
     }
     this.saveToStorage();
+    this.notify();
   }
 
   // User Pool
@@ -276,11 +338,13 @@ class ApiChannelManager {
       label: 'Personal Key'
     };
     this.saveToStorage();
+    this.notify();
   }
 
   clearUserChannel() {
     this.userChannel = null;
     this.saveToStorage();
+    this.notify();
   }
 
   // --- AUTO-SWITCH LOGIC ---
@@ -293,32 +357,41 @@ class ApiChannelManager {
       err?.message?.includes("RESOURCE_EXHAUSTED");
   }
 
-  async callWithAutoSwitch<T>(apiFn: (key: string) => Promise<T>, isAdmin: boolean = false): Promise<T> {
+  async callWithAutoSwitch<T>(apiFn: (key: string) => Promise<T>, isAdmin: boolean = false, isUserAdmin: boolean = false): Promise<T> {
     const personalKey = this.userChannel?.key;
     const adminKeys = this.adminChannels.map(c => c.key);
     const useAdminMode = this.settings.useAdminKeys;
-    const canUseAdminPool = this.settings.allowSharedKeys;
+    const canUseAdminPool = this.settings.allowSharedKeys || isUserAdmin;
 
-    // 1. Personal Mode Logic
+    // Logic:
+    // A. If Admin Context (Dashboard) -> Always Pool
+    // B. If NOT Admin Mode -> Use Personal Key if exists
+    // C. If Admin Mode AND Allowed -> Use Pool
+
     if (!isAdmin && !useAdminMode) {
-      if (personalKey) {
-        return await apiFn(personalKey);
+      if (personalKey) return await apiFn(personalKey);
+      
+      // Fallback: If no personal key but allowed to use admin pool, use it instead of throwing error
+      if (canUseAdminPool) {
+        console.log("[VBS API] No personal key found, falling back to Admin Pool...");
+      } else {
+        if (!isUserAdmin) throw new Error("Personal API Key မရှိသေးပါ။ Key ထည့်ပါ သို့မဟုတ် Admin Pool ပြောင်းပါ။");
       }
-      throw new Error("Personal API Key မရှိသေးပါ။ Key ထည့်ပါ သို့မဟုတ် Admin Pool ပြောင်းပါ။");
     }
 
-    // 2. Admin Pool Mode Logic
-    // If not in admin context but mode is admin, check if sharing is allowed
+    // If we reach here, we are either in Admin Context OR Admin Mode is selected
     if (!isAdmin && useAdminMode && !canUseAdminPool) {
-      if (personalKey) return await apiFn(personalKey);
-      throw new Error("Admin Pool Sharing ကို Admin မှ ပိတ်ထားပါသည်။ Personal Key ထည့်ပါ။");
+       if (personalKey) return await apiFn(personalKey);
+       throw new Error("Admin Pool Sharing ကို Admin မှ ပိတ်ထားပါသည်။ Personal Key ထည့်ပါ။");
+    }
+
+    // if user is regular user (no keys synced due to restricted permissions) but chose admin pool -> use SERVER POOL (send empty string to proxy)
+    if (!isUserAdmin && useAdminMode && adminKeys.length === 0) {
+      console.log("[VBS] Using Server-side Admin Pool (Keys are hidden from browser)");
+      return await apiFn(""); // Empty string triggers server-side rotate/fetch
     }
 
     if (adminKeys.length === 0) {
-      // Fallback: If no admin keys managed yet, try environment variable (only for real admins or when absolutely needed)
-      if (typeof process !== 'undefined' && process.env.GEMINI_API_KEY) {
-        return await apiFn(process.env.GEMINI_API_KEY);
-      }
       throw new Error("Admin API Keys မရှိသေးပါ။ Admin ထံ ဆက်သွယ်ပါ။");
     }
 
