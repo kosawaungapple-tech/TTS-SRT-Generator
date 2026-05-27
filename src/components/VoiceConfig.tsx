@@ -1,159 +1,232 @@
-import React, { useMemo, useEffect, useState } from 'react';
-import { ChevronDown, Volume2, Wand2 } from 'lucide-react';
-import { TTSConfig } from '../types';
+import React from 'react';
+import { Zap, ChevronDown, Volume2, Info, Waves, Radio, Music, Activity } from 'lucide-react';
+import { TTSConfig, AudioEffects } from '../types';
 import { VOICE_OPTIONS } from '../constants';
-import { useLanguage } from '../contexts/LanguageContext';
 
 interface VoiceConfigProps {
   config: TTSConfig;
   setConfig: (config: TTSConfig) => void;
   isDarkMode: boolean;
-  baseDuration?: number; // Optional actual base duration from last result
-  isAdmin?: boolean;
 }
 
-export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, isDarkMode, baseDuration }) => {
-  const { t } = useLanguage();
-  
-  const estimatedDisplay = useMemo(() => {
-    if (!baseDuration) return null;
-    const estimatedSeconds = baseDuration / (config.speed || 1);
-    const m = Math.floor(estimatedSeconds / 60);
-    const s = Math.floor(estimatedSeconds % 60);
-    const timeStr = m > 0 ? `${m}m ${s}s` : `${s}s`;
-    return `~${timeStr} at ${config.speed}x`;
-  }, [baseDuration, config.speed]);
-  
-  const QUICK_STYLES = [
-    { label: t('voiceConfig.styles.warm'), value: 'Warm and friendly' },
-    { label: t('voiceConfig.styles.professional'), value: 'Professional and authoritative' },
-    { label: t('voiceConfig.styles.excited'), value: 'Excited and energetic' },
-    { label: t('voiceConfig.styles.angry'), value: 'Angry and intense' },
-    { label: t('voiceConfig.styles.sad'), value: 'Sad and emotional' },
-    { label: t('voiceConfig.styles.whisper'), value: 'Whispering and soft' },
-  ];
-
-  const handleChange = (key: keyof TTSConfig, value: string | number) => {
+export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, isDarkMode }) => {
+  const handleChange = (key: keyof TTSConfig, value: any) => {
     setConfig({ ...config, [key]: value });
   };
 
-  // Use all available voices as model is now locked
-  const filteredVoices = useMemo(() => {
-    return VOICE_OPTIONS;
-  }, []);
-
-  // Reset voice if needed (should not be needed as model is fixed)
-  useEffect(() => {
-    if (filteredVoices.length > 0 && !filteredVoices.some(v => v.id === config.voiceId)) {
-      handleChange('voiceId', filteredVoices[0].id);
-    }
-  }, [filteredVoices, config.voiceId]);
+  const handleEffectChange = (effect: keyof AudioEffects, key: string, value: any) => {
+    const currentEffects = config.effects || {
+      echo: { enabled: false, delay: 0.3, feedback: 0.4 },
+      reverb: { enabled: false, decay: 1.5, mix: 0.3 },
+      pitchShift: { enabled: false, semitones: 0 },
+      chorus: { enabled: false, rate: 1.5, depth: 0.5 }
+    };
+    
+    setConfig({
+      ...config,
+      effects: {
+        ...currentEffects,
+        [effect]: {
+          ...currentEffects[effect],
+          [key]: value
+        }
+      }
+    });
+  };
 
   return (
-    <div className="premium-glass rounded-[32px] p-8 sm:p-10 shadow-2xl transition-all duration-300 relative overflow-hidden">
-      <div className="absolute top-0 right-0 w-64 h-64 bg-brand-purple/5 blur-[100px] -z-10" />
-      <div className="space-y-10">
+    <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-[32px] p-8 shadow-2xl transition-colors duration-300">
+      <div className="space-y-8">
         {/* Voice Selection */}
         <div className="group">
-          <label className="flex items-center gap-3 text-lg font-bold text-slate-800 dark:text-slate-100 mb-5 group-hover:text-brand-purple transition-colors">
-            <div className="p-2 bg-brand-purple/10 rounded-lg">
-              <Volume2 size={20} className="text-brand-purple" />
-            </div>
-            {t('voiceConfig.voice')}
+          <label className="flex items-center gap-2 text-lg font-medium text-slate-700 dark:text-slate-100 mb-4 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
+            <Volume2 size={20} className="text-brand-purple" />
+            အသံရွေးချယ်ရန်
           </label>
           <div className="relative">
             <select
               value={config.voiceId}
               onChange={(e) => handleChange('voiceId', e.target.value)}
-              className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] px-6 py-4 text-slate-900 dark:text-white appearance-none focus:outline-none focus:ring-2 focus:ring-brand-purple/30 transition-all cursor-pointer font-bold shadow-inner"
+              className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl px-6 py-4 text-slate-900 dark:text-white appearance-none focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all cursor-pointer font-medium"
             >
-              {filteredVoices.map((voice) => (
+              {VOICE_OPTIONS.map((voice) => (
                 <option key={voice.id} value={voice.id} className="bg-white dark:bg-slate-950 text-slate-900 dark:text-white">
                   {voice.name}
                 </option>
               ))}
             </select>
-            <div className="absolute right-6 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+            <div className="absolute right-6 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
               <ChevronDown size={20} />
             </div>
           </div>
         </div>
 
-        {/* Style Instructions */}
-        <div className="group">
-          <label className="flex items-center gap-3 text-lg font-bold text-slate-800 dark:text-slate-100 mb-5 group-hover:text-brand-purple transition-colors">
-            <div className="p-2 bg-brand-purple/10 rounded-lg">
-              <Wand2 size={20} className="text-brand-purple" />
-            </div>
-            {t('voiceConfig.style')}
-          </label>
-          <div className="space-y-5">
-            <input
-              type="text"
-              value={config.styleInstruction || ''}
-              onChange={(e) => handleChange('styleInstruction', e.target.value)}
-              placeholder={t('voiceConfig.stylePlaceholder')}
-              className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] px-6 py-4 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/30 transition-all font-bold placeholder:text-slate-400 shadow-inner"
-            />
-            <div className="flex flex-wrap gap-2">
-              {QUICK_STYLES.map((style) => (
-                <button
-                  type="button"
-                  key={style.label}
-                  onClick={() => handleChange('styleInstruction', style.value)}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all border ${
-                    config.styleInstruction === style.value
-                      ? 'bg-brand-purple text-white border-brand-purple shadow-lg shadow-brand-purple/30'
-                      : 'bg-white/50 dark:bg-slate-800/50 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-brand-purple/50 hover:text-brand-purple'
-                  }`}
-                >
-                  {style.label}
-                </button>
-              ))}
-            </div>
-          </div>
+        <Slider
+          label="အမြန်နှုန်း"
+          value={config.speed}
+          min={0.25}
+          max={4.0}
+          step={0.05}
+          suffix="x"
+          onChange={(v) => handleChange('speed', v)}
+          isDarkMode={isDarkMode}
+        />
+        <Slider
+          label="အသံအနိမ့်အမြင့်"
+          value={config.pitch}
+          min={-20.0}
+          max={20.0}
+          step={0.5}
+          suffix=""
+          onChange={(v) => handleChange('pitch', v)}
+          isDarkMode={isDarkMode}
+        />
+        <div className="flex items-center gap-2 px-4 py-2 bg-brand-purple/5 border border-brand-purple/10 rounded-xl">
+          <Info size={14} className="text-brand-purple shrink-0" />
+          <p className="text-[10px] text-slate-500 dark:text-slate-400">
+            Changes will apply to the next generation.
+          </p>
         </div>
+        <Slider
+          label="အသံပမာဏ"
+          value={config.volume}
+          min={0}
+          max={100}
+          step={1}
+          suffix="%"
+          onChange={(v) => handleChange('volume', v)}
+          isDarkMode={isDarkMode}
+        />
 
-        <div className="space-y-8">
-          <div className="space-y-2">
-            <Slider
-              label={t('voiceConfig.speed')}
-              value={config.speed}
-              min={0.25}
-              max={4.0}
-              step={0.25}
-              suffix="x"
-              onChange={(v) => handleChange('speed', v)}
-              isDarkMode={isDarkMode}
-            />
-            {estimatedDisplay && (
-              <div className="flex justify-end px-2">
-                <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 italic">
-                  {estimatedDisplay}
-                </span>
+        {/* Voice Effects Section */}
+        <div className="pt-8 border-t border-slate-200 dark:border-slate-800">
+          <label className="flex items-center gap-2 text-lg font-medium text-slate-700 dark:text-slate-100 mb-6">
+            <Waves size={20} className="text-brand-purple" />
+            အသံအထူးပြုလုပ်ချက်များ (Voice Effects)
+          </label>
+          
+          <div className="grid grid-cols-1 gap-6">
+            {/* Echo */}
+            <EffectToggle
+              label="Echo (ပဲ့တင်သံ)"
+              icon={<Radio size={18} />}
+              enabled={config.effects?.echo.enabled || false}
+              onToggle={(enabled) => handleEffectChange('echo', 'enabled', enabled)}
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+                <Slider
+                  label="Delay"
+                  value={config.effects?.echo.delay || 0.3}
+                  min={0.1}
+                  max={1.0}
+                  step={0.1}
+                  suffix="s"
+                  onChange={(v) => handleEffectChange('echo', 'delay', v)}
+                  isDarkMode={isDarkMode}
+                  compact
+                />
+                <Slider
+                  label="Feedback"
+                  value={config.effects?.echo.feedback || 0.4}
+                  min={0}
+                  max={0.9}
+                  step={0.1}
+                  suffix=""
+                  onChange={(v) => handleEffectChange('echo', 'feedback', v)}
+                  isDarkMode={isDarkMode}
+                  compact
+                />
               </div>
-            )}
+            </EffectToggle>
+
+            {/* Reverb */}
+            <EffectToggle
+              label="Reverb (ခန်းမသံ)"
+              icon={<Music size={18} />}
+              enabled={config.effects?.reverb.enabled || false}
+              onToggle={(enabled) => handleEffectChange('reverb', 'enabled', enabled)}
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+                <Slider
+                  label="Decay"
+                  value={config.effects?.reverb.decay || 1.5}
+                  min={0.5}
+                  max={5.0}
+                  step={0.5}
+                  suffix="s"
+                  onChange={(v) => handleEffectChange('reverb', 'decay', v)}
+                  isDarkMode={isDarkMode}
+                  compact
+                />
+                <Slider
+                  label="Mix"
+                  value={config.effects?.reverb.mix || 0.3}
+                  min={0}
+                  max={1.0}
+                  step={0.1}
+                  suffix=""
+                  onChange={(v) => handleEffectChange('reverb', 'mix', v)}
+                  isDarkMode={isDarkMode}
+                  compact
+                />
+              </div>
+            </EffectToggle>
+
+            {/* Pitch Shift */}
+            <EffectToggle
+              label="Pitch Shift (အသံပြောင်းလဲခြင်း)"
+              icon={<Activity size={18} />}
+              enabled={config.effects?.pitchShift.enabled || false}
+              onToggle={(enabled) => handleEffectChange('pitchShift', 'enabled', enabled)}
+            >
+              <div className="mt-4">
+                <Slider
+                  label="Semitones"
+                  value={config.effects?.pitchShift.semitones || 0}
+                  min={-12}
+                  max={12}
+                  step={1}
+                  suffix="st"
+                  onChange={(v) => handleEffectChange('pitchShift', 'semitones', v)}
+                  isDarkMode={isDarkMode}
+                  compact
+                />
+              </div>
+            </EffectToggle>
+
+            {/* Chorus */}
+            <EffectToggle
+              label="Chorus (အဖွဲ့လိုက်သံ)"
+              icon={<Zap size={18} />}
+              enabled={config.effects?.chorus.enabled || false}
+              onToggle={(enabled) => handleEffectChange('chorus', 'enabled', enabled)}
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+                <Slider
+                  label="Rate"
+                  value={config.effects?.chorus.rate || 1.5}
+                  min={0.1}
+                  max={5.0}
+                  step={0.1}
+                  suffix="Hz"
+                  onChange={(v) => handleEffectChange('chorus', 'rate', v)}
+                  isDarkMode={isDarkMode}
+                  compact
+                />
+                <Slider
+                  label="Depth"
+                  value={config.effects?.chorus.depth || 0.5}
+                  min={0}
+                  max={1.0}
+                  step={0.1}
+                  suffix=""
+                  onChange={(v) => handleEffectChange('chorus', 'depth', v)}
+                  isDarkMode={isDarkMode}
+                  compact
+                />
+              </div>
+            </EffectToggle>
           </div>
-          <Slider
-            label={t('voiceConfig.pitch')}
-            value={config.pitch}
-            min={-20.0}
-            max={20.0}
-            step={0.5}
-            suffix=""
-            onChange={(v) => handleChange('pitch', v)}
-            isDarkMode={isDarkMode}
-          />
-          <Slider
-            label={t('voiceConfig.volume')}
-            value={config.volume}
-            min={0}
-            max={100}
-            step={1}
-            suffix="%"
-            onChange={(v) => handleChange('volume', v)}
-            isDarkMode={isDarkMode}
-          />
         </div>
       </div>
     </div>
@@ -169,54 +242,65 @@ interface SliderProps {
   suffix?: string;
   onChange: (val: number) => void;
   isDarkMode: boolean;
+  compact?: boolean;
 }
 
-const Slider: React.FC<SliderProps> = ({ label, value, min, max, step, suffix, onChange, isDarkMode }) => {
-  const [localValue, setLocalValue] = useState(value);
-
-  const prevValueRef = React.useRef(value);
-  React.useEffect(() => {
-    if (prevValueRef.current !== value) {
-      prevValueRef.current = value;
-      setLocalValue(value);
-    }
-  }, [value]);
-
-  const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value);
-    setLocalValue(val);
-    onChange(val);
-  };
-
+const Slider: React.FC<SliderProps> = ({ label, value, min, max, step, suffix, onChange, isDarkMode, compact }) => {
   return (
-    <div className="group">
-      <div className="flex items-center justify-between gap-4 mb-2">
-        <span className="text-sm font-bold text-slate-700 dark:text-slate-200 group-hover:text-brand-purple transition-colors shrink-0">
-          {label}
+    <div className={`group ${compact ? 'space-y-2' : 'space-y-4'}`}>
+      <div className="flex justify-between items-center">
+        <span className={`${compact ? 'text-sm' : 'text-lg'} font-medium text-slate-700 dark:text-slate-100 group-hover:text-slate-900 dark:group-hover:text-white transition-colors`}>{label}</span>
+        <span className={`${compact ? 'text-sm' : 'text-lg'} font-medium text-brand-purple`}>
+          {value > 0 && (label === 'Pitch' || label === 'အသံအနိမ့်အမြင့်' || label === 'Semitones') ? `+${value}` : value}
+          {suffix}
         </span>
-        <div className="flex-1 flex items-center gap-4">
-          <div className="relative flex-1 flex items-center">
-            <input
-              type="range"
-              min={min}
-              max={max}
-              step={step}
-              value={localValue}
-              onChange={handleSliderChange}
-              className="w-full h-1.5 bg-slate-200 dark:bg-white/5 rounded-full appearance-none cursor-pointer accent-brand-purple hover:bg-slate-300 dark:hover:bg-white/10 transition-colors"
-              style={{
-                background: `linear-gradient(to right, #8B5CF6 0%, #8B5CF6 ${( (localValue - min) / (max - min) ) * 100}%, ${isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)'} ${( (localValue - min) / (max - min) ) * 100}%, ${isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)'} 100%)`
-              }}
-            />
-          </div>
-          <div className="w-16 px-2 py-0.5 bg-brand-purple/10 rounded-lg text-center shrink-0 border border-brand-purple/10">
-            <span className="text-[11px] font-bold text-brand-purple">
-              {localValue > 0 && (label === 'Pitch' || label === 'အသံအနိမ့်အမြင့်') ? `+${localValue}` : localValue}
-              {suffix}
-            </span>
-          </div>
-        </div>
       </div>
+      <div className="relative flex items-center">
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(e) => onChange(parseFloat(e.target.value))}
+          className={`w-full ${compact ? 'h-1.5' : 'h-2'} bg-slate-200 dark:bg-white/5 rounded-full appearance-none cursor-pointer accent-brand-purple hover:bg-slate-300 dark:hover:bg-white/10 transition-colors`}
+          style={{
+            background: `linear-gradient(to right, #8B5CF6 0%, #8B5CF6 ${( (value - min) / (max - min) ) * 100}%, ${isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)'} ${( (value - min) / (max - min) ) * 100}%, ${isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)'} 100%)`
+          }}
+        />
+      </div>
+    </div>
+  );
+};
+
+interface EffectToggleProps {
+  label: string;
+  icon: React.ReactNode;
+  enabled: boolean;
+  onToggle: (enabled: boolean) => void;
+  children: React.ReactNode;
+}
+
+const EffectToggle: React.FC<EffectToggleProps> = ({ label, icon, enabled, onToggle, children }) => {
+  return (
+    <div className={`p-4 rounded-2xl border transition-all duration-300 ${enabled ? 'bg-brand-purple/5 border-brand-purple/30' : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800'}`}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className={`p-2 rounded-lg ${enabled ? 'bg-brand-purple text-white' : 'bg-slate-200 dark:bg-slate-800 text-slate-500'}`}>
+            {icon}
+          </div>
+          <span className={`font-medium ${enabled ? 'text-slate-900 dark:text-white' : 'text-slate-500'}`}>{label}</span>
+        </div>
+        <button
+          onClick={() => onToggle(!enabled)}
+          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${enabled ? 'bg-brand-purple' : 'bg-slate-300 dark:bg-slate-700'}`}
+        >
+          <span
+            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${enabled ? 'translate-x-6' : 'translate-x-1'}`}
+          />
+        </button>
+      </div>
+      {enabled && children}
     </div>
   );
 };

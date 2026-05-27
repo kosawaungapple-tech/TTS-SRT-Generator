@@ -11,20 +11,18 @@ export const MiniAudioPlayer: React.FC<MiniAudioPlayerProps> = ({ base64Data }) 
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1.0);
   const [audioUrl, setAudioUrl] = useState<string>('');
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     if (base64Data) {
       try {
-        // [WAV CONVERSION]
-        // Gemini TTS returns LINEAR16 PCM. Wrapping with WAV header.
         const binaryString = window.atob(base64Data);
         const bytes = new Uint8Array(binaryString.length);
         for (let i = 0; i < binaryString.length; i++) {
           bytes[i] = binaryString.charCodeAt(i);
         }
-        
         const wavBlob = pcmToWav(bytes, 24000);
         const url = URL.createObjectURL(wavBlob);
         setAudioUrl(url);
@@ -32,8 +30,7 @@ export const MiniAudioPlayer: React.FC<MiniAudioPlayerProps> = ({ base64Data }) 
         // Force reload the audio element
         if (audioRef.current) {
           audioRef.current.load();
-          // [AUTO-PLAY REMOVED]
-          setIsPlaying(false);
+          audioRef.current.playbackRate = playbackRate;
         }
 
         return () => URL.revokeObjectURL(url);
@@ -42,6 +39,12 @@ export const MiniAudioPlayer: React.FC<MiniAudioPlayerProps> = ({ base64Data }) 
       }
     }
   }, [base64Data]);
+
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.playbackRate = playbackRate;
+    }
+  }, [playbackRate]);
 
   const togglePlay = () => {
     if (audioRef.current) {
@@ -105,6 +108,18 @@ export const MiniAudioPlayer: React.FC<MiniAudioPlayerProps> = ({ base64Data }) 
           <span>{formatTime(currentTime)}</span>
           <span>{formatTime(duration)}</span>
         </div>
+      </div>
+
+      <div className="flex items-center gap-1 bg-slate-200/50 dark:bg-slate-700/50 p-0.5 rounded-lg border border-slate-300/50 dark:border-slate-600/50 shrink-0">
+        {[0.5, 1.0, 1.5, 2.0].map((rate) => (
+          <button
+            key={rate}
+            onClick={() => setPlaybackRate(rate)}
+            className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-all ${playbackRate === rate ? 'bg-brand-purple text-white shadow-sm' : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-200'}`}
+          >
+            {rate}x
+          </button>
+        ))}
       </div>
 
       <button
