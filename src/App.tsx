@@ -22,7 +22,7 @@ import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings,
 import { DEFAULT_RULES } from './constants';
 import { useLanguage } from './contexts/LanguageContext';
 import { formatDate } from './utils/dateUtils';
-import { pcmToWav, formatMyanmarDuration, renderProcessedAudio } from './utils/audioUtils';
+import { formatMyanmarDuration, renderProcessedAudio, pcmToMp3 } from './utils/audioUtils';
 import { generateOptimizedSubtitles } from './utils/subtitleUtils';
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId } from './firebase';
 
@@ -924,8 +924,8 @@ export default function App() {
           }
         );
 
-        // Apply effects (Speed, Pitch, Volume) - renderProcessedAudio now returns WAV
-        const sourceBlob = new Blob([audioResult.baseAudio || audioResult.rawAudio!], { type: 'audio/wav' });
+        // Apply effects (Speed, Pitch, Volume) - renderProcessedAudio now returns MP3
+        const sourceBlob = new Blob([audioResult.baseAudio || audioResult.rawAudio!], { type: 'audio/mpeg' });
         const { blob: processedBlob, duration: finalDuration } = await renderProcessedAudio(sourceBlob, { 
           speed: config.speed, 
           pitch: config.pitch, 
@@ -973,7 +973,7 @@ export default function App() {
             const userId = getCurrentUserId();
             if (!userId) return;
             try {
-              const audioFileName = `audio/${accessCode}/${Date.now()}.wav`;
+              const audioFileName = `audio/${accessCode}/${Date.now()}.mp3`;
               const audioRef = ref(storage, audioFileName);
               await uploadString(audioRef, finalResult.audioData, 'base64');
               const audioStorageUrl = await getDownloadURL(audioRef);
@@ -1132,8 +1132,8 @@ export default function App() {
       } else if (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) { // Sync Frame (MP3)
         audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
       } else {
-        // Assume old PCM format
-        audioBlob = pcmToWav(bytes, 24000);
+        // Assume old PCM format, convert to MP3 for better compatibility
+        audioBlob = await pcmToMp3(bytes, 24000);
       }
       
       const url = URL.createObjectURL(audioBlob);

@@ -41,31 +41,38 @@ export function pcmToWav(pcmData: Uint8Array, sampleRate: number = 24000): Blob 
 }
 
 /**
- * Converts raw PCM data (16-bit, mono, 24000Hz) to an MP3 file Blob.
+ * Converts raw PCM data (16-bit, mono) to an MP3 file Blob at 44100Hz, 128kbps.
  */
-export function pcmToMp3(pcmData: Uint8Array, sampleRate: number = 24000): Blob {
-  // Ensure the length is even for 16-bit PCM
+export async function pcmToMp3(pcmData: Uint8Array, inputSampleRate: number = 24000): Promise<Blob> {
+  const AudioContextClass = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext) as typeof AudioContext;
+  const audioCtx = new AudioContextClass();
+  
+  // Create an AudioBuffer from the raw PCM
   const length = Math.floor(pcmData.length / 2);
   const pcmShorts = new Int16Array(pcmData.buffer, pcmData.byteOffset, length);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mp3encoder = new (lamejs as any).Mp3Encoder(1, sampleRate, 128);
-  const mp3Data = [];
+  const audioBuffer = audioCtx.createBuffer(1, length, inputSampleRate);
+  const channelData = audioBuffer.getChannelData(0);
   
-  const sampleBlockSize = 1152;
-  for (let i = 0; i < pcmShorts.length; i += sampleBlockSize) {
-    const sampleChunk = pcmShorts.subarray(i, i + sampleBlockSize);
-    const mp3buf = mp3encoder.encodeBuffer(sampleChunk);
-    if (mp3buf.length > 0) {
-      mp3Data.push(new Uint8Array(mp3buf));
-    }
+  for (let i = 0; i < length; i++) {
+    channelData[i] = pcmShorts[i] / 32768.0;
   }
   
-  const mp3buf = mp3encoder.flush();
-  if (mp3buf.length > 0) {
-    mp3Data.push(new Uint8Array(mp3buf));
-  }
+  await audioCtx.close();
   
-  return new Blob(mp3Data, { type: 'audio/mpeg' });
+  // Use OfflineAudioContext to resample to 44100Hz and convert to Stereo
+  const targetSampleRate = 44100;
+  const targetLength = Math.ceil(audioBuffer.duration * targetSampleRate);
+  
+  const offlineCtx = new OfflineAudioContext(2, targetLength, targetSampleRate);
+  const source = offlineCtx.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(offlineCtx.destination);
+  source.start(0);
+  
+  const resampledBuffer = await offlineCtx.startRendering();
+  
+  // Encode to MP3 (already at 44100Hz now)
+  return audioBufferToMp3(resampledBuffer);
 }
 
 /**
@@ -270,15 +277,8 @@ export async function renderProcessedAudio(
   const renderedBuffer = await offlineCtx.startRendering();
   console.log(`audioUtils: Rendered duration: ${renderedBuffer.duration}s`);
   
-  // Convert Float32 to Int16 for WAV
-  const channelData = renderedBuffer.getChannelData(0);
-  const pcmInt16 = new Int16Array(channelData.length);
-  for (let i = 0; i < channelData.length; i++) {
-    const s = Math.max(-1, Math.min(1, channelData[i]));
-    pcmInt16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-  }
-  
-  const finalBlob = pcmToWav(new Uint8Array(pcmInt16.buffer), sampleRate);
+  // Convert to MP3 (44100Hz, 128kbps)
+  const finalBlob = audioBufferToMp3(renderedBuffer);
   return { blob: finalBlob, duration: renderedBuffer.duration };
 }
 

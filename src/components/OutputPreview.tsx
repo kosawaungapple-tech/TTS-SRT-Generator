@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { Headphones, Play, Pause, FileText, Music, RefreshCw, Sparkles, Clipboard, Check, AlertCircle } from 'lucide-react';
 import { AudioResult } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
-import { formatTime, formatMyanmarDuration, pcmToWav } from '../utils/audioUtils';
+import { formatTime, formatMyanmarDuration, pcmToMp3 } from '../utils/audioUtils';
 import { generateSRT, generateASS, generateLRC } from '../utils/subtitleUtils';
 
 interface OutputPreviewProps {
@@ -396,13 +396,20 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
       
       console.log(`[DEBUG] Audio Byte Length: ${bytes.length}`);
       
-      // Determine if it's already a WAV (has RIFF header)
+      // We expect it to be MP3 now, but let's check for WAV RIFF header just in case for legacy support/local fallback
       let audioBlob: Blob;
       if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
-        audioBlob = new Blob([bytes], { type: 'audio/wav' });
+        // It's a WAV, convert to MP3 (44100Hz, 128kbps) for CapCut
+        audioBlob = await pcmToMp3(bytes.slice(44), 24000); 
+      } else if (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+        // It's already MP3
+        audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
+      } else if (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) {
+        // It's already MP3 (sync frame)
+        audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
       } else {
-        // Fallback or legacy PCM conversion
-        audioBlob = pcmToWav(bytes, 24000);
+        // Assume raw PCM and convert to MP3
+        audioBlob = await pcmToMp3(bytes, 24000);
       }
 
       console.log(`[DEBUG] Final File Size: ${audioBlob.size} bytes`);
@@ -411,7 +418,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
       const url = URL.createObjectURL(audioBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${filename}.wav`;
+      a.download = `${filename}.mp3`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
