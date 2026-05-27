@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, User as FirebaseUser } from 'firebase/auth';
-import { initializeFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, User as FirebaseUser, browserLocalPersistence, setPersistence } from 'firebase/auth';
+import { initializeFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, serverTimestamp, Timestamp, increment } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL, uploadString } from 'firebase/storage';
 
 // Import the Firebase configuration
@@ -36,17 +36,43 @@ const getFirebaseConfig = () => {
 
 const firebaseConfig = getFirebaseConfig();
 
+// Validate Firebase config
+interface FirebaseConfig {
+  apiKey?: string;
+  authDomain?: string;
+  projectId?: string;
+  appId?: string;
+  [key: string]: string | undefined;
+}
+
+const validateConfig = (config: FirebaseConfig) => {
+  const required = ['apiKey', 'authDomain', 'projectId', 'appId'];
+  const missing = required.filter(key => !config[key]);
+  if (missing.length > 0) {
+    console.error('Missing Firebase config keys:', missing);
+    console.log('Current config keys available:', Object.keys(config));
+    return false;
+  }
+  console.log('Firebase projectId:', config.projectId);
+  return true;
+};
+
+if (!validateConfig(firebaseConfig)) {
+  console.error('Firebase config incomplete — check firebase-applet-config.json or system settings');
+}
+
 // Initialize Firebase SDK
 const app = initializeApp(firebaseConfig);
 
 // Use initializeFirestore with long polling to bypass potential WebSocket blocks in the preview environment
 export const db = initializeFirestore(app, {
   experimentalForceLongPolling: true,
-  host: "firestore.googleapis.com",
-  ssl: true,
 }, firebaseConfig.firestoreDatabaseId);
 
 export const auth = getAuth(app);
+setPersistence(auth, browserLocalPersistence).catch(err => {
+  console.error("Failed to set auth persistence:", err);
+});
 export const storage = getStorage(app);
 export const googleProvider = new GoogleAuthProvider();
 
@@ -55,7 +81,34 @@ export const getIdToken = async () => {
   return await auth.currentUser.getIdToken();
 };
 
-export { signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadBytes, getDownloadURL, uploadString };
+export function getCurrentUserId(): string | null {
+  const user = auth.currentUser;
+  // Previously we blocked anonymous writes here, but this app uses Access Code login
+  // which leaves users technically anonymous. We must allow them to write their own docs.
+  if (!user) return null;
+  return user.uid;
+}
+
+export async function getUserControls(userId: string) {
+  const currentUser = auth.currentUser;
+  
+  // Requirement: Allow fetching for authorized anonymous users
+  if (!currentUser) {
+    console.warn("[VBS] Skipping getUserControls — not logged in");
+    return null;
+  }
+
+  try {
+    const docRef = doc(db, "user_controls", userId);
+    const snap = await getDoc(docRef);
+    return snap.exists() ? snap.data() : null;
+  } catch (err) {
+    console.error("[VBS] getUserControls error:", err);
+    return null;
+  }
+}
+
+export { signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadBytes, getDownloadURL, uploadString, serverTimestamp, Timestamp, increment };
 export type { FirebaseUser };
 
 // Test connection to Firestore

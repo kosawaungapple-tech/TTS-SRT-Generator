@@ -1,106 +1,356 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Wand2, Key, Settings, User, LogIn, LogOut, ShieldCheck, ShieldAlert, Shield, CheckCircle2, XCircle, History, Wrench, Plus, Trash2, Download, Play, Music, FileText, Eye, EyeOff, Cloud, RefreshCw, Zap, X, ExternalLink, Calendar, Clock, Mail, Wifi, Save, Lock, Info, ArrowRight, ChevronRight, Youtube } from 'lucide-react';
-import { GoogleGenAI } from "@google/genai";
+import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Video, Clipboard, Mic2, Play, Info, Sparkles, Image as ImageIcon, X, Calendar } from 'lucide-react';
+import { WelcomePage } from './components/WelcomePage';
 import { Header } from './components/Header';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { ContentInput } from './components/ContentInput';
-import { PronunciationRules } from './components/PronunciationRules';
 import { VoiceConfig } from './components/VoiceConfig';
 import { OutputPreview } from './components/OutputPreview';
-import { MiniAudioPlayer } from './components/MiniAudioPlayer';
 import { AdminDashboard } from './components/AdminDashboard';
+import { VideoTranscriber } from './components/VideoTranscriber';
+import { ThumbnailCreator } from './components/ThumbnailCreator';
+import { VideoStudio } from './components/VideoStudio';
+import { PrivacyPolicy } from './components/PrivacyPolicy';
+import { TermsOfService } from './components/TermsOfService';
+import { AnnouncementPanel } from './components/AnnouncementPanel';
+import { Modal, ModalType } from './components/Modal';
 import { GeminiTTSService } from './services/geminiService';
-import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, AuthorizedUser, SystemConfig } from './types';
+import { apiChannelManager } from './services/apiChannelManager';
+import { logActivity } from './services/activityService';
+import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, SystemConfig, VBSUserControl, Announcement } from './types';
+import { checkAndDeductCredits } from './services/creditService';
 import { DEFAULT_RULES } from './constants';
-import { pcmToWav } from './utils/audioUtils';
-import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDoc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadString, getDownloadURL } from './firebase';
+import { useLanguage } from './contexts/LanguageContext';
+import { formatDate } from './utils/dateUtils';
+import { translateError } from './utils/errorUtils';
+import { pcmToWav, formatMyanmarDuration, pcmBase64ToWav, renderSpeedAdjustedAudio } from './utils/audioUtils';
+import { generateOptimizedSubtitles } from './utils/subtitleUtils';
+import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId } from './firebase';
 
-type Tab = 'generate' | 'history' | 'tools' | 'admin' | 'vbs-admin' | 'youtube-recap' | 'youtube-transcript';
+type Tab = 'generate' | 'translator' | 'transcriber' | 'thumbnail' | 'video-studio' | 'history' | 'tools' | 'admin' | 'vbs-admin';
 
 export default function App() {
+  const { language, t } = useLanguage();
+
   const [activeTab, setActiveTab] = useState<Tab>('generate');
+  const [hasEntered, setHasEntered] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
+  type UITheme = 'glassmorphism' | 'minimal' | 'neon' | 'cyberpunk';
+  const [uiTheme, setUITheme] = useState<UITheme>(() => {
+    return (localStorage.getItem('vbs_ui_theme') as UITheme) || 'glassmorphism';
+  });
   const [text, setText] = useState('');
-  const [customRules, setCustomRules] = useState('');
+  const [customRules] = useState('');
   const [saveToHistory, setSaveToHistory] = useState(false);
   const [config, setConfig] = useState<TTSConfig>({
-    voiceId: 'zephyr',
+    voiceId: 'kore',
     speed: 1.0,
     pitch: 0,
     volume: 80,
-    effects: {
-      echo: { enabled: false, delay: 0.3, feedback: 0.4 },
-      reverb: { enabled: false, decay: 1.5, mix: 0.3 },
-      pitchShift: { enabled: false, semitones: 0 },
-      chorus: { enabled: false, rate: 1.5, depth: 0.5 }
-    }
+    styleInstruction: '',
   });
+  const [outputConfig, setOutputConfig] = useState({ speed: 1.0, volume: 80 });
   const [isLoading, setIsLoading] = useState(false);
+  const [isProcessingSpeed, setIsProcessingSpeed] = useState(false);
   const [result, setResult] = useState<AudioResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Sign in anonymously is restricted in the console, so we skip it for now.
   // The app will function in bypass mode using localStorage for the API Key.
   
-  const [newApiKey, setNewApiKey] = useState('');
-  const [localApiKey, setLocalApiKey] = useState<string | null>(localStorage.getItem('VLOGS_BY_SAW_API_KEY'));
-  const [apiSwitch, setApiSwitch] = useState<'admin' | 'personal'>(localStorage.getItem('VBS_API_SWITCH') as 'admin' | 'personal' || 'admin');
-  const [isUpdatingKey, setIsUpdatingKey] = useState(false);
-  const [showApiKey, setShowApiKey] = useState(false);
+  const [localApiKey, setLocalApiKey] = useState<string | null>(apiChannelManager.getActiveKey());
+
+  useEffect(() => {
+    const handleStorageChange = () => {
+      setLocalApiKey(apiChannelManager.getActiveKey());
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
-  const [profile, setProfile] = useState<AuthorizedUser | null>(null);
+  const [profile, setProfile] = useState<VBSUserControl | null>(null);
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings>({
-    allow_global_key: false,
-    total_generations: 0
+    allow_admin_keys: false,
+    total_generations: 0,
+    api_keys: ['']
   });
-  const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
+  const [engineStatus, setEngineStatus] = useState<'ready' | 'cooling' | 'limit'>('ready');
+  const [retryCountdown, setRetryCountdown] = useState(0);
+  const [isConfigLoading, setIsConfigLoading] = useState(false); // Default to false to bypass loading screen if env vars missing
+  const [isAdminRoute, setIsAdminRoute] = useState(window.location.pathname === '/vbs-admin');
+  const [isAdminConfigRoute, setIsAdminConfigRoute] = useState(window.location.pathname === '/vbs-admin-config');
+  const [isPrivacyRoute, setIsPrivacyRoute] = useState(window.location.pathname === '/privacy-policy');
+  const [isTermsRoute, setIsTermsRoute] = useState(window.location.pathname === '/terms-of-service');
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isSessionSynced, setIsSessionSynced] = useState(false);
+
+  useEffect(() => {
+    // Safety timeout for auth readiness in case Firebase Auth is blocked by browser tracking protection
+    const timer = setTimeout(() => {
+      if (!isAuthReady) {
+        console.warn("Auth readiness safety timeout reached. Proceeding...");
+        setIsAuthReady(true);
+      }
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [isAuthReady]);
+
+  const [vbsId, setVbsId] = useState<string | null>(localStorage.getItem('VBS_USER_ID'));
+  const [userControl, setUserControl] = useState<VBSUserControl | null>(null);
+  const [abortController, setAbortController] = useState<AbortController | null>(null);
+
+  useEffect(() => {
+    if (!vbsId) {
+      const newId = `VBS-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+      localStorage.setItem('VBS_USER_ID', newId);
+      setVbsId(newId);
+    }
+  }, [vbsId]);
+
+  // Use this for global notifications or debug
+  useEffect(() => {
+    // Requirement 3: Allow fetch for both real users AND anonymous users with access granted
+    // This ensures the Transcribe button works for users logged in via Access Code
+    const canFetch = vbsId && isAuthReady && auth.currentUser && (isAccessGranted || !auth.currentUser.isAnonymous);
+    
+    if (canFetch) {
+      const unsubscribe = onSnapshot(doc(db, 'user_controls', vbsId), (docSnap) => {
+        if (docSnap.exists()) {
+          setUserControl(docSnap.data() as VBSUserControl);
+        } else {
+          const initialControl: VBSUserControl = {
+            vbsId,
+            dailyUsage: 0,
+            credits: globalSettings.welcome_credits || 5,
+            lastUsedDate: new Date().toDateString(),
+            isUnlimited: false,
+            isBlocked: false,
+            membershipStatus: 'standard',
+            updatedAt: serverTimestamp()
+          } as unknown as VBSUserControl;
+          
+          // Guard: Never write with anonymous or null user
+          const authUserId = getCurrentUserId();
+          if (authUserId) {
+            setDoc(doc(db, 'user_controls', vbsId), initialControl).catch(err => {
+              console.error("Failed to initialize user control:", err);
+            });
+          } else {
+            console.warn('[VBS] Skipping user_controls initialization — anonymous user');
+          }
+          setUserControl(initialControl);
+        }
+      }, (error) => {
+        // If it's a permission error, we might still be syncing session doc
+        if (isSessionSynced) {
+          handleFirestoreError(error, OperationType.GET, `user_controls/${vbsId}`);
+        } else {
+          console.log('[VBS] Profile fetch error (expected during sync):', error.message);
+        }
+      });
+      return () => unsubscribe();
+    } else if (vbsId && isAuthReady && auth.currentUser) {
+      console.log('[VBS] Auth ready, waiting for session sync if needed...');
+    }
+  }, [vbsId, isAuthReady, auth.currentUser, isSessionSynced]);
+
+  const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  }, []);
+
+  const isUsingAdminKey = useMemo(() => {
+    // Personal checks
+    if (localStorage.getItem('VLOGS_BY_SAW_API_KEY')) return false;
+    if (profile?.api_key_stored) return false;
+    
+    // Admin checks
+    if (globalSettings.allow_admin_keys) {
+      if ((globalSettings.primary_key || globalSettings.secondary_key || globalSettings.backup_key)) return true;
+      if ((globalSettings.api_keys || []).some(k => k.trim())) return true;
+    }
+    
+    // Environment check (treated as admin key technically)
+    if (typeof process !== 'undefined' && process.env.GEMINI_API_KEY) return true;
+    
+    return false;
+  }, [profile, globalSettings]);
+
+  const getEffectiveApiKey = useCallback(() => {
+    // Priority -1: Immediate Channel Manager fetch
+    const immediateLocalKey = apiChannelManager.getActiveKey();
+    if (immediateLocalKey && immediateLocalKey.trim()) {
+      return immediateLocalKey;
+    }
+
+    // [ADMIN PREMIUM KEY PRIORITY - COMMANDER ORDER]
+    // If the toggle is ON, we bypass everything and use admin keys directly.
+    const userAllowedAdminKey = profile?.allowAdminKey === true || profile?.role === 'admin';
+    if (isUsingAdminKey && globalSettings.allow_admin_keys && userAllowedAdminKey) {
+      const adminKeys = [
+        globalSettings.primary_key || '',
+        globalSettings.secondary_key || '',
+        globalSettings.backup_key || ''
+      ].filter(k => k.trim());
+
+      if (adminKeys.length > 0) {
+        console.log("App: Bypassing local storage - Using Admin Premium Keys (Toggle is ON)");
+        return adminKeys.join(',');
+      }
+    }
+    
+    // Priority 2: Firestore User Profile
+    if (profile?.api_key_stored) {
+      console.log("App: Using API Key from Firestore Profile");
+      return profile.api_key_stored.trim();
+    }
+    
+    // 2. Fallback to Global System Keys (if enabled)
+    if (globalSettings.allow_admin_keys) {
+      const keys = [
+        globalSettings.primary_key || '',
+        globalSettings.secondary_key || '',
+        globalSettings.backup_key || ''
+      ].filter(k => k.trim());
+
+      if (keys.length > 0) {
+        console.log("App: Using Rotated Admin API Keys (Primary/Secondary/Backup)");
+        return keys.join(',');
+      }
+
+      const validKeys = (globalSettings.api_keys || []).filter(k => k.trim() !== '');
+      if (validKeys.length > 0) {
+        console.log("App: Using Rotated Admin API Keys (Legacy Array)");
+        return validKeys.join(',');
+      }
+    }
+    
+    // 3. Ultimate Fallback to Environment Variable
+    if (typeof process !== 'undefined' && process.env.GEMINI_API_KEY) {
+      console.log("App: Using Environment Variable API Key");
+      return process.env.GEMINI_API_KEY.trim();
+    }
+    
+    console.warn("App: No effective API Key found");
+    return null;
+  }, [profile, globalSettings, localApiKey, isUsingAdminKey]);
 
   // Global Rules & History
   const [globalRules, setGlobalRules] = useState<PronunciationRule[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historySearch, setHistorySearch] = useState('');
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
-  const [isConfigLoading, setIsConfigLoading] = useState(false); // Default to false to bypass loading screen if env vars missing
-  const [isAdminRoute, setIsAdminRoute] = useState(window.location.pathname === '/vbs-admin');
-  const [isAuthReady, setIsAuthReady] = useState(false);
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const [userId, setUserId] = useState<string | null>(null);
-
   // Auth & Access State (Custom)
   const [accessCodeInput, setAccessCodeInput] = useState('');
-  const [isAccessGranted, setIsAccessGranted] = useState(true); // Default to true for preview environment
+  const [passwordInput, setPasswordInput] = useState('');
+  const [isStepTwo, setIsStepTwo] = useState(false);
+  const [isAccessGranted, setIsAccessGranted] = useState(() => {
+    return localStorage.getItem('vbs_access_granted') === 'true' || 
+           localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
+  }); 
   const [isVerifyingCode, setIsVerifyingCode] = useState(false);
-  const [accessCode, setAccessCode] = useState<string | null>('preview-user');
+  const [accessCode, setAccessCode] = useState<string | null>(() => localStorage.getItem('vbs_access_code'));
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(localStorage.getItem('is_admin_auth') === 'true');
-  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
-  const [adminPasswordInput, setAdminPasswordInput] = useState('');
-  const [youtubeUrl, setYoutubeUrl] = useState('');
-  const [isProcessingYoutube, setIsProcessingYoutube] = useState(false);
-  const [youtubeTranscriptUrl, setYoutubeTranscriptUrl] = useState('');
-  const [rawTranscript, setRawTranscript] = useState('');
-  const [isFetchingTranscript, setIsFetchingTranscript] = useState(false);
-  const [retryCount, setRetryCount] = useState(0);
-  const [showManualInput, setShowManualInput] = useState(true); // Default to true now
-  const [manualTranscript, setManualTranscript] = useState('');
-  const [showTranscriptGuide, setShowTranscriptGuide] = useState(false);
-  const [recapManualText, setRecapManualText] = useState('');
+  const [channelsExhausted, setChannelsExhausted] = useState(false);
+
+  useEffect(() => {
+    const handleSwitch = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      showToast(detail.message, 'success');
+    };
+    const handleExhausted = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      setChannelsExhausted(true);
+      showToast(detail.message, 'error');
+    };
+
+    window.addEventListener('channel-switch', handleSwitch);
+    window.addEventListener('channels-exhausted', handleExhausted);
+    
+    return () => {
+      window.removeEventListener('channel-switch', handleSwitch);
+      window.removeEventListener('channels-exhausted', handleExhausted);
+    };
+  }, [showToast]);
+
+  // Request notification permission on first interaction
+  useEffect(() => {
+    const requestPermission = () => {
+      if (Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+      window.removeEventListener('click', requestPermission);
+    };
+    window.addEventListener('click', requestPermission);
+    return () => window.removeEventListener('click', requestPermission);
+  }, []);
+
+  // Modal State
+  const [modal, setModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: ModalType;
+    confirmText?: string;
+    cancelText?: string;
+    placeholder?: string;
+    defaultValue?: string;
+    inputType?: 'text' | 'password' | 'date';
+    onConfirm?: (value?: string) => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'alert',
+  });
+
+  // Sync vbsId with accessCode if user is logged in
+  useEffect(() => {
+    if (isAccessGranted && accessCode && vbsId !== accessCode) {
+      setVbsId(accessCode);
+      localStorage.setItem('VBS_USER_ID', accessCode);
+    }
+  }, [isAccessGranted, accessCode, vbsId]);
+
+  const openModal = (config: Partial<Omit<typeof modal, 'isOpen'>> & { title: string; message: string }) => {
+    setModal({
+      isOpen: true,
+      title: config.title,
+      message: config.message,
+      type: config.type || 'alert',
+      confirmText: config.confirmText || 'Confirm',
+      cancelText: config.cancelText || 'Cancel',
+      placeholder: config.placeholder || 'Enter value...',
+      defaultValue: config.defaultValue || '',
+      inputType: config.inputType || 'text',
+      onConfirm: config.onConfirm,
+    });
+  };
 
   // Handle Anonymous Auth
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        setUserId(user.uid);
         setIsAuthReady(true);
+        
+        // Requirement: Set synced immediately if user is logged in
+        // We allow it for anonymous users too if they have a stored access code
+        const code = localStorage.getItem('vbs_access_code');
+        if (code === 'saw_vlogs_2026') {
+          console.log('[VBS] Master Admin detected, setting session synced immediately');
+          setIsSessionSynced(true);
+        } else if (code) {
+          console.log('[VBS] User with stored access code detected, setting session synced proactively');
+          setIsSessionSynced(true);
+        }
       } else {
-        signInAnonymously(auth).then(() => {
-          setIsAuthReady(true);
+        signInAnonymously(auth).then((result) => {
+          if (result.user) {
+            setIsAuthReady(true);
+          }
         }).catch((err) => {
           console.error("Failed to sign in anonymously (Silent Auth Fallback):", err);
-          // Proceed anyway to allow UI testing
-          setIsAuthReady(true);
         });
       }
     });
@@ -109,8 +359,11 @@ export default function App() {
 
   useEffect(() => {
     const handleLocationChange = () => {
-      const isRoute = window.location.pathname === '/vbs-admin';
-      setIsAdminRoute(isRoute);
+      const path = window.location.pathname;
+      setIsAdminRoute(path === '/vbs-admin');
+      setIsAdminConfigRoute(path === '/vbs-admin-config');
+      setIsPrivacyRoute(path === '/privacy-policy');
+      setIsTermsRoute(path === '/terms-of-service');
     };
     
     handleLocationChange();
@@ -120,70 +373,159 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDarkMode);
-  }, [isDarkMode]);
+    document.documentElement.classList.remove('theme-minimal', 'theme-neon', 'theme-cyberpunk');
+    if (uiTheme !== 'glassmorphism') {
+      document.documentElement.classList.add(`theme-${uiTheme}`);
+    }
+    localStorage.setItem('vbs_ui_theme', uiTheme);
+  }, [isDarkMode, uiTheme]);
 
   // Ensure session document exists for security rules
   useEffect(() => {
+    // We allow session sync for both real users AND anonymous users who have granted access
+    // This is because the "Access Code" is the primary login method in this app
     if (isAccessGranted && isAuthReady && auth.currentUser && accessCode) {
+      setIsSessionSynced(true);
+
       const syncSession = async () => {
+        const authUserId = getCurrentUserId();
+        if (!authUserId) return;
+
         try {
-          await setDoc(doc(db, 'sessions', auth.currentUser!.uid), {
+          await setDoc(doc(db, 'sessions', authUserId), {
             accessCode: accessCode,
-            createdAt: new Date().toISOString()
+            createdAt: serverTimestamp()
           });
-          console.log('Session synced for access code:', accessCode);
+          console.log('[VBS] Session synced in background for:', accessCode);
         } catch (e) {
-          console.error('Failed to sync session:', e);
+          console.warn('[VBS] Background session sync failed:', e);
         }
       };
       syncSession();
+    } else {
+      setIsSessionSynced(false);
     }
-  }, [isAccessGranted, isAuthReady, accessCode]);
+  }, [isAccessGranted, isAuthReady, accessCode, auth.currentUser]);
 
   // Check for existing session
   useEffect(() => {
+    if (!isAuthReady || !auth.currentUser) return;
+    
+    // Proactive check: If owner, we can proceed even before session sync
+    const isOwner = localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
+    if (!isSessionSynced && !isOwner) return;
+
     const granted = localStorage.getItem('vbs_access_granted') === 'true';
     const code = localStorage.getItem('vbs_access_code');
     if (granted && code) {
       setIsAccessGranted(true);
       setAccessCode(code);
       
-      // Fetch profile data directly from server for reliability without auth dependencies
-      getDocFromServer(doc(db, 'authorized_users', code)).then(async (snapshot) => {
+      // Fetch profile data directly from server for reliability
+      getDocFromServer(doc(db, 'user_controls', code)).then(async (snapshot) => {
         if (snapshot.exists()) {
-          const data = snapshot.data() as AuthorizedUser;
+          const data = snapshot.data() as VBSUserControl;
           setProfile(data);
+          
+          // Sync API Key from Firestore to Channel Manager
+          if (data.api_key_stored) {
+            apiChannelManager.setUserChannel(data.api_key_stored);
+          }
           
           // Sync API Key from Firestore to LocalStorage if missing locally
           if (data.api_key_stored && !localStorage.getItem('VLOGS_BY_SAW_API_KEY')) {
-            localStorage.setItem('VLOGS_BY_SAW_API_KEY', data.api_key_stored);
-            setLocalApiKey(data.api_key_stored);
+            const trimmedKey = data.api_key_stored.trim();
+            localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
+            setLocalApiKey(trimmedKey);
           }
+        } else if (code === 'saw_vlogs_2026') {
+          // Master Admin Fallback
+          setProfile({ 
+            vbsId: code, 
+            role: 'admin', 
+            isActive: true, 
+            note: 'The Commander',
+            membershipStatus: 'premium'
+          } as unknown as VBSUserControl);
         } else {
           // If the code is no longer in authorized_users, log out
           if (code !== 'preview-user') {
             handleLogout();
           }
         }
-      }).catch(err => {
-        console.error('Failed to restore profile:', err);
+      }).catch((err) => {
+        console.error("Profile fetch error (possibly waiting for session sync):", err);
+        // If it's a permission error, we don't logout yet, we wait for isSessionSynced
+        // The rule might be denying 'get' if the session isn't there yet, even though we changed it to isSignedIn()
+        // Sometimes Firestore rules have slight propagation delay
       });
     }
-  }, [isAuthReady]);
+  }, [isAuthReady, isSessionSynced]);
 
   // Listen for Global Settings
   useEffect(() => {
-    if (!isAccessGranted || !isAuthReady) return;
+    if (!isAccessGranted || !isAuthReady || !auth.currentUser) return;
     
     const unsubscribe = onSnapshot(doc(db, 'settings', 'global'), (snapshot) => {
       if (snapshot.exists()) {
-        setGlobalSettings(snapshot.data() as GlobalSettings);
+        const data = snapshot.data() as GlobalSettings;
+        
+        // Merge offline announcements if they exist (only for the current admin who saved them)
+        const offlineAnnouncements = localStorage.getItem('vbs_offline_announcements');
+        if (offlineAnnouncements) {
+          try {
+            const parsed = JSON.parse(offlineAnnouncements);
+            // Deduplicate by ID, preferring server version but keeping local ones not yet on server
+            const serverAnnouncements = data.announcements || [];
+            const merged = [...serverAnnouncements];
+            parsed.forEach((offAnn: Announcement) => {
+              if (offAnn && offAnn.id && !merged.find(a => a.id === offAnn.id)) {
+                merged.push(offAnn);
+              }
+            });
+            data.announcements = merged;
+          } catch {
+            console.error("Failed to merge offline announcements");
+          }
+        }
+
+        setGlobalSettings(data);
+        
+        // Sync Admin Keys from Settings to Channel Manager
+        const allAdminKeys = [
+          data.primary_key || '',
+          data.secondary_key || '',
+          data.backup_key || '',
+          ...(data.api_keys || [])
+        ].filter(k => k && k.trim());
+        apiChannelManager.syncAdminKeys(allAdminKeys);
+
         setIsConfigLoading(false);
       } else {
+        // Fallback for settings if doc doesn't exist yet
+        const offlineAnnouncements = localStorage.getItem('vbs_offline_announcements');
+        if (offlineAnnouncements) {
+           try {
+             const parsed = JSON.parse(offlineAnnouncements);
+             setGlobalSettings(prev => ({ ...prev, announcements: parsed }));
+           } catch {
+             // Silence is golden
+           }
+        }
         setIsConfigLoading(false);
       }
     }, (err) => {
       console.error('Failed to load global settings (Silent Fallback):', err);
+      // Try to load from localStorage as absolute fallback
+      const offlineAnnouncements = localStorage.getItem('vbs_offline_announcements');
+      if (offlineAnnouncements) {
+        try {
+          const parsed = JSON.parse(offlineAnnouncements);
+          setGlobalSettings(prev => ({ ...prev, announcements: parsed }));
+        } catch {
+          // Silence is golden
+        }
+      }
       setIsConfigLoading(false);
     });
     return () => unsubscribe();
@@ -191,12 +533,11 @@ export default function App() {
 
   // Listen for System Config
   useEffect(() => {
-    if (!isAccessGranted || !isAuthReady) return;
+    if (!isAccessGranted || !isAuthReady || !auth.currentUser || profile?.role !== 'admin' || !isSessionSynced) return;
     
     const unsubscribe = onSnapshot(doc(db, 'system_config', 'main'), (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data() as SystemConfig;
-        setSystemConfig(data);
         // Save to localStorage for the NEXT reload to use this config
         localStorage.setItem('vbs_system_config', JSON.stringify(data));
       }
@@ -204,11 +545,11 @@ export default function App() {
       console.error('Failed to load system config (Silent Fallback):', err);
     });
     return () => unsubscribe();
-  }, [isAccessGranted, isAuthReady]);
+  }, [isAccessGranted, isAuthReady, profile]);
 
   // Listen for Global Rules
   useEffect(() => {
-    if (!isAccessGranted || !isAuthReady) {
+    if (!isAccessGranted || !isAuthReady || !auth.currentUser || auth.currentUser.isAnonymous) {
       setGlobalRules([]);
       return;
     }
@@ -224,7 +565,7 @@ export default function App() {
 
   // Fetch History
   useEffect(() => {
-    if (isAccessGranted && isAuthReady && accessCode && activeTab === 'history') {
+    if (isAccessGranted && isAuthReady && auth.currentUser && !auth.currentUser.isAnonymous && accessCode && activeTab === 'history') {
       setIsHistoryLoading(true);
       const q = query(collection(db, 'history'), where('userId', '==', accessCode), orderBy('createdAt', 'desc'));
       const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -241,29 +582,57 @@ export default function App() {
 
   // Seed default admin if collection is empty
   useEffect(() => {
-    if (!isAuthReady) return;
+    if (!isAuthReady || !auth.currentUser || auth.currentUser.isAnonymous) return;
     const seedDefaultAdmin = async () => {
       try {
-        const adminDoc = await getDocFromServer(doc(db, 'authorized_users', 'SAW-ADMIN-2026'));
+        // Seed SAW-ADMIN-2026
+        const adminDoc = await getDocFromServer(doc(db, 'user_controls', 'SAW-ADMIN-2026'));
         if (!adminDoc.exists()) {
           console.log('Seeding default admin Access Code...');
-          const defaultAdmin: AuthorizedUser = {
-            id: 'SAW-ADMIN-2026',
-            label: 'Default Admin',
+          const defaultAdmin: VBSUserControl = {
+            vbsId: 'SAW-ADMIN-2026',
             isActive: true,
             role: 'admin',
-            createdAt: new Date().toISOString(),
-            createdBy: 'system'
+            isUnlimited: true,
+            membershipStatus: 'premium',
+            dailyUsage: 0,
+            lastUsedDate: new Date().toDateString(),
+            isBlocked: false,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
           };
-          await setDoc(doc(db, 'authorized_users', defaultAdmin.id), defaultAdmin);
-          console.log('Default admin seeded successfully.');
+          if (getCurrentUserId()) {
+            await setDoc(doc(db, 'user_controls', defaultAdmin.vbsId), defaultAdmin);
+          }
         }
+
+        // Seed saw_vlogs_2026 as master admin
+        const masterAdminDoc = await getDocFromServer(doc(db, 'user_controls', 'saw_vlogs_2026'));
+        if (!masterAdminDoc.exists()) {
+          console.log('Seeding master admin Access Code...');
+          const masterAdmin: VBSUserControl = {
+            vbsId: 'saw_vlogs_2026',
+            isActive: true,
+            role: 'admin',
+            isUnlimited: true,
+            membershipStatus: 'premium',
+            dailyUsage: 0,
+            lastUsedDate: new Date().toDateString(),
+            isBlocked: false,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          };
+          if (getCurrentUserId()) {
+            await setDoc(doc(db, 'user_controls', masterAdmin.vbsId), masterAdmin);
+          }
+        }
+        console.log('Admin seeding check completed.');
       } catch (err) {
-        console.error('Failed to seed default admin:', err);
+        console.error('Failed to seed admin:', err);
       }
     };
     
-    // Only seed if we are on the login screen or admin screen
+    // Only seed if we are not authenticated
     if (!isAccessGranted) {
       seedDefaultAdmin();
     }
@@ -271,7 +640,6 @@ export default function App() {
 
   const handleLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (isVerifyingCode) return;
     
     const code = accessCodeInput.trim();
     if (!code) {
@@ -279,38 +647,94 @@ export default function App() {
       return;
     }
 
+    // [COMMANDER BYPASS - URGENT]
+    if (code === 'saw_vlogs_2026') {
+      setIsAccessGranted(true);
+      setAccessCode(code);
+      setVbsId(code);
+      localStorage.setItem('VBS_USER_ID', code);
+      localStorage.setItem('vbs_access_granted', 'true');
+      localStorage.setItem('vbs_access_code', code);
+      setProfile({ 
+        vbsId: code, 
+        role: 'admin', 
+        isActive: true, 
+        note: 'The Commander',
+        membershipStatus: 'premium'
+      } as unknown as VBSUserControl);
+      setToast({ message: 'Welcome back, Commander!', type: 'success' });
+      setTimeout(() => setToast(null), 3000);
+      return;
+    }
+
+    // Step 1: Check code presence
+    if (!isStepTwo) {
+      // Regular login flow
+      setIsStepTwo(true);
+      setError(null);
+      return;
+    }
+
+    // Step 2: Regular user login with password
     setIsVerifyingCode(true);
     setError(null);
 
     try {
       console.log('Attempting public fetch for Access Code:', code);
       // Requirement 2: Direct Document Match using getDocFromServer for maximum reliability
-      const codeDoc = await getDocFromServer(doc(db, 'authorized_users', code));
+      const codeDoc = await getDocFromServer(doc(db, 'user_controls', code));
       
       if (!codeDoc.exists()) {
-        console.warn('Access Code not found in authorized_users collection');
+        console.warn('Access Code not found in user_controls collection');
         setError('Invalid Access Code. Please contact Admin for authorization.');
         return;
       }
 
-      const codeData = codeDoc.data() as AuthorizedUser;
+      const codeData = codeDoc.data() as VBSUserControl;
+      
+      // Check password if it exists in DB
+      if (codeData.password && codeData.password.trim() !== '' && codeData.password !== passwordInput.trim()) {
+        console.warn('Invalid password for access code');
+        setError(t('auth.invalidPassword'));
+        return;
+      }
+
+      // Check Expiry
+      if (codeData.expiryDate) {
+        const expiry = new Date(codeData.expiryDate);
+        if (expiry < new Date()) {
+          console.warn('Access Code has expired');
+          setError(t('auth.expired'));
+          return;
+        }
+      }
+
       // Requirement 3: If document exists AND isActive is true, grant access immediately
       if (!codeData.isActive) {
         console.warn('Access Code is inactive');
-        setError('This Access Code has been deactivated.');
+        setError(t('auth.deactivated'));
         return;
       }
 
       // Success
       setIsAccessGranted(true);
       setAccessCode(code);
+      // Sync vbsId with accessCode for regular user
+      setVbsId(code);
+      localStorage.setItem('VBS_USER_ID', code);
+      localStorage.setItem('vbs_access_granted', 'true');
+      localStorage.setItem('vbs_access_code', code);
       setProfile(codeData);
       
       // Sync API Key from Firestore to LocalStorage if present
       if (codeData.api_key_stored) {
-        localStorage.setItem('VLOGS_BY_SAW_API_KEY', codeData.api_key_stored);
-        setLocalApiKey(codeData.api_key_stored);
+        const trimmedKey = codeData.api_key_stored.trim();
+        localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
+        setLocalApiKey(trimmedKey);
       }
+      
+      // Log successful login
+      logActivity(code, 'login', 'User logged into the platform');
       
       // Requirement 3: Save user session to localStorage
       localStorage.setItem('vbs_access_granted', 'true');
@@ -318,9 +742,10 @@ export default function App() {
       
       setToast({ message: 'Welcome back!', type: 'success' });
       setTimeout(() => setToast(null), 3000);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Access Code Verification Error:', err);
-      let msg = err.message || 'Unknown error';
+      const errorObj = err as { message?: string };
+      let msg = errorObj.message || 'Unknown error';
       if (msg.includes('client is offline')) {
         msg = 'Connection failed. Please check your Firebase configuration or wait a moment for the database to initialize.';
       }
@@ -334,169 +759,13 @@ export default function App() {
     await signOut(auth);
     setIsAccessGranted(false);
     setAccessCode(null);
-    setIsAdmin(false);
+    setProfile(null);
+    setIsStepTwo(false);
     localStorage.removeItem('vbs_access_granted');
     localStorage.removeItem('vbs_access_code');
-    localStorage.removeItem('is_admin_auth');
     // We do NOT remove the API Key on logout as per safety requirements
     setLocalApiKey(null);
     setActiveTab('generate');
-  };
-
-  const handleAdminLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (adminPasswordInput === 'saw_vlogs_2026') {
-      setIsAdmin(true);
-      localStorage.setItem('is_admin_auth', 'true');
-      setIsAdminModalOpen(false);
-      setAdminPasswordInput('');
-      alert("Welcome, Saw!");
-    } else {
-      alert("စကားဝှက် မှားယွင်းနေပါသည်။");
-    }
-  };
-
-  const handleFetchTranscript = async () => {
-    const url = youtubeTranscriptUrl.trim();
-    if (!url) return;
-    
-    setIsFetchingTranscript(true);
-    setError(null);
-    setRawTranscript('');
-    
-    const extractVideoId = (url: string) => {
-      const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/i;
-      const match = url.match(regex);
-      return match ? match[1] : null;
-    };
-
-    const videoId = extractVideoId(url);
-    if (!videoId) {
-      setError("Invalid YouTube URL. Please check the link.");
-      setIsFetchingTranscript(false);
-      return;
-    }
-
-    const fetchViaServer = async () => {
-      const response = await fetch(`/api/youtube-transcript?url=${encodeURIComponent(url)}`);
-      const data = await response.json();
-      if (!response.ok || !data.transcript) throw new Error(data.error || "Server fetch failed");
-      return data.transcript.map((t: any) => t.text).join(' ');
-    };
-
-    const fetchViaClientProxy = async () => {
-      const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
-      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(watchUrl)}`;
-      const response = await fetch(proxyUrl);
-      if (!response.ok) throw new Error("Proxy fetch failed");
-      
-      const data = await response.json();
-      const html = data.contents;
-      
-      const regex = /ytInitialPlayerResponse\s*=\s*({.+?});/s;
-      const match = html.match(regex);
-      if (!match) throw new Error("Could not find player response in HTML");
-      
-      const playerResponse = JSON.parse(match[1]);
-      const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-      
-      if (!tracks || tracks.length === 0) throw new Error("No caption tracks found");
-      
-      const track = tracks.find((t: any) => t.languageCode === 'en') || 
-                    tracks.find((t: any) => t.languageCode === 'en-US') ||
-                    tracks.find((t: any) => t.languageCode.startsWith('en')) ||
-                    tracks[0];
-      
-      const transcriptRes = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(track.baseUrl)}`);
-      if (!transcriptRes.ok) throw new Error("Failed to fetch transcript XML via proxy");
-      
-      const transcriptData = await transcriptRes.json();
-      const xml = transcriptData.contents;
-      
-      const textRegex = /<text start="([\d.]+)" dur="([\d.]+)".*?>(.*?)<\/text>/g;
-      let fullText = "";
-      let m;
-      while ((m = textRegex.exec(xml)) !== null) {
-        fullText += m[3]
-          .replace(/&amp;/g, '&')
-          .replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>')
-          .replace(/&quot;/g, '"')
-          .replace(/&#39;/g, "'")
-          .replace(/&nbsp;/g, ' ') + " ";
-      }
-      if (!fullText) throw new Error("Transcript is empty");
-      return fullText.trim();
-    };
-
-    try {
-      // Try server first
-      try {
-        const text = await fetchViaServer();
-        setRawTranscript(text);
-        setRetryCount(0);
-        setShowManualInput(false);
-      } catch (serverErr) {
-        console.warn("Server fetch failed, trying client proxy...", serverErr);
-        const text = await fetchViaClientProxy();
-        setRawTranscript(text);
-        setRetryCount(0);
-        setShowManualInput(false);
-      }
-    } catch (err: any) {
-      console.error("YouTube Transcript Error:", err);
-      const newRetryCount = retryCount + 1;
-      setRetryCount(newRetryCount);
-      
-      if (newRetryCount >= 3) {
-        setShowManualInput(true);
-        setError("အလိုအလျောက် ဖတ်၍မရပါ။ ကျေးဇူးပြု၍ youtube-transcript.io ကဲ့သို့ site များမှ စာသားကို Copy ကူးပြီး ဤနေရာတွင် Paste လုပ်ပေးပါ။");
-      } else {
-        setError(`YouTube က Transcript ထုတ်ပေးဖို့ ငြင်းဆိုထားပါသည် (Retry ${newRetryCount}/3).`);
-      }
-    } finally {
-      setIsFetchingTranscript(false);
-    }
-  };
-
-  const handleYoutubeRecap = async (providedText?: string) => {
-    // Priority: 1. providedText (from transcript tab), 2. recapManualText (from recap tab)
-    const textToSummarize = typeof providedText === 'string' ? providedText : recapManualText.trim();
-    
-    if (!textToSummarize) return;
-    
-    setIsProcessingYoutube(true);
-    setError(null);
-    setText('');
-    setResult(null);
-    
-    try {
-      const fullText = textToSummarize;
-      
-      const ai = new GoogleGenAI({ apiKey: getEffectiveApiKey() || '' });
-      const geminiResponse = await ai.models.generateContent({
-        model: "gemini-3.1-pro-preview",
-        contents: fullText,
-        config: {
-          systemInstruction: "Translate and summarize the following English YouTube transcript into a natural, engaging Burmese narrative recap. Use a storytelling style.",
-        }
-      });
-      
-      const summary = geminiResponse.text;
-      if (summary) {
-        setText(summary);
-        setActiveTab('generate');
-        // Small delay to ensure state update before generation
-        setTimeout(() => {
-          handleGenerate();
-        }, 300);
-      }
-    } catch (err: any) {
-      console.error("YouTube Recap Error:", err);
-      setError("Gemini မှ Recap ပြုလုပ်ပေးရန် ငြင်းဆိုထားပါသည် (Check API Key or Content).");
-    } finally {
-      setIsProcessingYoutube(false);
-    }
   };
 
   const filteredHistory = useMemo(() => {
@@ -508,126 +777,8 @@ export default function App() {
     );
   }, [history, historySearch]);
 
-  const handleClearApiKey = () => {
-    localStorage.removeItem('VLOGS_BY_SAW_API_KEY');
-    localStorage.removeItem('VBS_API_SWITCH');
-    setLocalApiKey(null);
-    setApiSwitch('admin');
-    setToast({ message: 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ Website ကို ပြန်ဖွင့်ပါမည်။ (Settings saved. Reloading page...)', type: 'success' });
-    setTimeout(() => {
-      window.location.reload();
-    }, 1500);
-  };
-
-  const maskApiKey = (key: string | undefined) => {
-    if (!key) return 'Not Set';
-    if (showApiKey) return key;
-    return `${key.substring(0, 8)}...${key.substring(key.length - 4)}`;
-  };
-
-  const getEffectiveApiKey = useCallback(() => {
-    // If Admin Key is selected, use the Global System Key
-    if (apiSwitch === 'admin') {
-      if (globalSettings.allow_global_key && globalSettings.global_system_key) {
-        console.log("App: Using Global System API Key (Admin Mode)");
-        return globalSettings.global_system_key.trim();
-      }
-      console.warn("App: Admin Mode selected but no Global System Key available");
-      return null;
-    }
-
-    // If Personal Key is selected, use the key from Local Storage
-    const storedKey = localStorage.getItem('VLOGS_BY_SAW_API_KEY');
-    if (storedKey) {
-      console.log("App: Using API Key from LocalStorage (Personal Mode)");
-      return storedKey.trim();
-    }
-
-    if (profile?.api_key_stored) {
-      console.log("App: Using API Key from Firestore Profile (Personal Mode Fallback)");
-      return profile.api_key_stored.trim();
-    }
-    
-    // Ultimate Fallback to Environment Variable
-    if (typeof process !== 'undefined' && process.env.GEMINI_API_KEY) {
-      console.log("App: Using Environment Variable API Key");
-      return process.env.GEMINI_API_KEY.trim();
-    }
-    
-    console.warn("App: No effective API Key found");
-    return null;
-  }, [profile, globalSettings, apiSwitch]);
-
-  const handleUpdateGlobalSettings = async (updates: Partial<GlobalSettings>) => {
-    try {
-      await updateDoc(doc(db, 'settings', 'global'), updates);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, 'settings/global');
-    }
-  };
-
-  const handleSaveApiKeyFromModal = async (key: string, selectedSwitch: 'admin' | 'personal') => {
-    const trimmedKey = key.trim();
-    setIsUpdatingKey(true);
-    try {
-      // 1. Save switch preference
-      localStorage.setItem('VBS_API_SWITCH', selectedSwitch);
-      setApiSwitch(selectedSwitch);
-
-      // 2. Save personal key if provided
-      if (selectedSwitch === 'personal' && trimmedKey) {
-        localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
-        setLocalApiKey(trimmedKey);
-      }
-      
-      setToast({ message: 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ Website ကို ပြန်ဖွင့်ပါမည်။ (Settings saved. Reloading page...)', type: 'success' });
-      setTimeout(() => {
-        window.location.reload();
-      }, 1500);
-    } catch (err: any) {
-      console.error('Save API Key Error:', err);
-      setToast({ message: 'Failed to save API Key', type: 'error' });
-      setTimeout(() => setToast(null), 3000);
-    } finally {
-      setIsUpdatingKey(false);
-    }
-  };
-
-  const handleAddGlobalRule = async () => {
-    const original = prompt('Enter original text:');
-    const replacement = prompt('Enter replacement text:');
-    if (original && replacement) {
-      try {
-        await addDoc(collection(db, 'globalRules'), {
-          original,
-          replacement,
-          createdAt: new Date().toISOString()
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, 'globalRules');
-      }
-    }
-  };
-
-  const handleDeleteGlobalRule = async (id: string) => {
-    if (confirm('Delete this rule?')) {
-      try {
-        await deleteDoc(doc(db, 'globalRules', id));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, `globalRules/${id}`);
-      }
-    }
-  };
-
-  const handleUpdateGlobalRule = async (id: string, updates: Partial<PronunciationRule>) => {
-    try {
-      await updateDoc(doc(db, 'globalRules', id), updates);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `globalRules/${id}`);
-    }
-  };
-
   const handleGenerate = async () => {
+    setOutputConfig({ speed: config.speed, volume: config.volume });
     console.log("App: Generate Voice Button Clicked");
     
     if (!text.trim()) {
@@ -635,125 +786,266 @@ export default function App() {
       return;
     }
 
-    // Use the effective API key based on the switch setting
+    // [SINGLE-PASS ESTIMATION - COMMANDER ORDER]
+    // Gemini 1.5 Flash uses single-pass with no recursive sync loops
     const effectiveKey = getEffectiveApiKey();
     
-    if (!effectiveKey) {
-      console.warn("App: Generation blocked - No effective API Key found. Opening settings modal.");
-      if (apiSwitch === 'personal') {
-        window.alert('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)');
-      } else {
-        window.alert('Admin Key မရှိသေးပါ။ ကျေးဇူးပြု၍ ခဏစောင့်ပါ သို့မဟုတ် ကိုယ်ပိုင် Key သုံးပါ။ (Admin Key not available. Please wait or use personal key.)');
-      }
-      setIsApiKeyModalOpen(true);
+    if (!effectiveKey || !effectiveKey.trim()) {
+      console.warn("App: Generation blocked - No API Key found. Opening settings modal.");
+      openModal({
+        title: 'API Key Required',
+        message: 'ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)',
+        type: 'error',
+        confirmText: 'Open Settings',
+        onConfirm: () => setIsApiKeyModalOpen(true)
+      });
       setError('ကျေးဇူးပြု၍ Settings တွင် API Key အရင်ထည့်သွင်းပါ။ (No API Key found. Please add one in Settings.)');
+      return;
+    }
+    
+    if (!text || text.trim().length === 0) {
+      showToast("ကျေးဇူးပြု၍ ပြောင်းလဲလိုသော စာသားကို အရင်ရိုက်ထည့်ပါ။ (Please enter text to convert.)", 'error');
       return;
     }
     
     setIsLoading(true);
     setError(null);
     setResult(null);
+    setEngineStatus('ready');
 
     console.log("App: Starting voiceover generation process with key...");
 
-    try {
-      const isMock = systemConfig?.mock_mode || false;
-      const ttsService = new GeminiTTSService(effectiveKey || '');
-      
-      console.log("App: Applying pronunciation rules...");
-      // Apply pronunciation rules sequentially: Default -> Global Admin -> User Custom
-      let processedText = text;
-      
-      // 1. Default Rules
-      DEFAULT_RULES.forEach(rule => {
-        const regex = new RegExp(rule.original, 'gi');
-        processedText = processedText.replace(regex, rule.replacement);
-      });
+    const activeInfo = apiChannelManager.getActiveSourceInfo();
+    const isShared = activeInfo?.isShared || false;
 
-      // 2. Global Admin Rules
-      globalRules.forEach(rule => {
-        const regex = new RegExp(rule.original, 'gi');
-        processedText = processedText.replace(regex, rule.replacement);
-      });
-      
-      // 3. User Custom Rules
-      customRules.split('\n').forEach((line) => {
-        const parts = line.split('->').map(p => p.trim());
-        if (parts.length === 2) {
-          const regex = new RegExp(parts[0], 'gi');
-          processedText = processedText.replace(regex, parts[1]);
-        }
-      });
-
-      console.log("App: Text processed, calling TTS service...");
-      const audioResult = await ttsService.generateTTS(processedText, config, isMock);
-      
-      if (audioResult.isSimulation) {
-        console.warn("App: Received simulation result (fallback triggered)");
-        setError("Note: Real API call failed or timed out. Showing simulation result for testing.");
-      } else {
-        console.log("App: TTS generation successful, updating state...");
+    // Credit Check - Only if using shared admin key
+    // [CREDIT ENFORCEMENT - COMMANDER ORDER]
+    // Only check if using shared key and not admin
+    if (!isVbsAdmin && isShared && userControl?.vbsId) {
+      const creditResult = await checkAndDeductCredits(userControl.vbsId, 'tts');
+      if (!creditResult.success) {
+        showToast(creditResult.message || "Credit ကုန်ဆုံးသွားပါပြီ။", 'error');
+        return;
       }
-      
-      setResult(audioResult);
+    }
 
-      // Save to History (Asynchronous if enabled)
-      if (saveToHistory && accessCode && !audioResult.isSimulation) {
-        console.log("App: Saving to history (Asynchronous)...");
-        // We don't await this to ensure immediate result display
-        const saveHistory = async () => {
-          try {
-            // 1. Upload Audio to Storage
-            const audioFileName = `audio/${accessCode}/${Date.now()}.wav`;
-            const audioRef = ref(storage, audioFileName);
-            await uploadString(audioRef, audioResult.audioData, 'base64');
-            const audioStorageUrl = await getDownloadURL(audioRef);
-
-            // 2. Upload SRT to Storage
-            const srtFileName = `srt/${accessCode}/${Date.now()}.srt`;
-            const srtRef = ref(storage, srtFileName);
-            await uploadString(srtRef, audioResult.srtContent);
-            const srtStorageUrl = await getDownloadURL(srtRef);
-
-            // 3. Save to Firestore
-            await addDoc(collection(db, 'history'), {
-              userId: accessCode,
-              text: text.length > 1000 ? text.substring(0, 1000) + '...' : text,
-              audioStorageUrl: audioStorageUrl,
-              srtStorageUrl: srtStorageUrl,
-              createdAt: new Date().toISOString(),
-              config: config
-            });
-            
-            // Update total generations
-            await updateDoc(doc(db, 'settings', 'global'), {
-              total_generations: (globalSettings.total_generations || 0) + 1
-            });
-            console.log("App: History saved successfully in background");
-          } catch (storageErr) {
-            console.error('Error saving to history in background:', storageErr);
-          }
-        };
+    const runGeneration = async (retryAttempt = 0): Promise<void> => {
+      try {
+        const ttsService = new GeminiTTSService(effectiveKey, profile?.role === 'admin');
         
-        saveHistory();
-      }
-    } catch (err: any) {
-      console.error("App: Generation failed with error:", err);
-      setError(err.message || 'An unexpected error occurred.');
+        const currentController = new AbortController();
+        setAbortController(currentController);
+
+        console.log("App: Applying pronunciation rules...");
+        let processedText = text;
+        
+        DEFAULT_RULES.forEach(rule => {
+          const regex = new RegExp(rule.original, 'gi');
+          processedText = processedText.replace(regex, rule.replacement);
+        });
+
+        globalRules.forEach(rule => {
+          const regex = new RegExp(rule.original, 'gi');
+          processedText = processedText.replace(regex, rule.replacement);
+        });
+        
+        customRules.split('\n').forEach((line) => {
+          const parts = line.split('->').map(p => p.trim());
+          if (parts.length === 2) {
+            const regex = new RegExp(parts[0], 'gi');
+            processedText = processedText.replace(regex, parts[1]);
+          }
+        });
+
+        // [CHUNKED GENERATION - PERFORMANCE OPTIMIZATION]
+        // Split into chunks and generate in parallel for much faster results
+        const generationPromise = ttsService.generateTTS(
+          processedText, 
+          { ...config },
+          (firstChunk) => {
+            // Callback: Play first chunk immediately for responsiveness
+            console.log("App: First chunk ready, setting temporary preview...");
+            // We only show this if the main result isn't ready yet
+            setResult(prev => prev ? prev : {
+              ...firstChunk,
+              isLoadingPartial: true 
+            } as AudioResult);
+          }
+        );
+
+        console.log(`App: Calling TTS service with parallel chunking logic...`);
+        
+        const audioResult = await generationPromise;
+        
+        // [SPEED ADJUSTMENT - CRITICAL FIX]
+        let finalAudioResult = { ...audioResult };
+        if (config.speed && config.speed !== 1.0) {
+          setIsProcessingSpeed(true);
+          try {
+            console.log(`App: Processing audio speed adjustment to ${config.speed}x...`);
+            const wavBlob = pcmBase64ToWav(audioResult.audioData);
+            const { blob: speedAdjustedBlob, duration: finalDuration } = await renderSpeedAdjustedAudio(wavBlob, config.speed);
+            const finalUrl = URL.createObjectURL(speedAdjustedBlob);
+            
+            // Re-generate subtitles for final duration
+            const finalSubtitles = generateOptimizedSubtitles(processedText, finalDuration);
+            const finalSrt = finalSubtitles.map(s => `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}\n`).join('\n');
+            
+            // Convert blob to base64 for history/storage
+            const speedAdjustedBuffer = await speedAdjustedBlob.arrayBuffer();
+            const reader = new FileReader();
+            const base64Promise = new Promise<string>((resolve) => {
+              reader.onloadend = () => {
+                const base64data = reader.result as string;
+                resolve(base64data.split(',')[1]);
+              };
+            });
+            reader.readAsDataURL(speedAdjustedBlob);
+            const finalBase64 = await base64Promise;
+
+            finalAudioResult = {
+              ...audioResult,
+              audioUrl: finalUrl,
+              audioData: finalBase64,
+              rawAudio: speedAdjustedBuffer, // CRITICAL: Update rawAudio to new buffer
+              duration: finalDuration,
+              baseDuration: finalDuration, // Update so OutputPreview sees the final duration
+              subtitles: finalSubtitles,
+              srtContent: finalSrt,
+              speed: config.speed
+            };
+          } catch (err) {
+            console.error("Speed adjustment failed:", err);
+            // Fallback to 1x if processing fails
+          } finally {
+            setIsProcessingSpeed(false);
+          }
+        }
+
+        // [AUTO-PLAY REMOVED - USER REQUEST]
+        // Playback is now triggered manually by the user in the OutputPreview component
+
+        // IMMEDIATE RELEASE: Show result before any DB writes
+        setResult(finalAudioResult);
+        setError(null);
+        setEngineStatus('ready');
+        setIsLoading(false); 
+        setAbortController(null);
+        
+        // BACKGROUND TASKS: Non-blocking
+        if (accessCode) {
+          logActivity(accessCode, 'tts', `Generated: ${text.substring(0, 50)}`).catch(() => {});
+        }
+
+        if (saveToHistory && accessCode) {
+          const saveHistory = async () => {
+            if (!getCurrentUserId()) {
+              console.warn('[VBS] Skipping history save — anonymous user');
+              return;
+            }
+            try {
+              const audioFileName = `audio/${accessCode}/${Date.now()}.wav`;
+              const audioRef = ref(storage, audioFileName);
+              await uploadString(audioRef, finalAudioResult.audioData, 'base64');
+              const audioStorageUrl = await getDownloadURL(audioRef);
+
+              const srtFileName = `srt/${accessCode}/${Date.now()}.srt`;
+              const srtRef = ref(storage, srtFileName);
+              await uploadString(srtRef, finalAudioResult.srtContent);
+              const srtStorageUrl = await getDownloadURL(srtRef);
+
+              await addDoc(collection(db, 'history'), {
+                userId: accessCode,
+                text: text.length > 5000 ? text.substring(0, 5000) + '...' : text,
+                audioStorageUrl: audioStorageUrl,
+                srtStorageUrl: srtStorageUrl,
+                duration: finalAudioResult.duration,
+                config: { ...config },
+                createdAt: serverTimestamp(),
+              });
+
+              await updateDoc(doc(db, 'settings', 'global'), {
+                total_generations: (globalSettings.total_generations || 0) + 1
+              });
+
+              console.log("App: Generation saved to history successfully.");
+            } catch (err) {
+              console.error("App: Failed to save to history:", err);
+            }
+          };
+          saveHistory();
+        }
+      } catch (err: unknown) {
+        setIsLoading(false);
+        setAbortController(null);
+        
+        const error = err as { message?: string; name?: string; status?: number };
+
+        if (error.message === 'AbortError' || error.name === 'AbortError') {
+          console.log("App: Generation cancelled by user");
+          setEngineStatus('ready');
+          return;
+        }
+        if (error.message?.startsWith('TEXT_TOO_LONG')) {
+          const parts = error.message.split('|');
+          setError(`${t('generate.textTooLong')} (${parts[1]}/${parts[2]})`);
+          return;
+        }
+        
+        const isRateLimit = error.message === 'RATE_LIMIT_EXHAUSTED' || error.status === 429;
+        if (isRateLimit && retryAttempt < 1) {
+          setEngineStatus('cooling');
+          setRetryCountdown(10);
+          const timer = setInterval(() => {
+            setRetryCountdown(prev => {
+              if (prev <= 1) { clearInterval(timer); return 0; }
+              return prev - 1;
+            });
+          }, 1000);
+          setTimeout(() => runGeneration(retryAttempt + 1), 10000);
+          return;
+        }
+
+        if (isRateLimit) {
+          setEngineStatus('limit');
+          setError(translateError(err, language));
+        } else {
+          setError(translateError(err, language));
+          showToast(translateError(err, language), 'error');
+        }
+      } 
+    };
+
+    try {
+      await runGeneration();
+    } catch (criticalErr) {
+      console.error("Critical Generation Error:", criticalErr);
+      setError("A critical error occurred. Please try again.");
     } finally {
-      console.log("App: Generation process finished (Cleaning up loading state)");
       setIsLoading(false);
     }
   };
 
   const handleDeleteHistory = async (id: string) => {
-    if (confirm('Delete this history record?')) {
-      try {
-        await deleteDoc(doc(db, 'history', id));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, `history/${id}`);
+    openModal({
+      title: 'Delete History',
+      message: 'Are you sure you want to delete this history record?',
+      type: 'confirm',
+      confirmText: 'Delete',
+      onConfirm: async () => {
+        if (!getCurrentUserId()) {
+          console.warn('[VBS] Skipping history delete — anonymous user');
+          return;
+        }
+        try {
+          await deleteDoc(doc(db, 'history', id));
+          setToast({ message: 'History deleted successfully!', type: 'success' });
+          setTimeout(() => setToast(null), 3000);
+        } catch (err) {
+          handleFirestoreError(err, OperationType.DELETE, `history/${id}`);
+        }
       }
-    }
+    });
   };
 
   const handleDownloadAudio = async (dataOrUrl: string, filename: string) => {
@@ -793,11 +1085,14 @@ export default function App() {
       const response = await fetch(contentOrUrl);
       content = await response.text();
     }
-    const blob = new Blob([content], { type: 'text/plain' });
+    
+    // Add UTF-8 BOM for mobile compatibility
+    const BOM = '\uFEFF';
+    const blob = new Blob([BOM + content], { type: 'text/srt;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = filename;
+    a.download = filename.toLowerCase(); // Ensure lowercase .srt
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -834,14 +1129,31 @@ export default function App() {
       for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i);
       }
-      const wavBlob = pcmToWav(bytes, 24000);
-      const url = URL.createObjectURL(wavBlob);
+      
+      // Check if it's MP3 or PCM (OLD)
+      let audioBlob: Blob;
+      if (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) { // ID3 (MP3)
+        audioBlob = new Blob([bytes], { type: 'audio/mp3' });
+      } else if (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) { // Sync Frame (MP3)
+        audioBlob = new Blob([bytes], { type: 'audio/mp3' });
+      } else {
+        // Assume old PCM format
+        audioBlob = pcmToWav(bytes, 24000);
+      }
+      
+      const url = URL.createObjectURL(audioBlob);
+      const audioArrayBuffer = await audioBlob.arrayBuffer();
       
       setResult({
         audioUrl: url,
         audioData: audioData,
+        rawAudio: audioArrayBuffer,
         srtContent: srtContent,
-        subtitles: GeminiTTSService.parseSRT(srtContent)
+        subtitles: GeminiTTSService.parseSRT(srtContent),
+        baseDuration: item.baseDuration || 0,
+        oneXDuration: item.oneXDuration || item.baseDuration || 0,
+        speed: item.config.speed || 1.0,
+        duration: item.duration || item.baseDuration || 0
       });
       setActiveTab('generate');
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -851,113 +1163,395 @@ export default function App() {
     }
   };
 
+  const isVbsAdmin = useMemo(() => {
+    const ADMIN_CODE = import.meta.env.VITE_ADMIN_ACCESS_CODE || 'saw_vlogs_2026';
+    const isCodeMatch = accessCode === ADMIN_CODE;
+    const isProfileAdmin = userControl?.role === 'admin' || userControl?.isAdmin === true || userControl?.vbsId === 'saw_vlogs_2026';
+    return isCodeMatch || isProfileAdmin;
+  }, [accessCode, userControl]);
+
+  const ttsCost = globalSettings.tts_cost || 1;
+
+  const apiKeyStatus = useMemo(() => {
+    const info = apiChannelManager.getActiveSourceInfo();
+    if (!info) return { state: 'none', label: 'No API Key', isShared: false } as const;
+    return {
+      state: info.isShared ? 'admin' : 'personal',
+      label: info.isShared ? 'Admin Key Pool Active' : 'Personal Key Active',
+      isShared: info.isShared
+    } as const;
+  }, [localApiKey, globalSettings.allow_admin_keys]);
+
+  const isExpired = useMemo(() => {
+    if (!userControl?.expiryDate || isVbsAdmin) return false;
+    try {
+      const expiry = new Date(userControl.expiryDate);
+      if (isNaN(expiry.getTime())) return false;
+      expiry.setHours(23, 59, 59, 999);
+      return expiry.getTime() < Date.now();
+    } catch (e) {
+      console.error("Date calculation error:", e);
+      return false;
+    }
+  }, [userControl?.expiryDate, isVbsAdmin]);
+
+  const isPremium = isVbsAdmin || (userControl?.membershipStatus === 'premium' && !isExpired);
+  const canUseThumbnail = isPremium;
+
+  useEffect(() => {
+    if (isExpired && userControl?.isUnlimited) {
+      // Automatically show toast if they just expired
+      showToast("သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ။ Admin ထံ ဆက်သွယ်ပါ။", "error");
+    }
+  }, [isExpired, userControl?.isUnlimited]);
+
+  // Auto-scroll to Output Preview when generation is complete
+  useEffect(() => {
+    if (!isLoading && result && activeTab === 'generate') {
+      const timer = setTimeout(() => {
+        const element = document.getElementById('output-preview-container');
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [isLoading, result, activeTab]);
+
+  const NavTab = ({ icon, label, tooltip, onClick, active, locked = false, badge }: {
+    id: Tab;
+    icon: React.ReactNode;
+    label: string;
+    tooltip: string;
+    onClick: () => void;
+    active: boolean;
+    locked?: boolean;
+    badge?: string;
+  }) => {
+    const [isHovered, setIsHovered] = useState(false);
+    
+    return (
+      <div className="relative">
+        <button
+          onClick={onClick}
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
+          className={`px-3 sm:px-6 py-2.5 sm:py-3 rounded-[16px] sm:rounded-[18px] text-xs sm:text-sm font-bold transition-all flex items-center gap-2 relative group ${
+            active 
+              ? 'bg-brand-purple text-white shadow-[0_0_20px_rgba(139,92,246,0.6)] scale-[1.02] sm:scale-[1.05] z-10' 
+              : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-white/5 dark:hover:bg-white/5'
+          }`}
+        >
+          <div className={`${active ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]' : 'group-hover:scale-110 transition-transform'}`}>
+            {locked && !active ? <Lock size={16} className="text-rose-400" /> : icon}
+          </div>
+          <span className={`${active ? 'inline' : 'hidden sm:inline'} text-[10px] sm:text-xs tracking-tight whitespace-nowrap`}>
+            {label}
+          </span>
+          {badge && (
+            <span className="absolute -top-1 -right-1 bg-violet-500 text-white text-[8px] px-1.5 py-0.5 rounded-full font-black scale-90 sm:scale-100 shadow-lg shadow-violet-500/20">
+              {badge}
+            </span>
+          )}
+          
+          {active && (
+            <div className="absolute inset-0 bg-brand-purple/20 blur-xl rounded-full -z-10" />
+          )}
+        </button>
+
+        <AnimatePresence>
+          {isHovered && (
+            <motion.div
+              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 10, scale: 0.95 }}
+              className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl border border-white/20 bg-white/10 backdrop-blur-md dark:bg-black/20 text-[10px] font-bold text-slate-800 dark:text-white whitespace-nowrap shadow-2xl z-50 pointer-events-none"
+            >
+              <div className="flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-brand-purple animate-pulse" />
+                {tooltip}
+              </div>
+              <div className="absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent border-t-white/10" />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  };
+
+  if (!hasEntered) {
+    return <WelcomePage onEnter={() => setHasEntered(true)} />;
+  }
+
   return (
-    <div className={`min-h-screen flex flex-col transition-colors duration-300 ${isDarkMode ? 'dark bg-[#020617] text-white' : 'bg-white text-slate-900'}`}>
+    <div className={`min-h-screen flex flex-col transition-colors duration-500 relative overflow-hidden ${isDarkMode ? 'dark bg-[#020617] text-white' : 'bg-slate-50 text-slate-900'}`}>
+      {/* Premium Background Glows */}
+      <div className="fixed top-[-10%] left-[-10%] w-[40%] h-[40%] bg-brand-purple/10 blur-[120px] rounded-full -z-10 animate-pulse-soft" />
+      <div className="fixed bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-neon-magenta/10 blur-[120px] rounded-full -z-10 animate-pulse-soft" />
+      
+      {/* Channels Exhausted Banner */}
+      <AnimatePresence>
+        {channelsExhausted && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="bg-rose-600 text-white py-2 px-4 text-center text-sm font-bold flex items-center justify-center gap-3 sticky top-0 z-[110]"
+          >
+            <span>All API channels exhausted. Please add a new Gemini API key in Settings.</span>
+            <button 
+              onClick={() => setIsApiKeyModalOpen(true)}
+              className="px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-xs transition-colors"
+            >
+              Adjust Settings
+            </button>
+            <button 
+              onClick={() => setChannelsExhausted(false)}
+              className="p-1 hover:bg-white/20 rounded"
+            >
+              <X size={14} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <Header 
         isDarkMode={isDarkMode} 
         toggleTheme={() => setIsDarkMode(!isDarkMode)} 
-        onOpenTools={() => setIsApiKeyModalOpen(true)}
+        uiTheme={uiTheme}
+        onThemeChange={setUITheme}
         isAccessGranted={isAccessGranted}
-        onLogout={handleLogout}
+        isAdmin={isVbsAdmin}
+        apiKeyStatus={apiKeyStatus}
+        userControl={userControl}
       />
 
+      {isAccessGranted && !isVbsAdmin && (
+        <AnnouncementPanel announcements={globalSettings.announcements} />
+      )}
+
       <main className="flex-1 container mx-auto px-4 sm:px-6 py-6 sm:py-8 overflow-x-hidden">
+        {!(isPrivacyRoute || isTermsRoute) && (
+          <div className="mb-8 text-center sm:text-left">
+            <h1 className="text-3xl sm:text-5xl font-black text-slate-900 dark:text-white mb-2 flex items-center justify-center sm:justify-start gap-3">
+              Vlogs By Saw
+              <span className="text-xs bg-brand-purple/10 text-brand-purple px-3 py-1 rounded-full uppercase tracking-tighter shadow-sm border border-brand-purple/20">
+                Premium AI Narration
+              </span>
+            </h1>
+            <p className="text-slate-500 dark:text-slate-400 font-medium max-w-2xl">
+              Professional Burmese Storytelling & Cinematic AI Voiceover Studio. Engineered for high-end recap content.
+            </p>
+          </div>
+        )}
+
         {isConfigLoading ? (
           <div className="flex flex-col items-center justify-center py-40">
-            <RefreshCw size={48} className="text-brand-purple animate-spin mb-4" />
-            <p className="text-slate-500 font-medium">Initializing Narration Engine...</p>
+            <div className="flex items-center justify-center gap-1.5 h-12 mb-6">
+              {[...Array(8)].map((_, i) => (
+                <motion.div
+                  key={i}
+                  className="w-1.5 bg-brand-purple rounded-full"
+                  animate={{
+                    height: [16, 40, 16],
+                    opacity: [0.5, 1, 0.5],
+                  }}
+                  transition={{
+                    duration: 0.8,
+                    repeat: Infinity,
+                    delay: i * 0.1,
+                  }}
+                />
+              ))}
+            </div>
+            <p className="text-slate-500 font-bold uppercase tracking-widest text-xs animate-pulse">Initializing Narration Engine...</p>
+            
+            <div className="mt-12 flex flex-col items-center gap-3">
+              <a 
+                href={window.location.href} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 px-4 py-2 bg-brand-purple/10 text-brand-purple rounded-full hover:bg-brand-purple/20 transition-all text-sm font-medium group"
+              >
+                <ExternalLink size={14} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                Open in New Tab (Fixes Safari/iOS)
+              </a>
+              <p className="text-[10px] text-slate-400 max-w-[250px] text-center leading-relaxed">
+                If the app fails to load, your browser might be blocking session cookies. Opening in a new tab or disabling "Prevent Cross-Site Tracking" in Safari usually fixes this.
+              </p>
+            </div>
           </div>
-        ) : isAdminRoute ? (
-          <AdminDashboard isAuthReady={isAuthReady} />
+        ) : (isAdminRoute || isAdminConfigRoute) ? (
+          <AdminDashboard 
+            isAuthReady={isAuthReady} 
+            onAdminLogin={(code) => {
+              setIsAccessGranted(true);
+              setAccessCode(code);
+            }}
+            configOnly={isAdminConfigRoute}
+            isSessionSynced={isSessionSynced}
+          />
+        ) : isPrivacyRoute ? (
+          <PrivacyPolicy 
+            onBack={() => {
+              window.history.pushState({}, '', '/');
+              setIsPrivacyRoute(false);
+            }} 
+          />
+        ) : isTermsRoute ? (
+          <TermsOfService 
+            onBack={() => {
+              window.history.pushState({}, '', '/');
+              setIsTermsRoute(false);
+            }} 
+          />
         ) : !isAccessGranted ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <div className="w-20 h-20 bg-brand-purple/10 text-brand-purple rounded-3xl flex items-center justify-center mb-6">
+          <div className="flex flex-col items-center justify-center py-20 text-center px-4">
+            <div className="w-20 h-20 glass-card bg-brand-purple/10 text-brand-purple rounded-[24px] flex items-center justify-center mb-8 shadow-2xl shadow-brand-purple/20">
               <Lock size={40} />
             </div>
             
-            <div className="w-full max-w-md space-y-6">
-              <h2 className="text-xl sm:text-2xl font-bold mb-2 text-slate-900 dark:text-white">Vlogs By Saw - Narration Engine</h2>
-              <p className="text-slate-600 dark:text-slate-300 mb-6 sm:mb-8 text-sm sm:text-base">
-                Please enter your unique User ID (Access Code) to start generating professional Myanmar voiceovers.
-              </p>
-              
-              <form onSubmit={handleLogin} className="space-y-4">
-                <div className="relative">
-                  <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
-                  <input
-                    type="text"
-                    value={accessCodeInput}
-                    onChange={(e) => setAccessCodeInput(e.target.value)}
-                    placeholder="Enter Access Code..."
-                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
-                  />
-                </div>
-                
-                {error && (
-                  <div className="text-red-500 text-sm font-medium flex items-center justify-center gap-2">
-                    <AlertCircle size={16} /> {error}
-                  </div>
-                )}
-                
-                <button
-                  type="submit"
-                  disabled={isVerifyingCode || !accessCodeInput.trim() || !isAuthReady}
-                  className="w-full py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg hover:bg-brand-purple/90 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-brand-purple/20"
+            <div className="w-full max-w-md space-y-8 premium-glass p-10 rounded-[40px] shadow-2xl neon-glow-indigo relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-brand-purple/10 blur-[60px] -z-10" />
+          <div>
+            <h2 className="text-3xl sm:text-4xl font-bold mb-4 text-slate-900 dark:text-white tracking-tight">{t('auth.title')}</h2>
+            <p className="text-slate-600 dark:text-slate-400 text-sm sm:text-base leading-relaxed font-medium">
+              {t('auth.subtitle')}
+            </p>
+          </div>
+          
+          <form onSubmit={handleLogin} className="space-y-5">
+            <div className="relative">
+              <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
+              <input
+                type="text"
+                value={accessCodeInput}
+                onChange={(e) => {
+                  setAccessCodeInput(e.target.value);
+                  if (isStepTwo) setIsStepTwo(false);
+                }}
+                placeholder={t('auth.placeholder')}
+                className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/30 transition-all shadow-inner"
+              />
+            </div>
+
+            <AnimatePresence>
+              {isStepTwo && (
+                <motion.div 
+                  initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                  animate={{ opacity: 1, height: 'auto', marginTop: 16 }}
+                  exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                  className="relative overflow-hidden"
                 >
-                  {isVerifyingCode || !isAuthReady ? (
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-                      {!isAuthReady && <span className="text-sm">Connecting...</span>}
-                    </div>
-                  ) : (
-                    <>Verify Access <ArrowRight size={20} /></>
-                  )}
-                </button>
+                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
+                  <input
+                    type="password"
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                    placeholder={t('auth.passwordPlaceholder')}
+                    className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] pl-12 pr-4 py-4 text-lg font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/30 transition-all shadow-inner"
+                    required
+                    autoFocus
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+            
+            {error && (
+              <div className="text-red-500 text-sm font-medium flex items-center justify-center gap-2">
+                <AlertCircle size={16} /> {error}
+              </div>
+            )}
+            
+            <motion.button
+              whileHover={{ scale: 1.02, boxShadow: '0 0 20px rgba(139, 92, 246, 0.4)' }}
+              whileTap={{ scale: 0.98 }}
+              type="submit"
+              disabled={isVerifyingCode || !accessCodeInput.trim() || !isAuthReady}
+              className="w-full py-4 bg-brand-purple text-white rounded-[20px] font-bold text-lg hover:bg-brand-purple/90 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-brand-purple/30 metallic-btn"
+            >
+              {isVerifyingCode || !isAuthReady ? (
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                  {!isAuthReady && <span className="text-sm">{t('auth.connecting')}</span>}
+                </div>
+              ) : (
+                <>
+                  {isStepTwo ? t('auth.verify') : t('auth.continue')} 
+                  <ArrowRight size={20} />
+                </>
+              )}
+            </motion.button>
               </form>
             </div>
           </div>
         ) : (
           <div className="space-y-8">
             {/* Tab Navigation */}
-            <div className="flex items-center gap-2 sm:gap-4 bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-1 rounded-2xl w-fit mx-auto shadow-sm">
-              <button
+            <div className="flex items-center gap-1 sm:gap-2 glass-card p-1.5 rounded-[22px] w-fit mx-auto shadow-2xl relative z-40">
+              <NavTab
+                id="generate"
+                active={activeTab === 'generate'}
                 onClick={() => setActiveTab('generate')}
-                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'generate' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
-              >
-                <Wand2 size={18} /> Generate
-              </button>
-              <button
-                onClick={() => setActiveTab('youtube-transcript')}
-                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 relative ${activeTab === 'youtube-transcript' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
-              >
-                <FileText size={18} /> YouTube Transcript
-              </button>
-              <button
-                onClick={() => setActiveTab('youtube-recap')}
-                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 relative ${activeTab === 'youtube-recap' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
-              >
-                <Youtube size={18} /> YouTube Recap
-              </button>
-              <button
+                icon={<Mic2 size={18} />}
+                label={t('nav.studio')}
+                tooltip={t('tooltips.generate')}
+              />
+              <NavTab
+                id="transcriber"
+                active={activeTab === 'transcriber'}
+                onClick={() => {
+                  if (!isPremium) {
+                    showToast(t('video.premiumRequired'), "error");
+                    return;
+                  }
+                  setActiveTab('transcriber');
+                }}
+                icon={<FileVideo size={18} />}
+                label={t('nav.transcriber')}
+                tooltip={isPremium ? t('tooltips.premiumActive') : t('tooltips.transcriber')}
+                locked={!isPremium}
+              />
+              <NavTab
+                id="thumbnail"
+                active={activeTab === 'thumbnail'}
+                onClick={() => {
+                  if (!canUseThumbnail) {
+                    showToast(isPremium ? t('thumbnailFeature.temporarilyDisabled') : t('thumbnailFeature.premiumRequired'), "error");
+                    return;
+                  }
+                  setActiveTab('thumbnail');
+                }}
+                icon={<ImageIcon size={18} />}
+                label={t('nav.thumbnail') || 'သမ်းနေးလ်'}
+                tooltip={canUseThumbnail ? t('tooltips.thumbnail') : t('thumbnailFeature.locked')}
+                locked={!canUseThumbnail}
+              />
+              <NavTab
+                id="video-studio"
+                active={activeTab === 'video-studio'}
+                onClick={() => setActiveTab('video-studio')}
+                icon={<Video size={18} />}
+                label="Video Studio"
+                tooltip="AI-Powered Video Enhancement (Coming Soon)"
+                badge="SOON"
+              />
+              <NavTab
+                id="history"
+                active={activeTab === 'history'}
                 onClick={() => setActiveTab('history')}
-                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'history' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
-              >
-                <History size={18} /> History
-              </button>
-              <button
+                icon={<History size={18} />}
+                label={t('nav.history')}
+                tooltip={t('tooltips.history')}
+              />
+              <NavTab
+                id="tools"
+                active={activeTab === 'tools'}
                 onClick={() => setActiveTab('tools')}
-                className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 relative ${activeTab === 'tools' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
-              >
-                <Wrench size={18} /> Tools
-              </button>
-              {isAdmin && (
-                <button
-                  onClick={() => setActiveTab('admin')}
-                  className={`px-4 sm:px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 relative ${activeTab === 'admin' ? 'bg-brand-purple text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'}`}
-                >
-                  <Shield size={18} /> Admin
-                </button>
-              )}
+                icon={<Settings size={18} />}
+                label={t('nav.settings')}
+                tooltip={t('tooltips.settings')}
+              />
             </div>
 
             <AnimatePresence mode="wait">
@@ -971,24 +1565,22 @@ export default function App() {
                 >
                     {/* Left Column - Main Flow */}
                   <div className="lg:col-span-7 space-y-8">
-                    <ContentInput text={text} setText={setText} isDarkMode={isDarkMode} />
-                    
-                    {/* Default Pronunciation Rules Table */}
-                    <PronunciationRules
-                      rules={DEFAULT_RULES}
-                      globalRules={globalRules}
-                      customRules={customRules}
-                      setCustomRules={setCustomRules}
+                    <ContentInput 
+                      text={text} 
+                      setText={setText} 
+                      getApiKey={getEffectiveApiKey}
+                      showToast={showToast}
+                      engineStatus={engineStatus}
+                      retryCountdown={retryCountdown}
+                      speed={config.speed}
+                      hasResult={!!result}
                       isAdmin={profile?.role === 'admin'}
-                      onOpenTools={() => setIsApiKeyModalOpen(true)}
-                      showCustomRules={false}
+                      userControl={userControl}
+                      isSharedKey={apiKeyStatus.isShared}
+                      rewriteCost={globalSettings.rewrite_cost}
                     />
+                    
 
-                    <OutputPreview 
-                      result={result} 
-                      isLoading={isLoading} 
-                      globalVolume={config.volume}
-                    />
 
                     {error && (
                       <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-start gap-3 text-red-500">
@@ -1000,7 +1592,13 @@ export default function App() {
 
                   {/* Right Column - Config */}
                   <div className="lg:col-span-5 space-y-8">
-                    <VoiceConfig config={config} setConfig={setConfig} isDarkMode={isDarkMode} />
+                    <VoiceConfig 
+                      config={config} 
+                      setConfig={setConfig} 
+                      isDarkMode={isDarkMode} 
+                      isAdmin={profile?.role === 'admin'}
+                      baseDuration={result?.oneXDuration}
+                    />
 
                     <div className="space-y-4">
                       <div className="flex items-center justify-between bg-white/50 backdrop-blur dark:bg-slate-900/50 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors duration-300">
@@ -1009,8 +1607,8 @@ export default function App() {
                             <History size={18} />
                           </div>
                           <div>
-                            <p className="text-sm font-bold text-slate-900 dark:text-white">မှတ်တမ်းသိမ်းဆည်းမည်</p>
-                            <p className="text-[10px] text-slate-500 dark:text-slate-400">Keep a record of this generation for later access</p>
+                            <p className="text-sm font-bold text-slate-900 dark:text-white">{t('generate.saveToHistory')}</p>
+                            <p className="text-[10px] text-slate-500 dark:text-slate-400">{t('generate.saveToHistoryDesc')}</p>
                           </div>
                         </div>
                         <button
@@ -1022,27 +1620,206 @@ export default function App() {
                         </button>
                       </div>
 
-                      <button
-                        onClick={handleGenerate}
-                        disabled={isLoading}
-                        className={`w-full py-6 rounded-[24px] font-bold text-xl shadow-2xl flex items-center justify-center gap-4 transition-all active:scale-[0.98] bg-brand-purple hover:bg-brand-purple/90 text-white shadow-brand-purple/40`}
-                      >
-                        {isLoading ? (
-                          <div className="w-8 h-8 border-4 border-white/20 border-t-white rounded-full animate-spin" />
-                        ) : (
-                          <Zap size={28} fill="currentColor" />
+                      {config.speed > 1.5 && (
+                          <motion.div 
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="mb-6 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 shadow-xl shadow-amber-500/5"
+                          >
+                            <div className="flex gap-3">
+                              <Info size={18} className="shrink-0 mt-0.5 text-amber-500" />
+                              <div className="text-[11px] leading-relaxed space-y-1">
+                                <p className="font-bold">အမြန်နှုန်း အရမ်းမြန်ရင် အသံအရည်အသွေး အနည်းငယ် ပြောင်းလဲနိုင်ပါတယ်။</p>
+                                <p className="opacity-80">အကောင်းဆုံး အသံထွက်အတွက် 1.2x မှ 1.5x အတွင်းသာ ထားရှိရန် အကြံပြုပါတယ်။</p>
+                                <button 
+                                  onClick={() => setConfig(prev => ({ ...prev, speed: 1.2 }))}
+                                  className="mt-2 flex items-center gap-1.5 px-3 py-1 bg-amber-500 text-white rounded-full font-bold uppercase text-[9px] tracking-wider hover:bg-amber-600 transition-all shadow-lg shadow-amber-500/30"
+                                >
+                                  <Sparkles size={10} />
+                                  Optimize to 1.2x
+                                </button>
+                              </div>
+                            </div>
+                          </motion.div>
                         )}
-                        <div className="flex flex-col items-center">
+
+                      <button
+                        onClick={isLoading || isProcessingSpeed ? () => abortController?.abort() : handleGenerate}
+                        disabled={isLoading || isProcessingSpeed}
+                        className={`w-full py-6 rounded-[24px] font-bold text-xl shadow-2xl flex items-center justify-center gap-4 transition-all active:scale-[0.98] ${
+                          (isLoading || isProcessingSpeed) 
+                            ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20 shadow-none cursor-not-allowed' 
+                            : 'bg-brand-purple hover:bg-brand-purple/90 text-white shadow-brand-purple/40'
+                        }`}
+                      >
+                        {(isLoading || isProcessingSpeed) ? (
+                          <div className="flex flex-col items-center gap-1">
+                            {isProcessingSpeed ? (
+                              <div className="flex flex-col items-center gap-2">
+                                <RefreshCw size={24} className="animate-spin text-rose-500" />
+                                <span className="text-sm font-bold text-rose-500">
+                                  ⚙️ Speed {config.speed}x အသံပြင်ဆင်နေသည်...
+                                </span>
+                              </div>
+                            ) : (
+                              <>
+                                <div className="flex items-center gap-1 h-5">
+                                  {[...Array(5)].map((_, i) => (
+                                    <motion.div
+                                      key={i}
+                                      className="w-1 bg-rose-500 rounded-full"
+                                      animate={{
+                                        height: [8, 20, 8],
+                                      }}
+                                      transition={{
+                                        duration: 0.6,
+                                        repeat: Infinity,
+                                        delay: i * 0.1,
+                                      }}
+                                    />
+                                  ))}
+                                </div>
+                                <span className="animate-pulse text-xs opacity-90">{t('generate.generating')}</span>
+                                <span className="text-[10px] font-bold opacity-60 uppercase tracking-widest mt-0.5">ခေတ္တစောင့်ဆိုင်းပေးပါ... (Might take 1-2 mins)</span>
+                              </>
+                            )}
+                          </div>
+                        ) : error ? (
+                          <>
+                            <RefreshCw size={24} className="animate-spin-slow" /> Retry Generation
+                          </>
+                        ) : (
+                          <div className="flex items-center gap-4">
+                            <Wand2 size={24} /> 
+                            {t('generate.generateBtn')}
+                            {!isVbsAdmin && (
+                              <span className="text-xs bg-white/20 px-3 py-1 rounded-lg font-black tracking-tighter">
+                                {apiKeyStatus.isShared ? `${ttsCost} Credits` : 'FREE'}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </button>
+                      <div className="flex flex-col items-center">
                           <span className="flex items-baseline gap-3">
-                            အသံနှင့် စာတန်းထိုး ထုတ်ယူမည်
+                            {"အသံနှင့် စာတန်းထိုး ထုတ်ယူမည်"}
                             <span className="text-sm font-medium opacity-60">
                               ({Math.ceil(text.length / 3000) || 1} {Math.ceil(text.length / 3000) > 1 ? 'chunks' : 'chunk'})
                             </span>
                           </span>
                         </div>
-                      </button>
                     </div>
+
+                        <AnimatePresence>
+                          {(isLoading || error || (result && activeTab === 'generate')) && (
+                            <motion.div
+                              initial={{ opacity: 0, y: 40, scale: 0.98 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: 20 }}
+                              transition={{ 
+                                type: "spring", 
+                                stiffness: 100, 
+                                damping: 20,
+                                duration: 0.6 
+                              }}
+                              id="output-preview-container"
+                              className="mt-8"
+                            >
+                              <OutputPreview 
+                                playbackSpeed={outputConfig.speed}
+                                result={result} 
+                                isLoading={isLoading} 
+                                error={error}
+                                onRetry={() => handleGenerate()}
+                                globalVolume={outputConfig.volume}
+                                engineStatus={engineStatus}
+                                retryCountdown={retryCountdown}
+                                showToast={showToast}
+                              />
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                   </div>
+                </motion.div>
+              )}
+
+              {activeTab === 'transcriber' && (
+                <motion.div
+                  key="transcriber"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="max-w-4xl mx-auto"
+                >
+                  {!isPremium ? (
+                    <div className="glass-card rounded-[32px] p-12 text-center space-y-6 max-w-2xl mx-auto border border-white/5">
+                      <div className="w-20 h-20 bg-rose-500/10 text-rose-500 rounded-3xl flex items-center justify-center mx-auto mb-4 border border-rose-500/20">
+                        <Lock size={40} />
+                      </div>
+                      <h3 className="text-2xl font-bold text-slate-900 dark:text-white">
+                        {isExpired ? "သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ" : "ဤသည်မှာ Premium Feature ဖြစ်ပါသည်။"}
+                      </h3>
+                        <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
+                          {isExpired 
+                            ? "သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ။ အသုံးပြုလိုပါက Admin ထံ ဆက်သွယ်၍ သက်တမ်းတိုးပါ။" 
+                            : "အသုံးပြုလိုပါက Admin ထံသို့ ခွင့်ပြုချက်တောင်းခံပါ။"
+                          }
+                        </p>
+                      <div className="pt-4">
+                        <button 
+                          onClick={() => setActiveTab('tools')}
+                          className="px-8 py-3 bg-brand-purple text-white rounded-xl font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20"
+                        >
+                          Admin ကို ဆက်သွယ်ရန်
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <VideoTranscriber 
+                      onTranscriptionComplete={(transcribedText) => {
+                        setText(transcribedText);
+                        setActiveTab('generate');
+                        setTimeout(() => {
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }, 100);
+                      }}
+                      getApiKey={getEffectiveApiKey}
+                      showToast={showToast}
+                      isAdmin={isVbsAdmin}
+                      userControl={userControl}
+                      isSharedKey={apiKeyStatus.isShared}
+                      allowVideoRecapAdminKey={globalSettings.allow_video_recap_admin_key}
+                      recapCost={globalSettings.recap_cost}
+                    />
+                  )}
+                </motion.div>
+              )}
+
+              {activeTab === 'thumbnail' && (
+                <motion.div
+                  key="thumbnail"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                >
+                   <ThumbnailCreator 
+                     isDarkMode={isDarkMode} 
+                     showToast={showToast}
+                     getApiKey={getEffectiveApiKey}
+                     isAdmin={isVbsAdmin}
+                     isPremium={isPremium}
+                   />
+                </motion.div>
+              )}
+
+              {activeTab === 'video-studio' && (
+                <motion.div
+                  key="video-studio"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                >
+                  <VideoStudio isAdmin={isVbsAdmin} />
                 </motion.div>
               )}
 
@@ -1052,89 +1829,114 @@ export default function App() {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -20 }}
-                  className="max-w-5xl mx-auto space-y-6"
+                  className="max-w-6xl mx-auto space-y-8"
                 >
-                  <div className="bg-white/50 backdrop-blur dark:bg-slate-900 rounded-2xl p-8 shadow-2xl border border-slate-200 dark:border-slate-800 transition-colors duration-300">
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
+                  <div className="glass-card rounded-[32px] p-8 sm:p-10 shadow-2xl transition-all duration-300">
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-8 mb-10">
                       <div>
-                        <h2 className="text-2xl font-bold flex items-center gap-3 text-slate-900 dark:text-white">
-                          <History className="text-brand-purple" /> Generation History
+                        <h2 className="text-3xl font-bold flex items-center gap-4 text-slate-900 dark:text-white tracking-tight">
+                          <div className="p-2.5 bg-brand-purple/10 rounded-xl text-brand-purple">
+                            <History size={28} />
+                          </div>
+                          {t('history.title')}
                         </h2>
-                        <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Manage and re-download your previous generations</p>
+                        <p className="text-slate-500 dark:text-slate-400 text-sm mt-2 font-medium">{t('history.subtitle')}</p>
                       </div>
                       
-                      <div className="relative flex-1 max-w-md">
+                      <div className="relative flex-1 max-w-lg">
                         <input
                           type="text"
-                          placeholder="Search history by text..."
+                          placeholder={t('history.search')}
                           value={historySearch}
                           onChange={(e) => setHistorySearch(e.target.value)}
-                          className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl px-6 py-3 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all pr-12 placeholder:text-slate-400"
+                          className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-[20px] px-6 py-4 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all pr-14 placeholder:text-slate-400 font-medium shadow-sm"
                         />
-                        <Wand2 size={18} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-600" />
+                        <div className="absolute right-4 top-1/2 -translate-y-1/2 p-2 bg-brand-purple/10 rounded-xl text-brand-purple">
+                          <Search size={18} />
+                        </div>
                       </div>
                     </div>
 
                     {isHistoryLoading ? (
-                      <div className="flex flex-col items-center justify-center py-20 gap-4">
-                        <div className="w-10 h-10 border-4 border-brand-purple/20 border-t-brand-purple rounded-full animate-spin" />
-                        <p className="text-slate-500 dark:text-slate-400 font-medium">Loading history...</p>
+                      <div className="flex flex-col items-center justify-center py-24 gap-6">
+                        <div className="relative">
+                          <div className="w-14 h-14 border-4 border-brand-purple/20 border-t-brand-purple rounded-full animate-spin" />
+                          <History size={20} className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-brand-purple animate-pulse" />
+                        </div>
+                        <p className="text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest text-xs">{t('history.loading')}</p>
                       </div>
                     ) : filteredHistory.length === 0 ? (
-                      <div className="text-center py-24 bg-slate-50 dark:bg-slate-950 rounded-3xl border border-dashed border-slate-200 dark:border-slate-800">
-                        <div className="w-16 h-16 bg-white dark:bg-white/5 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-400 dark:text-slate-600">
-                          <History size={32} />
+                      <div className="text-center py-32 bg-slate-50/50 dark:bg-slate-950/50 rounded-[32px] border border-dashed border-slate-200 dark:border-slate-800">
+                        <div className="w-20 h-20 bg-white dark:bg-white/5 rounded-full flex items-center justify-center mx-auto mb-6 text-slate-400 dark:text-slate-600 shadow-inner">
+                          <History size={40} />
                         </div>
-                        <h3 className="text-lg font-bold text-slate-900 dark:text-slate-400">No results found</h3>
-                        <p className="text-slate-500 dark:text-slate-600 text-sm mt-1">Try adjusting your search or generate something new!</p>
+                        <h3 className="text-xl font-bold text-slate-900 dark:text-slate-300">{t('history.noResults')}</h3>
+                        <p className="text-slate-500 dark:text-slate-500 text-sm mt-2 max-w-xs mx-auto leading-relaxed">{t('history.adjustSearch')}</p>
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 gap-4">
+                      <div className="grid grid-cols-1 gap-6">
                         {filteredHistory.map((item) => (
-                          <div key={item.id} className="group bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 transition-all hover:bg-slate-100 dark:hover:bg-slate-900 hover:border-brand-purple/30">
-                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                              <div className="flex-1 min-w-0 space-y-3">
-                                <div className="flex items-center gap-3">
-                                  <span className="px-2 py-0.5 bg-brand-purple/20 text-brand-purple rounded text-[10px] font-bold uppercase tracking-wider">
+                          <div key={item.id} className="group bg-white/40 dark:bg-slate-900/40 border border-slate-200/50 dark:border-slate-800/50 rounded-[24px] p-6 sm:p-8 transition-all hover:bg-white/60 dark:hover:bg-slate-900/60 hover:border-brand-purple/40 hover:shadow-xl hover:-translate-y-1">
+                            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-8">
+                              <div className="flex-1 min-w-0 space-y-4">
+                                <div className="flex items-center gap-4">
+                                  <span className="px-3 py-1 bg-brand-purple/10 text-brand-purple rounded-full text-[10px] font-bold uppercase tracking-[0.15em] border border-brand-purple/20">
                                     {item.config.voiceId}
                                   </span>
-                                  <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
-                                    {new Date(item.createdAt).toLocaleString()}
-                                  </span>
+                                  <div className="flex items-center gap-2 text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest">
+                                    <Clock size={12} />
+                                    {formatDate(item.createdAt)}
+                                  </div>
+                                  {(item.duration || item.baseDuration) > 0 && (
+                                    <div className="flex items-center gap-2 text-[10px] text-brand-purple font-bold uppercase tracking-widest bg-brand-purple/5 px-2 py-0.5 rounded-full border border-brand-purple/10">
+                                      <Play size={10} fill="currentColor" />
+                                      {formatMyanmarDuration(item.duration || item.baseDuration || 0)}
+                                    </div>
+                                  )}
                                 </div>
-                                <p className="text-sm font-medium text-slate-900 dark:text-slate-200 line-clamp-2 leading-relaxed">
+                                <p className="text-base font-medium text-slate-900 dark:text-slate-200 line-clamp-2 leading-relaxed">
                                   {item.text}
                                 </p>
                               </div>
                               
-                              <div className="flex items-center gap-2 shrink-0">
+                              <div className="flex items-center gap-3 shrink-0">
+                                <button 
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(item.text);
+                                    showToast(t('generate.copySuccess'), 'success');
+                                  }}
+                                  className="p-3 bg-slate-100 dark:bg-white/5 text-slate-500 rounded-[14px] hover:bg-brand-purple hover:text-white transition-all border border-slate-200 dark:border-white/10 shadow-sm"
+                                  title={t('history.copyText')}
+                                >
+                                  <Clipboard size={18} />
+                                </button>
                                 <button 
                                   onClick={() => playFromHistory(item)}
-                                  className="flex items-center gap-2 px-4 py-2 bg-brand-purple text-white rounded-xl text-xs font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20"
+                                  className="flex items-center gap-3 px-6 py-3 bg-brand-purple text-white rounded-[16px] text-sm font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/30 active:scale-95"
                                 >
-                                  <Play size={14} fill="currentColor" /> Play
+                                  <Play size={16} fill="currentColor" /> {t('history.play')}
                                 </button>
-                                <div className="h-8 w-[1px] bg-white/10 mx-1" />
+                                <div className="h-10 w-[1px] bg-slate-200 dark:bg-slate-800 mx-1" />
                                 <button 
                                   onClick={() => handleDownloadAudio(item.audioStorageUrl || '', `narration-${item.id}.mp3`)}
-                                  className="p-2.5 bg-blue-500/10 text-blue-500 rounded-xl hover:bg-blue-500 hover:text-white transition-all border border-blue-500/20"
-                                  title="Download MP3"
+                                  className="p-3 bg-blue-500/10 text-blue-500 rounded-[14px] hover:bg-blue-500 hover:text-white transition-all border border-blue-500/20 shadow-sm"
+                                  title={t('output.downloadMp3')}
                                 >
-                                  <Music size={16} />
+                                  <Music size={18} />
                                 </button>
                                 <button 
                                   onClick={() => handleDownloadSRT(item.srtStorageUrl || item.srtContent || '', `subtitles-${item.id}.srt`)}
-                                  className="p-2.5 bg-amber-500/10 text-amber-500 rounded-xl hover:bg-amber-500 hover:text-white transition-all border border-amber-500/20"
-                                  title="Download SRT"
+                                  className="p-3 bg-amber-500/10 text-amber-500 rounded-[14px] hover:bg-amber-500 hover:text-white transition-all border border-amber-500/20 shadow-sm"
+                                  title={t('output.downloadSrt')}
                                 >
-                                  <FileText size={16} />
+                                  <FileText size={18} />
                                 </button>
                                 <button 
                                   onClick={() => handleDeleteHistory(item.id)}
-                                  className="p-2.5 bg-red-500/10 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-all border border-red-500/20"
-                                  title="Delete"
+                                  className="p-3 bg-rose-500/10 text-rose-500 rounded-[14px] hover:bg-rose-500 hover:text-white transition-all border border-rose-500/20 shadow-sm"
+                                  title={t('history.delete')}
                                 >
-                                  <Trash2 size={16} />
+                                  <Trash2 size={18} />
                                 </button>
                               </div>
                             </div>
@@ -1152,38 +1954,157 @@ export default function App() {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -20 }}
-                  className="max-w-4xl mx-auto space-y-8"
+                  className="max-w-5xl mx-auto space-y-8"
                 >
                   {/* Profile Card */}
-                  <div className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-8 shadow-2xl transition-colors duration-300">
-                    <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 sm:gap-6 mb-6 sm:mb-8 text-center sm:text-left">
-                      <div className="w-16 h-16 sm:w-20 sm:h-20 bg-brand-purple/20 text-brand-purple rounded-2xl flex items-center justify-center text-2xl sm:text-3xl font-bold shadow-inner border border-brand-purple/20 shrink-0">
+                  <div className="glass-card rounded-[32px] p-8 sm:p-12 shadow-2xl transition-all duration-300 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-brand-purple/5 blur-[50px] -z-10" />
+                    <div className="flex flex-col lg:flex-row items-center lg:items-start gap-8 lg:gap-10 text-center lg:text-left">
+                      <div className="w-24 h-24 sm:w-32 sm:h-32 bg-gradient-to-br from-brand-purple to-purple-700 text-white rounded-[32px] flex items-center justify-center text-4xl sm:text-5xl font-bold shadow-2xl shadow-brand-purple/30 border border-white/10 shrink-0">
                         {accessCode?.charAt(0).toUpperCase() || 'V'}
                       </div>
-                      <div className="flex-1 w-full">
-                        <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-3 mb-2">
-                          <h3 className="text-lg sm:text-2xl font-bold text-slate-900 dark:text-white truncate max-w-full">User ID: {accessCode}</h3>
-                          <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[9px] sm:text-[10px] font-bold uppercase tracking-wider border bg-emerald-500/20 text-emerald-500 border-emerald-500/30">
-                            <CheckCircle2 size={10} className="sm:w-3 sm:h-3" /> Authorized Access
+                      <div className="flex-1 w-full space-y-4">
+                        <div className="flex flex-col lg:flex-row items-center gap-4">
+                          <h3 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white tracking-tight">
+                            {t('settings.title')}
+                          </h3>
+                          <span className="flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] sm:text-[11px] font-bold uppercase tracking-[0.15em] border bg-emerald-500/10 text-emerald-500 border-emerald-500/20 shadow-sm">
+                            <CheckCircle2 size={14} /> AUTHORIZED
                           </span>
                         </div>
-                        <p className="text-slate-500 dark:text-slate-400 text-xs sm:text-sm flex items-center justify-center sm:justify-start gap-2">
-                          <Clock size={12} className="sm:w-3.5 sm:h-3.5" /> Session active via Access Code
-                        </p>
+                        <div className="flex flex-wrap items-center justify-center lg:justify-start gap-6 text-slate-500 dark:text-slate-400">
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            <Clock size={16} className="text-brand-purple" />
+                            Session active
+                          </div>
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            <ShieldCheck size={16} className="text-brand-purple" />
+                            {isPremium ? (language === 'mm' ? 'အဆင့်မြင့် (Premium) အသုံးပြုသူ' : 'Premium Access Active') : (language === 'mm' ? 'သာမန် (Standard) အသုံးပြုသူ' : 'Standard User')}
+                          </div>
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            <Calendar size={16} className="text-brand-purple" />
+                            {userControl?.expiryDate ? (
+                              `${t('settings.expiry')} - ${new Date(userControl.expiryDate).toLocaleDateString(language === 'mm' ? 'my-MM' : 'en-US', { day: 'numeric', month: 'short', year: 'numeric' })}`
+                            ) : (
+                              `${t('settings.expiry')} - ${t('settings.unlimited')}`
+                            )}
+                          </div>
+                        </div>
+                        
+                        <div className="pt-6 flex flex-col sm:flex-row gap-4">
+                          <button
+                            onClick={handleLogout}
+                            className="px-8 py-4 bg-rose-500/10 text-rose-500 border border-rose-500/20 rounded-[16px] font-bold text-sm hover:bg-rose-500 hover:text-white transition-all flex items-center justify-center gap-3 shadow-sm"
+                          >
+                            <LogOut size={18} /> Sign Out
+                          </button>
+                        </div>
                       </div>
-                      <button
-                        onClick={handleLogout}
-                        className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 rounded-xl font-bold text-xs hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/20 transition-all flex items-center justify-center gap-2"
-                      >
-                        <LogOut size={14} /> Sign Out
-                      </button>
+                    </div>
+                  </div>
+
+                  {/* Credits/Usage Card */}
+                  <div className="glass-card rounded-[24px] p-6 sm:p-8 shadow-2xl transition-all duration-300">
+                    <div className="flex flex-col gap-6">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-[#F5C518]/10 rounded-xl flex items-center justify-center text-[#F5C518]">
+                            <FileVideo size={20} />
+                          </div>
+                          <div>
+                            <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white tracking-tight">နေ့စဉ် Video Credits</h3>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">Track your daily video transcription usage</p>
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1.5">
+                          {isVbsAdmin ? (
+                            <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black tracking-tighter bg-[#F5C518]/20 text-[#F5C518] border border-[#F5C518]/30 shadow-[0_0_15px_rgba(245,197,24,0.3)] uppercase">
+                              <ShieldCheck size={10} /> Admin — Unlimited Access
+                            </span>
+                          ) : userControl?.vbsId === "saw_vlogs_2026" ? (
+                            <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black tracking-tighter bg-[#F5C518]/20 text-[#F5C518] border border-[#F5C518]/30 shadow-[0_0_15px_rgba(245,197,24,0.3)]">
+                              <ShieldCheck size={10} /> OWNER — UNLIMITED ACCESS
+                            </span>
+                          ) : (
+                            <>
+                              {userControl?.isUnlimited && (
+                                <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black tracking-tighter bg-[#F5C518]/20 text-[#F5C518] border border-[#F5C518]/30 shadow-[0_0_15px_rgba(245,197,24,0.2)]">
+                                  <Sparkles size={10} /> UNLIMITED ACCESS
+                                </span>
+                              )}
+                              {userControl?.admin_override_active && (
+                                <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black tracking-tighter bg-cyan-500/20 text-cyan-500 border border-cyan-500/30">
+                                  <Info size={10} /> Admin မှ တိုးချဲ့ပေးထားသည်
+                                </span>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      {!isVbsAdmin && userControl?.vbsId !== "saw_vlogs_2026" && (
+                        <div className="space-y-3">
+                          <div className="flex justify-between items-end">
+                            <div className="space-y-1">
+                              <span className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">
+                                {(() => {
+                                  const today = new Date().toISOString().split("T")[0];
+                                  const isNewDay = userControl?.lastVideoDate !== today;
+                                  return isNewDay ? 0 : (userControl?.videosGeneratedToday || 0);
+                                })()} / {userControl?.isUnlimited ? '∞' : (userControl?.dailyVideoLimit || 2)}
+                              </span>
+                              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">videos used today</p>
+                            </div>
+                            <div className="text-right">
+                              {(() => {
+                                if (userControl?.isUnlimited) {
+                                  return <span className="text-xs font-bold text-[#F5C518]">Unlimited Video Access</span>;
+                                }
+                                const today = new Date().toISOString().split("T")[0];
+                                const isNewDay = userControl?.lastVideoDate !== today;
+                                const used = isNewDay ? 0 : (userControl?.videosGeneratedToday || 0);
+                                const limit = userControl?.dailyVideoLimit || 2;
+                                return used >= limit ? (
+                                  <span className="text-xs font-bold text-rose-500">ယနေ့ Video အကန့်အသတ် ပြည့်သွားပြီ</span>
+                                ) : (
+                                  <span className="text-xs font-bold text-emerald-500">
+                                    ကျန်ရှိသည် {limit - used} video
+                                  </span>
+                                );
+                              })()}
+                            </div>
+                          </div>
+
+                          <div className="h-3 w-full bg-slate-100 dark:bg-white/5 rounded-full overflow-hidden border border-slate-200 dark:border-white/10 p-0.5">
+                            <motion.div 
+                              initial={{ width: 0 }}
+                              animate={{ 
+                                width: userControl?.isUnlimited ? '100%' : `${Math.min(100, ((userControl?.lastVideoDate !== new Date().toISOString().split("T")[0] ? 0 : (userControl?.videosGeneratedToday || 0)) / (userControl?.dailyVideoLimit || 2)) * 100)}%` 
+                              }}
+                              className={`h-full rounded-full transition-colors duration-500 ${
+                                (() => {
+                                  if (userControl?.isUnlimited) return 'bg-[#F5C518] shadow-[0_0_10px_rgba(245,197,24,0.4)]';
+                                  const today = new Date().toISOString().split("T")[0];
+                                  const isNewDay = userControl?.lastVideoDate !== today;
+                                  const used = isNewDay ? 0 : (userControl?.videosGeneratedToday || 0);
+                                  const limit = userControl?.dailyVideoLimit || 2;
+                                  const ratio = used / limit;
+                                  if (ratio >= 1) return 'bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.4)]';
+                                  if (ratio >= 0.7) return 'bg-[#F5C518] shadow-[0_0_10px_rgba(245,197,24,0.4)]';
+                                  return 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.4)]';
+                                })()
+                              }`}
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
 
                   {/* Gemini API Key Section */}
                   <div 
                     onClick={() => setIsApiKeyModalOpen(true)}
-                    className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-8 shadow-2xl transition-colors duration-300 cursor-pointer hover:border-brand-purple/30 group"
+                    className="glass-card rounded-[24px] p-6 sm:p-8 shadow-2xl transition-all duration-300 cursor-pointer hover:border-brand-purple/30 group"
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div className="flex items-center gap-3">
@@ -1196,161 +2117,29 @@ export default function App() {
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
-                        <div className={`flex items-center gap-2 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest ${localApiKey ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                          <div className={`w-2.5 h-2.5 rounded-full ${localApiKey ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
-                          {localApiKey ? 'CONNECTED' : 'No API Key found'}
-                        </div>
-                        <ChevronRight size={18} className="text-slate-400 group-hover:translate-x-1 transition-transform" />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Admin Login Section */}
-                  {!isAdmin && (
-                    <div 
-                      onClick={() => setIsAdminModalOpen(true)}
-                      className="bg-white/50 backdrop-blur dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-8 shadow-2xl transition-colors duration-300 cursor-pointer hover:border-brand-purple/30 group"
-                    >
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-brand-purple/10 rounded-xl flex items-center justify-center text-brand-purple group-hover:scale-110 transition-transform">
-                            <Shield size={20} />
-                          </div>
-                          <div>
-                            <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">Admin Login</h3>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">Access administrative dashboard and settings</p>
+                        <div className={`flex items-center gap-3 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest ${localApiKey ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                          {localApiKey && apiChannelManager.getActiveSourceInfo(profile?.role === 'admin') && (
+                            <div className="hidden sm:flex items-center gap-2 text-slate-500 font-medium mr-1">
+                              <span className="text-slate-900 dark:text-white font-bold">{apiChannelManager.getActiveSourceInfo(profile?.role === 'admin')?.label}</span>
+                              <span className="text-slate-300 dark:text-slate-700 mx-1">•</span>
+                              <span className="font-mono lowercase opacity-50 tracking-normal">
+                                {apiChannelManager.getActiveSourceInfo(profile?.role === 'admin')?.key.substring(0, 4)}....{apiChannelManager.getActiveSourceInfo(profile?.role === 'admin')?.key.slice(-4)}
+                              </span>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2">
+                            <div className={`w-2 h-2 rounded-full ${localApiKey ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+                            {apiChannelManager.getSettings().useAdminKeys && apiChannelManager.getSettings().allowSharedKeys && localApiKey && apiChannelManager.getActiveSourceInfo(profile?.role === 'admin')?.isShared ? (
+                              'ADMIN KEY ACTIVE'
+                            ) : localApiKey ? (
+                              'CONNECTED'
+                            ) : (
+                              'NO API KEY FOUND'
+                            )}
                           </div>
                         </div>
                         <ChevronRight size={18} className="text-slate-400 group-hover:translate-x-1 transition-transform" />
                       </div>
-                    </div>
-                  )}
-                </motion.div>
-              )}
-              {activeTab === 'admin' && isAdmin && (
-                <motion.div
-                  key="admin"
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                >
-                  <AdminDashboard isAuthReady={isAuthReady} onLogout={handleLogout} />
-                </motion.div>
-              )}
-              {activeTab === 'youtube-transcript' && (
-                <motion.div
-                  key="youtube-transcript"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="max-w-4xl mx-auto space-y-8"
-                >
-                  <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-10 shadow-2xl transition-colors duration-300">
-                    <div className="flex flex-col items-center text-center mb-8">
-                      <div className="w-16 h-16 bg-blue-500/10 text-blue-500 rounded-2xl flex items-center justify-center mb-4 border border-blue-500/20">
-                        <FileText size={32} />
-                      </div>
-                      <h2 className="text-2xl font-bold text-slate-900 dark:text-white">YouTube Transcript</h2>
-                      <p className="text-slate-500 dark:text-slate-400 text-sm mt-2">ဗီဒီယိုမှ မူရင်းစာတန်းထိုးများကို ဤနေရာတွင် ထည့်သွင်းနိုင်သည်</p>
-                    </div>
-
-                    <div className="space-y-6">
-                      <div className="space-y-4">
-                        <div className="space-y-2">
-                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">YouTube မှ ကူးယူလာသော Transcript ကို ဤနေရာတွင် Paste လုပ်ပေးပါ (Paste Transcript Here)</label>
-                          <textarea
-                            value={manualTranscript}
-                            onChange={(e) => setManualTranscript(e.target.value)}
-                            placeholder="Paste the transcript text here..."
-                            className="w-full h-64 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all resize-none leading-relaxed"
-                          />
-                          <p className="text-[10px] text-slate-500 px-1">YouTube ဗီဒီယိုအောက်ရှိ '...More' -&gt; 'Show Transcript' မှ စာသားများကို ကူးယူနိုင်ပါသည်။</p>
-                        </div>
-                      </div>
-
-                      <button
-                        onClick={() => handleYoutubeRecap(manualTranscript)}
-                        disabled={isProcessingYoutube || !manualTranscript.trim()}
-                        className="w-full py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg hover:bg-brand-purple/90 transition-all flex items-center justify-center gap-3 disabled:opacity-50 shadow-lg shadow-brand-purple/20"
-                      >
-                        {isProcessingYoutube ? (
-                          <>
-                            <RefreshCw size={20} className="animate-spin" />
-                            <span>Recap ပြုလုပ်နေသည်...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Wand2 size={20} />
-                            <span>Summarize & Generate Burmese Voice</span>
-                          </>
-                        )}
-                      </button>
-
-                      {error && (
-                        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-start gap-3 text-red-500">
-                          <AlertCircle size={20} className="shrink-0 mt-0.5" />
-                          <p className="text-sm font-medium">{error}</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-              {activeTab === 'youtube-recap' && (
-                <motion.div
-                  key="youtube-recap"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="max-w-2xl mx-auto space-y-8"
-                >
-                  <div className="bg-white/50 backdrop-blur dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-10 shadow-2xl transition-colors duration-300">
-                    <div className="flex flex-col items-center text-center mb-8">
-                      <div className="w-16 h-16 bg-red-500/10 text-red-500 rounded-2xl flex items-center justify-center mb-4 border border-red-500/20">
-                        <Youtube size={32} />
-                      </div>
-                      <h2 className="text-2xl font-bold text-slate-900 dark:text-white">YouTube Recap</h2>
-                      <p className="text-slate-500 dark:text-slate-400 text-sm mt-2">ဗီဒီယိုကို အကျဉ်းချုပ်ပြီး အသံဖလှယ်ပေးမည်</p>
-                    </div>
-
-                    <div className="space-y-6">
-                      <div className="space-y-4">
-                        <div className="space-y-2">
-                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">YouTube မှ ကူးယူလာသော Transcript ကို ဤနေရာတွင် Paste လုပ်ပေးပါ (Paste Transcript Here)</label>
-                          <textarea
-                            value={recapManualText}
-                            onChange={(e) => setRecapManualText(e.target.value)}
-                            placeholder="Paste English transcript here for instant recap..."
-                            className="w-full h-48 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-4 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all resize-none"
-                          />
-                          <p className="text-[10px] text-slate-500 px-1">YouTube ဗီဒီယိုအောက်ရှိ '...More' -&gt; 'Show Transcript' မှ စာသားများကို ကူးယူနိုင်ပါသည်။</p>
-                        </div>
-                      </div>
-
-                      {error && (
-                        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-start gap-3 text-red-500">
-                          <AlertCircle size={20} className="shrink-0 mt-0.5" />
-                          <p className="text-sm font-medium">{error}</p>
-                        </div>
-                      )}
-
-                      <button
-                        onClick={() => handleYoutubeRecap()}
-                        disabled={isProcessingYoutube || !recapManualText.trim()}
-                        className="w-full py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg hover:bg-brand-purple/90 transition-all flex items-center justify-center gap-3 disabled:opacity-50 shadow-lg shadow-brand-purple/20"
-                      >
-                        {isProcessingYoutube ? (
-                          <>
-                            <RefreshCw size={20} className="animate-spin" />
-                            <span>Recap ပြုလုပ်နေသည်...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Wand2 size={20} />
-                            <span>Summarize & Generate Burmese Voice</span>
-                          </>
-                        )}
-                      </button>
                     </div>
                   </div>
                 </motion.div>
@@ -1365,73 +2154,10 @@ export default function App() {
       <ApiKeyModal 
         isOpen={isApiKeyModalOpen}
         onClose={() => setIsApiKeyModalOpen(false)}
-        onSave={handleSaveApiKeyFromModal}
-        onClear={handleClearApiKey}
-        initialKey={localApiKey || ''}
-        initialSwitch={apiSwitch}
+        role={profile?.role}
+        membershipStatus={userControl?.membershipStatus}
+        vbsId={userControl?.vbsId}
       />
-
-      {/* Admin Login Modal */}
-      <AnimatePresence>
-        {isAdminModalOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsAdminModalOpen(false)}
-              className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
-            />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden"
-            >
-              <div className="p-6 sm:p-8">
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-brand-purple/10 text-brand-purple rounded-xl flex items-center justify-center">
-                      <Shield size={20} />
-                    </div>
-                    <h3 className="text-xl font-bold text-slate-900 dark:text-white">Admin Access</h3>
-                  </div>
-                  <button 
-                    onClick={() => setIsAdminModalOpen(false)}
-                    className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
-                  >
-                    <X size={20} />
-                  </button>
-                </div>
-
-                <form onSubmit={handleAdminLogin} className="space-y-6">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Admin Password</label>
-                    <div className="relative">
-                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                      <input
-                        type="password"
-                        value={adminPasswordInput}
-                        onChange={(e) => setAdminPasswordInput(e.target.value)}
-                        placeholder="Enter admin password..."
-                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
-                        autoFocus
-                      />
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="w-full py-4 bg-brand-purple text-white rounded-2xl font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20 flex items-center justify-center gap-2"
-                  >
-                    <LogIn size={20} /> Login as Admin
-                  </button>
-                </form>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
       <AnimatePresence>
         {toast && (
           <motion.div
@@ -1449,6 +2175,67 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <Modal
+        isOpen={modal.isOpen}
+        onClose={() => setModal({ ...modal, isOpen: false })}
+        onConfirm={modal.onConfirm}
+        title={modal.title}
+        message={modal.message}
+        type={modal.type}
+        confirmText={modal.confirmText}
+        cancelText={modal.cancelText}
+        placeholder={modal.placeholder}
+        defaultValue={modal.defaultValue}
+        inputType={modal.inputType}
+      />
+      <footer className="py-12 flex justify-center px-6">
+        <div className="flex flex-col items-center gap-3">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 bg-brand-purple rounded-lg flex items-center justify-center shadow-lg shadow-brand-purple/30">
+              <Mic2 size={12} className="text-white" />
+            </div>
+            <p className="text-transparent bg-clip-text bg-gradient-to-r from-brand-purple via-neon-indigo to-neon-magenta font-black text-sm tracking-tight animate-pulse-soft">
+              Vlogs By Saw
+            </p>
+          </div>
+          <p className="text-[10px] md:text-xs font-bold tracking-[0.25em] uppercase text-center">
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-slate-400 via-brand-purple to-slate-400">
+              Premium Myanmar AI Studio 2026
+            </span>
+          </p>
+          <div className="flex items-center gap-4 text-[9px] sm:text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
+            <button 
+              onClick={() => {
+                window.history.pushState({}, '', '/privacy-policy');
+                setIsPrivacyRoute(true);
+                setIsTermsRoute(false);
+                window.scrollTo(0, 0);
+              }}
+              className="hover:text-brand-purple transition-colors"
+            >
+              {t('settings.privacy')}
+            </button>
+            <span className="opacity-30">•</span>
+            <button 
+              onClick={() => {
+                window.history.pushState({}, '', '/terms-of-service');
+                setIsTermsRoute(true);
+                setIsPrivacyRoute(false);
+                window.scrollTo(0, 0);
+              }}
+              className="hover:text-brand-purple transition-colors"
+            >
+              {t('settings.terms')}
+            </button>
+          </div>
+          <div className="flex items-center gap-3 mt-1">
+            <div className="w-12 h-px bg-gradient-to-r from-transparent to-brand-purple/50" />
+            <div className="w-1.5 h-1.5 rounded-full bg-brand-purple animate-pulse" />
+            <div className="w-12 h-px bg-gradient-to-l from-transparent to-brand-purple/50" />
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
