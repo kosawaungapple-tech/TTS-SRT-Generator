@@ -43,7 +43,6 @@ export default function App() {
     volume: 0,
     styleInstruction: '',
   });
-  const [outputConfig, setOutputConfig] = useState({ speed: 1.0, pitch: 0, volume: 0 });
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessingSpeed, setIsProcessingSpeed] = useState(false);
   const [result, setResult] = useState<AudioResult | null>(null);
@@ -879,7 +878,6 @@ export default function App() {
     setIsLoading(true);
     setError(null);
     setResult(null);
-    setOutputConfig({ speed: config.speed, pitch: config.pitch, volume: config.volume });
 
     const runGeneration = async () => {
       try {
@@ -1730,7 +1728,6 @@ export default function App() {
                           isLoading={isLoading} 
                           error={error}
                           onRetry={() => handleGenerate()}
-                          globalVolume={outputConfig.volume}
                           engineStatus={engineStatus}
                           retryCountdown={retryCountdown}
                           showToast={showToast}

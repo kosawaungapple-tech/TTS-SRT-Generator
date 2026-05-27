@@ -9,7 +9,6 @@ import { generateSRT, generateASS, generateLRC } from '../utils/subtitleUtils';
 interface OutputPreviewProps {
   result: AudioResult | null;
   isLoading: boolean;
-  globalVolume?: number;
   engineStatus?: 'ready' | 'cooling' | 'limit';
   retryCountdown?: number;
   error?: string | null;
@@ -50,7 +49,6 @@ const LoadingWaveform = () => {
 export const OutputPreview: React.FC<OutputPreviewProps> = ({ 
   result, 
   isLoading, 
-  globalVolume,
   engineStatus = 'ready',
   retryCountdown = 0,
   error = null,
@@ -61,7 +59,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [playerVolume, setPlayerVolume] = useState(1.0);
+  const [playerVolume] = useState(1.0);
   const [currentSrt, setCurrentSrt] = useState('');
   const [isSrtCopied, setIsSrtCopied] = useState(false);
   
@@ -166,15 +164,20 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
       mimeType = 'audio/wav';
     }
 
-    console.log(`[DEBUG] setupFallbackAudio: Detected mimeType ${mimeType} from headers`);
+    console.log(`[DEBUG] setupFallbackAudio: Detected mimeType ${mimeType} from headers, bytes: ${bytes.length}`);
     
     const blob = new Blob([data], { type: mimeType });
     const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
+    const audio = new Audio();
+    audio.src = url;
     audio.playbackRate = 1.0; 
     
     audio.onerror = (e) => {
       console.error("[DEBUG] Fallback Audio Player Error:", e);
+      // Log more details if available
+      if (audio.error) {
+        console.error(`[DEBUG] Audio Error Code: ${audio.error.code}, Message: ${audio.error.message}`);
+      }
       showToast("Audio playback error", "error");
     };
 
@@ -326,52 +329,59 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   }, [isPlaying, duration]);
 
   const togglePlay = async () => {
-    if (isFallback) {
-      if (!fallbackAudioRef.current) return;
-      
-      if (isPlaying) {
-        fallbackAudioRef.current.pause();
-        setIsPlaying(false);
-      } else {
-        fallbackAudioRef.current.currentTime = currentTime;
-        fallbackAudioRef.current.play();
-        setIsPlaying(true);
-      }
-      return;
-    }
-
-    if (!audioBufferRef.current || !audioContextRef.current) return;
-
-    if (isPlaying) {
-      pausedTimeRef.current = currentTime;
-      stopAudio();
-    } else {
-      initAudioContext();
-      if (audioContextRef.current.state === 'suspended') {
-        await audioContextRef.current.resume();
-      }
-
-      const source = audioContextRef.current.createBufferSource();
-      source.buffer = audioBufferRef.current;
-      source.playbackRate.value = 1.0; 
-      source.connect(gainNodeRef.current!);
-      
-      source.start(0, currentTime);
-      sourceNodeRef.current = source;
-      startTimeRef.current = audioContextRef.current.currentTime - currentTime;
-      
-      setIsPlaying(true);
-
-      source.onended = () => {
-        // Only reset if it ended naturally
-        if (sourceNodeRef.current === source) {
+    try {
+      if (isFallback) {
+        if (!fallbackAudioRef.current) return;
+        
+        if (isPlaying) {
+          fallbackAudioRef.current.pause();
           setIsPlaying(false);
-          if (currentTime >= duration - 0.1) {
-            setCurrentTime(0);
-            pausedTimeRef.current = 0;
-          }
+        } else {
+          fallbackAudioRef.current.currentTime = currentTime;
+          console.log(`[DEBUG] Fallback Play triggered at ${currentTime}s`);
+          await fallbackAudioRef.current.play();
+          setIsPlaying(true);
         }
-      };
+        return;
+      }
+
+      if (!audioBufferRef.current || !audioContextRef.current) return;
+
+      if (isPlaying) {
+        pausedTimeRef.current = currentTime;
+        stopAudio();
+      } else {
+        initAudioContext();
+        if (audioContextRef.current.state === 'suspended') {
+          await audioContextRef.current.resume();
+        }
+
+        const source = audioContextRef.current.createBufferSource();
+        source.buffer = audioBufferRef.current;
+        source.playbackRate.value = 1.0; 
+        source.connect(gainNodeRef.current!);
+        
+        source.start(0, currentTime);
+        sourceNodeRef.current = source;
+        startTimeRef.current = audioContextRef.current.currentTime - currentTime;
+        
+        console.log(`[DEBUG] AudioContext Play triggered at ${currentTime}s`);
+        setIsPlaying(true);
+
+        source.onended = () => {
+          // Only reset if it ended naturally
+          if (sourceNodeRef.current === source) {
+            setIsPlaying(false);
+            if (currentTime >= duration - 0.1) {
+              setCurrentTime(0);
+              pausedTimeRef.current = 0;
+            }
+          }
+        };
+      }
+    } catch (err) {
+      console.error("[DEBUG] togglePlay error:", err);
+      showToast("Playback failed", "error");
     }
   };
 
@@ -391,45 +401,67 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   };
 
   const handleDownloadAudio = async () => {
-    if (!result || !result.audioData) return;
+    if (!result) return;
     
     try {
-      console.log(`[DEBUG] Attempting download for result...`);
+      console.log(`[DEBUG] handleDownloadAudio triggered`);
       showToast(t('output.tuning'), 'success');
       
-      const audioData = result.audioData;
-      const binaryStr = window.atob(audioData);
-      const bytes = new Uint8Array(binaryStr.length);
-      for (let i = 0; i < binaryStr.length; i++) {
-        bytes[i] = binaryStr.charCodeAt(i);
-      }
-      
-      console.log(`[DEBUG] Audio Byte Length: ${bytes.length}`);
-      
-      // Check for RIFF header (WAV)
       let finalBlob: Blob;
-      if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
-        finalBlob = new Blob([bytes], { type: 'audio/wav' });
-        console.log(`[DEBUG] Download: Detected WAV header, size: ${finalBlob.size}`);
+      
+      if (result.rawAudio) {
+        // Use raw binary if available (most reliable)
+        const bytes = new Uint8Array(result.rawAudio);
+        let type = 'audio/mpeg';
+        if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
+          type = 'audio/wav';
+        }
+        finalBlob = new Blob([result.rawAudio], { type });
+        console.log(`[DEBUG] Download: Using result.rawAudio, type: ${finalBlob.type}, size: ${finalBlob.size}`);
+      } else if (result.audioData) {
+        // Fallback to base64
+        const binaryStr = window.atob(result.audioData);
+        const bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) {
+          bytes[i] = binaryStr.charCodeAt(i);
+        }
+        
+        let type = 'audio/mpeg';
+        if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
+          type = 'audio/wav';
+        }
+        finalBlob = new Blob([bytes], { type });
+        console.log(`[DEBUG] Download: Using result.audioData base64, type: ${finalBlob.type}, size: ${finalBlob.size}`);
       } else {
-        // Fallback or legacy support
-        finalBlob = new Blob([bytes], { type: 'audio/mpeg' });
-        console.log(`[DEBUG] Download: No WAV header, assuming fallback type, size: ${finalBlob.size}`);
+        throw new Error("No audio data available for download");
       }
 
-      const filename = `vlogs-by-saw-audio-${Date.now()}`;
       const ext = finalBlob.type === 'audio/wav' ? 'wav' : 'mp3';
+      const filename = `vlogs-by-saw-audio-${Date.now()}.${ext}`;
+      
+      console.log(`[DEBUG] Creating ObjectURL for download...`);
       const url = URL.createObjectURL(finalBlob);
+      
       const a = document.createElement('a');
+      a.style.display = 'none';
       a.href = url;
-      a.download = `${filename}.${ext}`;
+      a.download = filename;
       document.body.appendChild(a);
+      
+      console.log(`[DEBUG] Triggering click on anchor element for ${filename}`);
       a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      console.log(`[DEBUG] Download triggered for ${filename}.${ext}`);
+      
+      // Small delay before cleanup to ensure click is handled
+      setTimeout(() => {
+        if (document.body.contains(a)) {
+          document.body.removeChild(a);
+        }
+        URL.revokeObjectURL(url);
+        console.log(`[DEBUG] Download cleanup completed for ${filename}`);
+      }, 200);
+      
     } catch (err) {
-      console.error("[DEBUG] Download failed:", err);
+      console.error("[DEBUG] handleDownloadAudio Error:", err);
       showToast("Download failed", "error");
     }
   };
@@ -441,23 +473,34 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
     }
 
     console.log(`[DEBUG] Subtitle File: ${fileName}`);
-    console.log(`[DEBUG] Subtitle Content (first 100 chars): ${content.substring(0, 100)}`);
-
+    
     // Strict formatting for compatibility
-    // CRLF line endings (\r\n) as requested
+    // CRLF line endings (\r\n) as requested for SRT files
     const sanitizedContent = content.replace(/\r?\n/g, '\r\n');
     
-    // Blob type text/plain;charset=utf-8 as requested
+    // Use text/plain as requested by user for better CapCut recognition
     const blob = new Blob([sanitizedContent], { type: 'text/plain;charset=utf-8' });
     
     console.log(`[DEBUG] Subtitle File Size: ${blob.size} bytes`);
 
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
+    a.style.display = 'none';
     a.href = url;
     a.download = fileName;
+    
+    document.body.appendChild(a);
+    console.log(`[DEBUG] Triggering subtitle download for ${fileName}`);
     a.click();
-    URL.revokeObjectURL(url);
+    
+    // Small delay before cleanup to ensure trigger is handled
+    setTimeout(() => {
+      if (document.body.contains(a)) {
+        document.body.removeChild(a);
+      }
+      URL.revokeObjectURL(url);
+    }, 200);
+
     showToast(`Downloaded ${fileName}`, 'success');
   };
 
@@ -605,17 +648,18 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
 
           <div className="w-full flex flex-col items-center gap-8">
             {/* Centered Play/Pause Button */}
-            <button
-              onClick={togglePlay}
-              className="w-24 h-24 bg-amber-400 text-black rounded-full flex items-center justify-center shadow-[0_0_50px_rgba(234,179,8,0.3)] hover:shadow-[0_0_60px_rgba(234,179,8,0.5)] hover:scale-105 active:scale-95 transition-all group/play relative overflow-hidden"
-            >
-              <div className="absolute inset-0 bg-gradient-to-tr from-white/20 to-transparent opacity-0 group-hover/play:opacity-100 transition-opacity" />
-              {isPlaying ? (
-                <Pause size={40} fill="currentColor" />
-              ) : (
-                <Play size={40} fill="currentColor" className="ml-2" />
-              )}
-            </button>
+        <button
+          onClick={togglePlay}
+          className="w-24 h-24 bg-amber-400 text-black rounded-full flex items-center justify-center shadow-[0_0_50px_rgba(234,179,8,0.3)] hover:shadow-[0_0_60px_rgba(234,179,8,0.5)] hover:scale-105 active:scale-95 transition-all group/play relative overflow-hidden"
+          aria-label={isPlaying ? "Pause" : "Play"}
+        >
+          <div className="absolute inset-0 bg-gradient-to-tr from-white/20 to-transparent opacity-0 group-hover/play:opacity-100 transition-opacity" />
+          {isPlaying ? (
+            <Pause size={40} fill="currentColor" />
+          ) : (
+            <Play size={40} fill="currentColor" className="ml-2" />
+          )}
+        </button>
 
             {/* Timeline Bar (Scrubber) */}
             <div className="w-full space-y-4">
@@ -677,9 +721,9 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
               <div className="grid grid-cols-1 gap-4">
                 <button
                   onClick={handleDownloadAudio}
-                  disabled={!result.audioData}
+                  disabled={!result || (!result.audioData && !result.rawAudio)}
                   className={`flex items-center justify-center gap-4 py-6 rounded-[24px] font-black uppercase tracking-widest transition-all shadow-xl group ${
-                    !result.audioData 
+                    !result || (!result.audioData && !result.rawAudio)
                       ? 'bg-white/5 text-slate-500 cursor-not-allowed border border-white/10' 
                       : 'bg-amber-400 text-black hover:scale-[1.02] active:scale-[0.98]'
                   }`}
@@ -692,7 +736,8 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
                     onClick={() => {
                       if (result) {
                         const srt = generateSRT(result.subtitles);
-                        downloadFile(srt, `subtitles.srt`);
+                        const ts = new Date().getTime();
+                        downloadFile(srt, `vlogs-saw-subtitles-${ts}.srt`);
                       }
                     }}
                     className="flex flex-col items-center justify-center gap-2 py-4 bg-amber-400 text-black rounded-[24px] font-black uppercase tracking-widest hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-amber-400/10 text-[9px]"
@@ -704,7 +749,8 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
                     onClick={() => {
                       if (result) {
                         const srt = generateSRT(result.subtitles);
-                        downloadFile(srt, `subtitles.txt`);
+                        const ts = new Date().getTime();
+                        downloadFile(srt, `vlogs-saw-subtitles-${ts}.txt`);
                       }
                     }}
                     className="flex flex-col items-center justify-center gap-2 py-4 bg-white/5 text-white rounded-[24px] font-black uppercase tracking-widest border border-white/10 hover:bg-white/10 transition-all text-[9px]"
@@ -716,7 +762,8 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
                     onClick={() => {
                       if (result) {
                         const ass = generateASS(result.subtitles);
-                        downloadFile(ass, `subtitles.ass`);
+                        const ts = new Date().getTime();
+                        downloadFile(ass, `vlogs-saw-subtitles-${ts}.ass`);
                       }
                     }}
                     className="flex flex-col items-center justify-center gap-2 py-4 bg-white/5 text-slate-300 rounded-[24px] font-black uppercase tracking-widest border border-white/10 hover:bg-white/10 transition-all text-[9px]"
