@@ -1,27 +1,36 @@
-import * as React from 'react';
+import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 
-export class ErrorBoundary extends React.Component<any, any> {
-  constructor(props: any) {
+interface Props {
+  children: ReactNode;
+}
+
+interface State {
+  hasError: boolean;
+  error: Error | null;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export class ErrorBoundary extends (Component as any) {
+  constructor(props: Props) {
     super(props);
-    (this as any).state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null };
   }
 
-  static getDerivedStateFromError(error: any) {
+  static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: any, errorInfo: any) {
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('Uncaught error:', error, errorInfo);
   }
 
   handleReset = () => {
-    (this as any).setState({ hasError: false, error: null });
-    window.location.reload();
+    this.setState({ hasError: false, error: null });
   };
 
   render() {
-    const { hasError, error } = (this as any).state;
+    const { hasError, error } = this.state;
     if (hasError) {
       let errorMessage = 'An unexpected error occurred.';
       let errorDetail = '';
@@ -34,7 +43,7 @@ export class ErrorBoundary extends React.Component<any, any> {
             errorDetail = `Operation: ${parsed.operationType} on path: ${parsed.path}. Error: ${parsed.error}`;
           }
         }
-      } catch (e) {
+      } catch {
         errorMessage = error?.message || errorMessage;
       }
 
@@ -62,6 +71,6 @@ export class ErrorBoundary extends React.Component<any, any> {
       );
     }
 
-    return (this as any).props.children;
+    return this.props.children;
   }
 }

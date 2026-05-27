@@ -154,7 +154,7 @@ export const translations = {
     emptyTitle: { en: "Output Preview", mm: "Output Preview" },
     emptySubtitle: { en: "Generated audio and subtitles will appear here after you click generate.", mm: "အသံနှင့် စာတန်းထိုးများကို ထုတ်ယူပြီးပါက ဤနေရာတွင် မြင်တွေ့ရမည်ဖြစ်သည်။" },
     srtPreview: { en: "Subtitle Preview (SRT)", mm: "စာတန်းထိုး နမူနာ (SRT)" },
-    downloadMp3: { en: "Download MP3", mm: "MP3 ရယူမည်" },
+    downloadWav: { en: "Download WAV", mm: "WAV ရယူမည်" },
     downloadSrt: { en: "Download SRT", mm: "SRT ရယူမည်" }
   },
 
