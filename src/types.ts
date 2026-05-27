@@ -1,81 +1,31 @@
-export interface VBSUserControl {
-  vbsId: string;
-  dailyUsage: number;
-  lastUsedDate: string;
-  isUnlimited: boolean;
-  isBlocked: boolean;
-  membershipStatus?: 'standard' | 'premium';
-  customLimit?: number;
-  expiryDate?: string; // ISO date string or YYYY-MM-DD
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  updatedAt: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  lastLoginAt?: any;
-  dailyTasks?: number;
-  role?: 'admin' | 'user';
-  isActive?: boolean;
-  note?: string;
-  password?: string;
-  credits?: number;
-  videosGeneratedToday?: number;
-  dailyVideoLimit?: number;
-  lastVideoDate?: string;
-  admin_override_active?: boolean;
-  api_key_stored?: string;
-  allowAdminKey?: boolean;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+export interface User {
+  uid: string;
+  email: string;
+  displayName?: string;
+  photoURL?: string;
+  role: 'admin' | 'user';
+  is_verified?: boolean;
+  pending_verification?: boolean;
   createdAt?: any;
+  lastSignInAt?: any;
 }
 
-export interface Announcement {
-  id: string;
-  message: string;
-  type: 'info' | 'warning' | 'success' | 'promotion';
+export interface AuthorizedUser {
+  id: string; // Document ID (Access Code)
+  createdAt: any; // Firestore Timestamp
   isActive: boolean;
-  startDate?: string;
-  endDate?: string;
-  createdAt: string;
-  dismissible: boolean;
-  title?: string;
-  ctaLabel?: string;
-  ctaLink?: string;
-  scrollSpeed?: 'slow' | 'normal' | 'fast';
+  role: 'admin' | 'user';
+  note?: string; // Optional name/label
+  label?: string; // Alias for note
+  api_key_stored?: string;
+  createdBy?: string;
 }
 
 export interface GlobalSettings {
   global_system_key?: string;
-  api_keys?: string[]; // List of rotated API keys
-  primary_key?: string;
-  secondary_key?: string;
-  backup_key?: string;
-  elevenlabs_key_1?: string;
-  elevenlabs_key_2?: string;
-  elevenlabs_key_3?: string;
-  elevenlabs_key_4?: string;
-  elevenlabs_key_5?: string;
-  allow_elevenlabs?: boolean;
-  allow_admin_keys: boolean; // Toggle to allow users to use admin keys
-  sharedChannelIds?: string[]; // IDs of admin keys allowed in shared pool
-  allow_video_recap_admin_key?: boolean; // New gate for video recap
-  allow_thumbnail_admin_key?: boolean; // New gate for thumbnail
+  allow_global_key: boolean;
   total_generations: number;
   mock_mode?: boolean;
-  transcription_daily_limit?: number;
-  transcription_public_access?: boolean;
-  welcome_credits?: number;
-  recap_cost?: number;
-  tts_cost?: number;
-  rewrite_cost?: number;
-  announcements?: Announcement[];
-}
-
-export interface CreditSettings {
-  videoRecapCost: number;
-  ttsGenerationCost: number;
-  aiRewriteCost: number;
-  newPremiumWelcomeCredits: number;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  updatedAt?: any;
 }
 
 export interface SystemConfig {
@@ -86,7 +36,6 @@ export interface SystemConfig {
   telegram_bot_token: string;
   telegram_chat_id: string;
   mock_mode?: boolean;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   updatedAt?: any;
 }
 
@@ -99,9 +48,6 @@ export interface HistoryItem {
   srtContent?: string;
   createdAt: string;
   config: TTSConfig;
-  baseDuration: number;
-  oneXDuration: number;
-  duration?: number;
 }
 
 export interface VoiceOption {
@@ -124,43 +70,39 @@ export interface SRTSubtitle {
   text: string;
 }
 
+export interface AudioEffects {
+  echo: {
+    enabled: boolean;
+    delay: number; // in seconds
+    feedback: number; // 0 to 1
+  };
+  reverb: {
+    enabled: boolean;
+    decay: number; // in seconds
+    mix: number; // 0 to 1
+  };
+  pitchShift: {
+    enabled: boolean;
+    semitones: number; // -12 to 12
+  };
+  chorus: {
+    enabled: boolean;
+    rate: number; // in Hz
+    depth: number; // 0 to 1
+  };
+}
+
 export interface TTSConfig {
   voiceId: string;
   speed: number;
   pitch: number;
   volume: number;
-  styleInstruction?: string;
-  ttsProvider?: 'gemini' | 'elevenlabs';
-  vocalStyle?: 'Neutral' | 'Expressive' | 'Energetic' | 'Calm';
-  creativityLevel?: number; // 0.2 to 0.8
-  useGrounding?: boolean;
-  highFidelity?: boolean;
-  fastTrack?: boolean;
-  effects?: Record<string, boolean | number | string>;
+  effects?: AudioEffects;
 }
 
 export interface AudioResult {
   audioUrl: string; // Blob URL for local preview
-  audioData: string; // base64 for download/upload (WAV/MP3 format)
-  pcmData?: string; // raw base64 PCM for merging/processing
-  rawAudio?: ArrayBuffer; // Raw binary data to avoid base64 corruption
-  baseAudio?: ArrayBuffer; // ORIGINAL unprocessed audio for re-rendering effects
+  audioData: string; // base64 for download/upload
   srtContent: string;
   subtitles: SRTSubtitle[];
-  baseDuration: number; // Actual duration of the generated audio file (already speed-adjusted)
-  oneXDuration: number; // Normalized duration at 1.0x speed for estimation
-  speed: number; // Speed at which it was generated
-  pitch?: number;
-  volume?: number;
-  duration: number; // Duration in seconds
-  isLoadingPartial?: boolean; // Flag to indicate more chunks are coming
-  isFallback?: boolean; // Flag to indicate fallback logic was used
-}
-
-export interface ActivityLog {
-  id?: string;
-  vbsId: string;
-  type: 'login' | 'tts' | 'transcription' | 'translation' | 'recap';
-  details: string;
-  createdAt: string; // ISO string
 }
