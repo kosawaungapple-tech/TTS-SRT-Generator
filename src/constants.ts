@@ -1,9 +1,9 @@
 import { VoiceOption } from './types';
 
 export const VOICE_OPTIONS: VoiceOption[] = [
-  { id: 'zephyr', name: 'Burmese Female (အမျိုးသမီး) - Nan', gender: 'female', voiceName: 'Zephyr' },
-  { id: 'puck', name: 'Burmese Male (အမျိုးသား) - Puck', gender: 'male', voiceName: 'Puck' },
+  { id: 'zephyr', name: 'Burmese Female (အမျိုးသမီး) - Zephyr', gender: 'female', voiceName: 'Zephyr' },
   { id: 'kore', name: 'Burmese Male (အမျိုးသား) - Kore', gender: 'male', voiceName: 'Kore' },
+  { id: 'puck', name: 'Burmese Male (အမျိုးသား) - Puck', gender: 'male', voiceName: 'Puck' },
   { id: 'charon', name: 'Burmese Male (အမျိုးသား) - Charon', gender: 'male', voiceName: 'Charon' },
   { id: 'fenrir', name: 'Burmese Male (အမျိုးသား) - Fenrir', gender: 'male', voiceName: 'Fenrir' },
 ];

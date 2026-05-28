@@ -1,16 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Key, Eye, EyeOff, Save, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, ShieldCheck, User } from 'lucide-react';
+import { X, Key, Eye, EyeOff, Save, RefreshCw, CheckCircle2, AlertCircle, ExternalLink } from 'lucide-react';
 import { GeminiTTSService } from '../services/geminiService';
 
 interface ApiKeyModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (key: string) => void;
+  onSave: (key: string, apiSwitch: 'admin' | 'personal') => void;
   onClear?: () => void;
   initialKey?: string;
-  initialMode?: 'admin' | 'personal';
-  onSaveMode?: (mode: 'admin' | 'personal') => void;
+  initialSwitch?: 'admin' | 'personal';
 }
 
 export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ 
@@ -19,11 +18,10 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
   onSave, 
   onClear, 
   initialKey = '',
-  initialMode = 'admin',
-  onSaveMode
+  initialSwitch = 'admin'
 }) => {
   const [apiKey, setApiKey] = useState(initialKey);
-  const [apiKeyMode, setApiKeyMode] = useState<'admin' | 'personal'>(initialMode);
+  const [apiSwitch, setApiSwitch] = useState<'admin' | 'personal'>(initialSwitch);
   const [showKey, setShowKey] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [validationStatus, setValidationStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -32,11 +30,11 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setApiKey(initialKey);
-      setApiKeyMode(initialMode);
+      setApiSwitch(initialSwitch);
       setValidationStatus('idle');
       setErrorMessage('');
     }
-  }, [isOpen, initialKey, initialMode]);
+  }, [isOpen, initialKey, initialSwitch]);
 
   const handleClear = () => {
     if (onClear) {
@@ -47,22 +45,20 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
   };
 
   const handleSaveAndTest = async () => {
-    // If Admin mode is selected, we just save the mode and close
-    if (apiKeyMode === 'admin') {
-      if (onSaveMode) onSaveMode('admin');
+    // If Admin Key is selected, we don't need to validate the input key here 
+    // as it uses the system key. We just save the preference.
+    if (apiSwitch === 'admin') {
       setValidationStatus('success');
+      onSave(apiKey.trim(), 'admin');
       setTimeout(() => {
         onClose();
-        // Reload to apply changes if needed, or just let App state handle it
-        window.location.reload();
-      }, 1000);
+      }, 1500);
       return;
     }
 
-    // Personal mode validation
     if (!apiKey.trim()) {
       setValidationStatus('error');
-      setErrorMessage('Personal API Key ထည့်ပေးပါ (Please enter your Personal API Key).');
+      setErrorMessage('ကျေးဇူးပြု၍ API Key ထည့်သွင်းပါ။ (Please enter an API Key).');
       return;
     }
 
@@ -75,11 +71,9 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
       
       if (result.isValid) {
         setValidationStatus('success');
-        if (onSaveMode) onSaveMode('personal');
-        onSave(apiKey.trim());
+        onSave(apiKey.trim(), 'personal');
         setTimeout(() => {
           onClose();
-          window.location.reload();
         }, 1500);
       } else {
         setValidationStatus('error');
@@ -132,99 +126,84 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
 
             {/* Content */}
             <div className="p-8 space-y-6">
-              {/* API Mode Selector */}
+              {/* API Switch */}
               <div className="space-y-3">
                 <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 px-1">
-                  API Key အသုံးပြုမည့် ပုံစံ (API Key Mode)
+                  API Key အမျိုးအစား ရွေးချယ်ပါ (Select API Type)
                 </label>
-                <div className="grid grid-cols-2 gap-3 p-1.5 bg-slate-100 dark:bg-slate-950 rounded-2xl border border-slate-200 dark:border-slate-800">
+                <div className="grid grid-cols-2 gap-3 p-1 bg-slate-100 dark:bg-slate-950 rounded-2xl border border-slate-200 dark:border-slate-800">
                   <button
-                    onClick={() => setApiKeyMode('admin')}
-                    className={`flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all ${
-                      apiKeyMode === 'admin'
-                        ? 'bg-white dark:bg-slate-800 text-brand-purple shadow-sm ring-1 ring-slate-200 dark:ring-slate-700'
-                        : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                    onClick={() => setApiSwitch('admin')}
+                    className={`py-3 rounded-xl text-sm font-bold transition-all ${
+                      apiSwitch === 'admin' 
+                        ? 'bg-brand-purple text-white shadow-lg' 
+                        : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
                     }`}
                   >
-                    <ShieldCheck size={16} />
                     Admin Key (Free)
                   </button>
                   <button
-                    onClick={() => setApiKeyMode('personal')}
-                    className={`flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all ${
-                      apiKeyMode === 'personal'
-                        ? 'bg-white dark:bg-slate-800 text-brand-purple shadow-sm ring-1 ring-slate-200 dark:ring-slate-700'
-                        : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                    onClick={() => setApiSwitch('personal')}
+                    className={`py-3 rounded-xl text-sm font-bold transition-all ${
+                      apiSwitch === 'personal' 
+                        ? 'bg-brand-purple text-white shadow-lg' 
+                        : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
                     }`}
                   >
-                    <User size={16} />
-                    Personal Key
+                    Personal API Key
                   </button>
                 </div>
               </div>
 
-              <AnimatePresence mode="wait">
-                {apiKeyMode === 'personal' ? (
-                  <motion.div
-                    key="personal-input"
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="space-y-3 overflow-hidden"
-                  >
-                    <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 px-1">
-                      သင်၏ API Key ကို ဤနေရာတွင် ထည့်ပါ (Google AI Studio API Key)
-                    </label>
-                    <div className="relative group">
-                      <input
-                        type={showKey ? "text" : "password"}
-                        value={apiKey}
-                        onChange={(e) => setApiKey(e.target.value)}
-                        placeholder="Paste your API Key here (starts with AIza...)"
-                        className={`w-full bg-slate-50 dark:bg-slate-950 border rounded-2xl px-6 py-4 text-lg font-mono transition-all pr-14 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 text-slate-900 dark:text-white placeholder:text-slate-400 ${
-                          !apiKey.trim() 
-                            ? 'border-red-500/50' 
-                            : 'border-slate-200 dark:border-slate-800'
-                        }`}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowKey(!showKey)}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-brand-purple transition-colors"
-                      >
-                        {showKey ? <EyeOff size={20} /> : <Eye size={20} />}
-                      </button>
-                    </div>
-                    
-                    <a 
-                      href="https://aistudio.google.com/app/apikey" 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2 text-xs font-bold text-brand-purple hover:underline px-1 w-fit group"
+              {apiSwitch === 'personal' && (
+                <motion.div 
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  className="space-y-3 overflow-hidden"
+                >
+                  <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 px-1">
+                    သင်၏ API Key ကို ဤနေရာတွင် ထည့်ပါ (Google AI Studio API Key)
+                  </label>
+                  <div className="relative group">
+                    <input
+                      type={showKey ? "text" : "password"}
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      placeholder="Paste your API Key here (starts with AIza...)"
+                      className={`w-full bg-slate-50 dark:bg-slate-950 border rounded-2xl px-6 py-4 text-lg font-mono transition-all pr-14 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 text-slate-900 dark:text-white placeholder:text-slate-400 ${
+                        !apiKey.trim() 
+                          ? 'border-red-500/50' 
+                          : 'border-slate-200 dark:border-slate-800'
+                      }`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowKey(!showKey)}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-brand-purple transition-colors"
                     >
-                      How to get a free API Key?
-                      <ExternalLink size={12} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-                    </a>
-                  </motion.div>
-                ) : (
-                  <motion.div
-                    key="admin-info"
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="p-5 bg-brand-purple/5 rounded-2xl border border-brand-purple/10 space-y-2"
+                      {showKey ? <EyeOff size={20} /> : <Eye size={20} />}
+                    </button>
+                  </div>
+                  
+                  <a 
+                    href="https://aistudio.google.com/app/apikey" 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-xs font-bold text-brand-purple hover:underline px-1 w-fit group"
                   >
-                    <div className="flex items-center gap-2 text-brand-purple">
-                      <ShieldCheck size={18} />
-                      <span className="font-bold text-sm">Admin Key Mode Active</span>
-                    </div>
-                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                      Admin Key ကို အသုံးပြုပါက သင်ကိုယ်တိုင် API Key ထည့်ရန် မလိုပါ။ Admin မှ ပေးထားသော Key ကို အသုံးပြု၍ အခမဲ့ အသုံးပြုနိုင်ပါသည်။
-                      (Using Admin Key means you don't need to provide your own. You can use the app for free using the system key).
-                    </p>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+                    How to get a free API Key?
+                    <ExternalLink size={12} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                  </a>
+                </motion.div>
+              )}
+
+              {apiSwitch === 'admin' && (
+                <div className="p-4 bg-brand-purple/5 border border-brand-purple/10 rounded-2xl">
+                  <p className="text-xs text-brand-purple font-medium leading-relaxed">
+                    Admin Key ကို အသုံးပြုပါက အခမဲ့ အသုံးပြုနိုင်ပါသည်။ (Using Admin Key allows free usage of the narration engine.)
+                  </p>
+                </div>
+              )}
 
               {validationStatus !== 'idle' && (
                 <motion.div
@@ -239,14 +218,14 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
                   {validationStatus === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
                   <span className="text-sm font-bold">
                     {validationStatus === 'success' 
-                      ? 'Gemini API Key ကို သိမ်းဆည်းပြီးပါပြီ။ ✅' 
+                      ? 'ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ။ Website ကို ပြန်ဖွင့်ပါမည်။ (Settings saved. Reloading page...)' 
                       : errorMessage}
                   </span>
                 </motion.div>
               )}
 
               <div className="flex gap-3">
-                {onClear && initialKey && apiKeyMode === 'personal' && (
+                {onClear && initialKey && (
                   <button
                     onClick={handleClear}
                     className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold text-lg transition-all hover:bg-red-500/10 hover:text-red-500 active:scale-[0.98]"
@@ -257,14 +236,14 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
                 <button
                   onClick={handleSaveAndTest}
                   disabled={isValidating}
-                  className={`${onClear && initialKey && apiKeyMode === 'personal' ? 'flex-[2]' : 'w-full'} py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg shadow-xl shadow-brand-purple/20 flex items-center justify-center gap-3 transition-all hover:bg-brand-purple/90 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed`}
+                  className={`${onClear && initialKey ? 'flex-[2]' : 'w-full'} py-4 bg-brand-purple text-white rounded-2xl font-bold text-lg shadow-xl shadow-brand-purple/20 flex items-center justify-center gap-3 transition-all hover:bg-brand-purple/90 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
                   {isValidating ? (
                     <RefreshCw size={22} className="animate-spin" />
                   ) : (
                     <Save size={22} />
                   )}
-                  သိမ်းဆည်းမည် (Save & Apply)
+                  သိမ်းဆည်းမည် (Save & Test)
                 </button>
               </div>
             </div>
@@ -272,9 +251,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
             {/* Footer Info */}
             <div className="px-8 py-4 bg-slate-50 dark:bg-white/[0.02] border-t border-slate-100 dark:border-slate-800">
               <p className="text-[10px] text-slate-400 dark:text-slate-500 text-center uppercase tracking-widest font-bold">
-                {apiKeyMode === 'personal' 
-                  ? "Your API Key is stored locally and never sent to our servers."
-                  : "Using Admin's Global API Key for all generations."}
+                Your API Key is stored locally and never sent to our servers.
               </p>
             </div>
           </motion.div>
