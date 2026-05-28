@@ -4,11 +4,11 @@ import { Headphones, Play, Pause, FileText, Music, RefreshCw, Sparkles, Clipboar
 import { AudioResult } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { formatTime, formatMyanmarDuration } from '../utils/audioUtils';
+import { generateSRT, generateASS, generateLRC } from '../utils/subtitleUtils';
 
 interface OutputPreviewProps {
   result: AudioResult | null;
   isLoading: boolean;
-  globalVolume?: number;
   engineStatus?: 'ready' | 'cooling' | 'limit';
   retryCountdown?: number;
   error?: string | null;
@@ -49,7 +49,6 @@ const LoadingWaveform = () => {
 export const OutputPreview: React.FC<OutputPreviewProps> = ({ 
   result, 
   isLoading, 
-  globalVolume,
   engineStatus = 'ready',
   retryCountdown = 0,
   error = null,
@@ -60,7 +59,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [playerVolume, setPlayerVolume] = useState(globalVolume !== undefined ? globalVolume / 100 : 0.8);
+  const [playerVolume] = useState(1.0);
   const [currentSrt, setCurrentSrt] = useState('');
   const [isSrtCopied, setIsSrtCopied] = useState(false);
   
@@ -75,6 +74,10 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   const pausedTimeRef = useRef<number>(0);
   const gainNodeRef = useRef<GainNode | null>(null);
   const [isFallback, setIsFallback] = useState(false);
+
+  // Note: playerVolume is now independent of globalVolume (dB boost)
+  // because the dB boost is already baked into the audio file.
+  // We default player volume to 100% (1.0).
 
   // Set duration and current SRT from result
   useEffect(() => {
@@ -149,12 +152,35 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   }, [result]);
 
   const setupFallbackAudio = (data: ArrayBuffer) => {
-    // Gemini returns WAV
-    const blob = new Blob([data], { type: 'audio/wav' });
+    const bytes = new Uint8Array(data);
+    let mimeType = 'audio/wav';
+    
+    // Check for ID3/Sync (MP3) or RIFF (WAV) headers
+    if (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+      mimeType = 'audio/mpeg';
+    } else if (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) {
+      mimeType = 'audio/mpeg';
+    } else if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
+      mimeType = 'audio/wav';
+    }
+
+    console.log(`[DEBUG] setupFallbackAudio: Detected mimeType ${mimeType} from headers, bytes: ${bytes.length}`);
+    
+    const blob = new Blob([data], { type: mimeType });
     const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
+    const audio = new Audio();
+    audio.src = url;
     audio.playbackRate = 1.0; 
     
+    audio.onerror = (e) => {
+      console.error("[DEBUG] Fallback Audio Player Error:", e);
+      // Log more details if available
+      if (audio.error) {
+        console.error(`[DEBUG] Audio Error Code: ${audio.error.code}, Message: ${audio.error.message}`);
+      }
+      showToast("Audio playback error", "error");
+    };
+
     audio.onended = () => {
       setIsPlaying(false);
       setCurrentTime(0);
@@ -191,12 +217,6 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
     
     setIsPlaying(false);
   };
-
-  useEffect(() => {
-    if (globalVolume !== undefined) {
-      setPlayerVolume(globalVolume / 100);
-    }
-  }, [globalVolume]);
 
   useEffect(() => {
     if (gainNodeRef.current) {
@@ -309,52 +329,59 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   }, [isPlaying, duration]);
 
   const togglePlay = async () => {
-    if (isFallback) {
-      if (!fallbackAudioRef.current) return;
-      
-      if (isPlaying) {
-        fallbackAudioRef.current.pause();
-        setIsPlaying(false);
-      } else {
-        fallbackAudioRef.current.currentTime = currentTime;
-        fallbackAudioRef.current.play();
-        setIsPlaying(true);
-      }
-      return;
-    }
-
-    if (!audioBufferRef.current || !audioContextRef.current) return;
-
-    if (isPlaying) {
-      pausedTimeRef.current = currentTime;
-      stopAudio();
-    } else {
-      initAudioContext();
-      if (audioContextRef.current.state === 'suspended') {
-        await audioContextRef.current.resume();
-      }
-
-      const source = audioContextRef.current.createBufferSource();
-      source.buffer = audioBufferRef.current;
-      source.playbackRate.value = 1.0; 
-      source.connect(gainNodeRef.current!);
-      
-      source.start(0, currentTime);
-      sourceNodeRef.current = source;
-      startTimeRef.current = audioContextRef.current.currentTime - currentTime;
-      
-      setIsPlaying(true);
-
-      source.onended = () => {
-        // Only reset if it ended naturally
-        if (sourceNodeRef.current === source) {
+    try {
+      if (isFallback) {
+        if (!fallbackAudioRef.current) return;
+        
+        if (isPlaying) {
+          fallbackAudioRef.current.pause();
           setIsPlaying(false);
-          if (currentTime >= duration - 0.1) {
-            setCurrentTime(0);
-            pausedTimeRef.current = 0;
-          }
+        } else {
+          fallbackAudioRef.current.currentTime = currentTime;
+          console.log(`[DEBUG] Fallback Play triggered at ${currentTime}s`);
+          await fallbackAudioRef.current.play();
+          setIsPlaying(true);
         }
-      };
+        return;
+      }
+
+      if (!audioBufferRef.current || !audioContextRef.current) return;
+
+      if (isPlaying) {
+        pausedTimeRef.current = currentTime;
+        stopAudio();
+      } else {
+        initAudioContext();
+        if (audioContextRef.current.state === 'suspended') {
+          await audioContextRef.current.resume();
+        }
+
+        const source = audioContextRef.current.createBufferSource();
+        source.buffer = audioBufferRef.current;
+        source.playbackRate.value = 1.0; 
+        source.connect(gainNodeRef.current!);
+        
+        source.start(0, currentTime);
+        sourceNodeRef.current = source;
+        startTimeRef.current = audioContextRef.current.currentTime - currentTime;
+        
+        console.log(`[DEBUG] AudioContext Play triggered at ${currentTime}s`);
+        setIsPlaying(true);
+
+        source.onended = () => {
+          // Only reset if it ended naturally
+          if (sourceNodeRef.current === source) {
+            setIsPlaying(false);
+            if (currentTime >= duration - 0.1) {
+              setCurrentTime(0);
+              pausedTimeRef.current = 0;
+            }
+          }
+        };
+      }
+    } catch (err) {
+      console.error("[DEBUG] togglePlay error:", err);
+      showToast("Playback failed", "error");
     }
   };
 
@@ -375,54 +402,106 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
 
   const handleDownloadAudio = async () => {
     if (!result) return;
+    
     try {
+      console.log(`[DEBUG] handleDownloadAudio triggered`);
       showToast(t('output.tuning'), 'success');
       
-      let audioBlob: Blob;
+      let finalBlob: Blob;
+      
       if (result.rawAudio) {
-        audioBlob = new Blob([result.rawAudio], { type: 'audio/wav' });
-      } else {
+        // Use raw binary if available (most reliable)
+        const bytes = new Uint8Array(result.rawAudio);
+        let type = 'audio/mpeg';
+        if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
+          type = 'audio/wav';
+        }
+        finalBlob = new Blob([result.rawAudio], { type });
+        console.log(`[DEBUG] Download: Using result.rawAudio, type: ${finalBlob.type}, size: ${finalBlob.size}`);
+      } else if (result.audioData) {
+        // Fallback to base64
         const binaryStr = window.atob(result.audioData);
         const bytes = new Uint8Array(binaryStr.length);
         for (let i = 0; i < binaryStr.length; i++) {
           bytes[i] = binaryStr.charCodeAt(i);
         }
-        audioBlob = new Blob([bytes], { type: 'audio/wav' });
+        
+        let type = 'audio/mpeg';
+        if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
+          type = 'audio/wav';
+        }
+        finalBlob = new Blob([bytes], { type });
+        console.log(`[DEBUG] Download: Using result.audioData base64, type: ${finalBlob.type}, size: ${finalBlob.size}`);
+      } else {
+        throw new Error("No audio data available for download");
       }
 
-      const filename = `vlogs-by-saw-audio`;
-      const url = URL.createObjectURL(audioBlob);
+      const ext = finalBlob.type === 'audio/wav' ? 'wav' : 'mp3';
+      const filename = `vlogs-by-saw-audio-${Date.now()}.${ext}`;
+      
+      console.log(`[DEBUG] Creating ObjectURL for download...`);
+      const url = URL.createObjectURL(finalBlob);
+      
       const a = document.createElement('a');
+      a.style.display = 'none';
       a.href = url;
-      a.download = `${filename}.wav`;
+      a.download = filename;
+      document.body.appendChild(a);
+      
+      console.log(`[DEBUG] Triggering click on anchor element for ${filename}`);
       a.click();
-      URL.revokeObjectURL(url);
+      
+      // Small delay before cleanup to ensure click is handled
+      setTimeout(() => {
+        if (document.body.contains(a)) {
+          document.body.removeChild(a);
+        }
+        URL.revokeObjectURL(url);
+        console.log(`[DEBUG] Download cleanup completed for ${filename}`);
+      }, 200);
+      
     } catch (err) {
-      console.error("Download failed:", err);
+      console.error("[DEBUG] handleDownloadAudio Error:", err);
       showToast("Download failed", "error");
     }
   };
 
-  const downloadFile = (content: string | Blob, fileName: string) => {
-    let blob: Blob;
-    if (typeof content === 'string') {
-      if (fileName.endsWith('.srt')) {
-        // Add UTF-8 BOM for mobile compatibility
-        const BOM = '\uFEFF';
-        blob = new Blob([BOM + content], { type: 'text/srt;charset=utf-8' });
-      } else {
-        blob = new Blob([content], { type: 'text/plain' });
-      }
-    } else {
-      blob = content;
+  const downloadFile = (content: string, fileName: string) => {
+    if (!content || content.trim().length === 0) {
+      showToast("No content to export", "error");
+      return;
     }
+
+    console.log(`[DEBUG] Subtitle File: ${fileName}`);
     
+    // Strict formatting for compatibility
+    // CRLF line endings (\r\n) as requested for SRT files
+    const sanitizedContent = content.replace(/\r?\n/g, '\r\n');
+    
+    // Use text/plain as requested by user for better CapCut recognition
+    const blob = new Blob([sanitizedContent], { type: 'text/plain;charset=utf-8' });
+    
+    console.log(`[DEBUG] Subtitle File Size: ${blob.size} bytes`);
+
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
+    a.style.display = 'none';
     a.href = url;
-    a.download = fileName.toLowerCase(); // Ensure lowercase .srt
+    a.download = fileName;
+    
+    document.body.appendChild(a);
+    console.log(`[DEBUG] Triggering subtitle download for ${fileName}`);
     a.click();
-    URL.revokeObjectURL(url);
+    
+    // Small delay before cleanup to ensure trigger is handled
+    setTimeout(() => {
+      if (document.body.contains(a)) {
+        document.body.removeChild(a);
+      }
+      URL.revokeObjectURL(url);
+    }, 200);
+
+    showToast(`Downloaded ${fileName}`, 'success');
   };
 
   const handleCopy = async (textToCopy: string, type: 'srt' | 'text') => {
@@ -440,20 +519,20 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
 
   if (error && !isLoading) {
     return (
-      <div className="glass-card rounded-[32px] p-12 sm:p-20 shadow-2xl flex flex-col items-center justify-center text-center transition-all duration-300 border border-rose-500/20 bg-rose-500/5 group">
-        <div className="w-24 h-24 bg-rose-50 dark:bg-rose-950/20 rounded-[32px] flex items-center justify-center text-rose-500 mb-8 border border-rose-200 dark:border-rose-800/50 group-hover:scale-110 transition-transform duration-500 shadow-inner">
+      <div className="bg-white/[0.02] backdrop-blur-3xl rounded-[40px] p-12 sm:p-20 shadow-2xl flex flex-col items-center justify-center text-center border border-rose-500/20 group animate-pulse-soft">
+        <div className="w-24 h-24 bg-rose-500/10 rounded-[32px] flex items-center justify-center text-rose-500 mb-8 border border-rose-500/30 group-hover:scale-110 transition-transform duration-500 shadow-[0_0_40px_rgba(244,63,94,0.2)]">
           <AlertCircle size={48} />
         </div>
-        <h3 className="text-2xl font-bold mb-3 text-slate-900 dark:text-white tracking-tight">{t('common.error')}</h3>
-        <p className="text-slate-500 dark:text-slate-400 text-sm sm:text-base max-w-sm leading-relaxed mb-8">
-          {error === 'SERVER_BUSY_RETRY' ? 'Server Busy - Please Retry' : error}
+        <h3 className="text-3xl font-black mb-4 text-white tracking-tight uppercase">{t('common.error')}</h3>
+        <p className="text-slate-500 text-base max-w-sm leading-relaxed mb-10 font-medium">
+          {error === 'SERVER_BUSY_RETRY' ? 'The AI engine is currently under heavy load. Please attempt your generation again.' : error}
         </p>
         <button
           onClick={onRetry}
-          className="flex items-center gap-3 px-8 py-4 bg-brand-purple text-white rounded-2xl font-bold shadow-xl shadow-brand-purple/20 hover:bg-brand-purple/90 transition-all active:scale-95"
+          className="flex items-center gap-3 px-10 py-5 bg-white text-black rounded-2xl font-black uppercase tracking-widest shadow-2xl hover:scale-105 active:scale-95 transition-all"
         >
           <RefreshCw size={20} />
-          Retry Generation
+          Retry Studio Process
         </button>
       </div>
     );
@@ -461,56 +540,50 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
 
   if (isLoading) {
     return (
-      <div className="relative p-[1px] rounded-[32px] overflow-hidden group">
-        {/* Gradient Border Wrapper */}
-        <div className="absolute inset-0 bg-gradient-to-br from-brand-purple via-neon-indigo to-neon-magenta opacity-40 animate-pulse-soft" />
+      <div className="bg-white/[0.02] backdrop-blur-3xl rounded-[40px] p-12 sm:p-20 shadow-2xl flex flex-col items-center justify-center text-center relative overflow-hidden border border-white/5">
+        <div className="absolute inset-0 bg-gradient-to-br from-amber-400/5 via-transparent to-purple-500/5 pointer-events-none" />
         
-        <div className="premium-glass rounded-[32px] p-12 sm:p-20 shadow-2xl flex flex-col items-center justify-center text-center transition-all duration-300 relative overflow-hidden">
-          <div className="absolute inset-0 bg-gradient-to-br from-brand-purple/10 via-transparent to-neon-indigo/10 pointer-events-none" />
-          
-          <div className="relative mb-12">
-            <LoadingWaveform />
-            {/* Glow Effect */}
-            <div className="absolute -inset-16 bg-brand-purple/20 blur-[80px] -z-10 animate-pulse" />
-          </div>
-
-          <motion.h3 
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8 }}
-            className="text-2xl sm:text-3xl font-bold mb-4 tracking-tight bg-gradient-to-r from-brand-purple via-neon-indigo to-neon-magenta bg-clip-text text-transparent drop-shadow-sm"
-          >
-            {t('output.generating')}
-          </motion.h3>
-          
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.5, duration: 1 }}
-            className="space-y-2"
-          >
-            <p className="text-slate-500 dark:text-slate-400 max-w-xs leading-relaxed font-medium">
-              {t('output.tuning')}
-            </p>
-            <div className="flex items-center justify-center gap-1.5">
-              <div className="w-1 h-1 bg-brand-purple rounded-full animate-bounce [animation-delay:-0.3s]" />
-              <div className="w-1 h-1 bg-neon-indigo rounded-full animate-bounce [animation-delay:-0.15s]" />
-              <div className="w-1 h-1 bg-neon-magenta rounded-full animate-bounce" />
-            </div>
-          </motion.div>
+        <div className="relative mb-16">
+          <LoadingWaveform />
+          <div className="absolute -inset-24 bg-amber-400/10 blur-[100px] -z-10 animate-pulse" />
         </div>
+
+        <motion.h3 
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.8 }}
+          className="text-4xl font-black mb-6 tracking-tighter text-white uppercase"
+        >
+          {t('output.generating')}
+        </motion.h3>
+        
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.5, duration: 1 }}
+          className="space-y-4"
+        >
+          <p className="text-slate-500 max-w-xs leading-relaxed font-bold uppercase tracking-[0.2em] text-xs">
+            {t('output.tuning')}
+          </p>
+          <div className="flex items-center justify-center gap-2">
+            <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-bounce [animation-delay:-0.3s] shadow-[0_0_8px_rgba(234,179,8,0.6)]" />
+            <div className="w-1.5 h-1.5 bg-amber-400/60 rounded-full animate-bounce [animation-delay:-0.15s]" />
+            <div className="w-1.5 h-1.5 bg-amber-400/30 rounded-full animate-bounce" />
+          </div>
+        </motion.div>
       </div>
     );
   }
 
   if (!result) {
     return (
-      <div className="glass-card rounded-[32px] p-12 sm:p-20 shadow-2xl flex flex-col items-center justify-center text-center transition-all duration-300 group">
-        <div className="w-24 h-24 bg-slate-50 dark:bg-slate-900/50 rounded-[32px] flex items-center justify-center text-slate-400 dark:text-slate-600 mb-8 border border-slate-200 dark:border-slate-800 group-hover:scale-110 transition-transform duration-500 shadow-inner">
+      <div className="bg-white/[0.02] backdrop-blur-3xl rounded-[40px] p-12 sm:p-20 shadow-2xl flex flex-col items-center justify-center text-center group border border-white/5">
+        <div className="w-24 h-24 bg-white/5 rounded-[32px] flex items-center justify-center text-slate-500 mb-8 border border-white/10 group-hover:scale-110 group-hover:border-amber-400/30 transition-all duration-500 shadow-inner">
           <Headphones size={48} />
         </div>
-        <h3 className="text-2xl font-bold mb-3 text-slate-900 dark:text-white tracking-tight">{t('output.emptyTitle')}</h3>
-        <p className="text-slate-500 dark:text-slate-400 text-sm sm:text-base max-w-xs leading-relaxed">
+        <h3 className="text-3xl font-black mb-4 text-white tracking-tight uppercase">{t('output.emptyTitle')}</h3>
+        <p className="text-slate-500 text-base max-w-xs leading-relaxed font-medium">
           {t('output.emptySubtitle')}
         </p>
       </div>
@@ -518,64 +591,79 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   }
 
   return (
-    <div className="premium-glass rounded-[32px] p-8 sm:p-12 shadow-2xl space-y-10 transition-all duration-300 relative overflow-hidden">
-      <div className="absolute top-0 right-0 w-64 h-64 bg-brand-purple/10 blur-[100px] -z-10" />
-      <div className="absolute bottom-0 left-0 w-64 h-64 bg-neon-magenta/10 blur-[100px] -z-10" />
+    <div className="bg-white/[0.02] backdrop-blur-3xl rounded-[40px] p-8 sm:p-12 border border-white/5 shadow-2xl relative overflow-hidden group">
+      <div className="absolute top-0 right-0 w-64 h-64 bg-amber-400/5 blur-[100px] -z-10 group-hover:bg-amber-400/10 transition-colors duration-1000" />
+      <div className="absolute bottom-0 left-0 w-64 h-64 bg-purple-500/5 blur-[100px] -z-10" />
 
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
-        <h2 className="text-2xl sm:text-3xl font-bold flex items-center gap-4 text-slate-900 dark:text-white tracking-tight">
-          <div className="p-2.5 bg-brand-purple/10 rounded-xl text-brand-purple animate-pulse-soft">
-            <Sparkles size={28} />
-          </div>
-          {t('output.title')}
-        </h2>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="px-5 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-full text-[10px] font-bold uppercase tracking-[0.15em] w-fit shadow-sm neon-glow-indigo">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-8 mb-12">
+        <div className="flex flex-col gap-2">
+          <h2 className="text-3xl font-black text-white tracking-tight uppercase flex items-center gap-5">
+            <div className="p-3 bg-amber-400/10 rounded-2xl text-amber-400 shadow-lg shadow-amber-400/5">
+              <Sparkles size={32} />
+            </div>
+            {t('output.title')}
+          </h2>
+          <p className="text-slate-500 text-sm font-medium">Professional Burmese generation ready for cinematic use.</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="px-6 py-2 bg-amber-400 text-black rounded-full text-[10px] font-black uppercase tracking-[0.2em] shadow-xl shadow-amber-400/10">
             {t('output.premiumOutput')}
           </div>
           {result && (
-            <div className="px-4 py-2 bg-brand-purple/10 text-brand-purple border border-brand-purple/20 rounded-full text-[10px] font-bold uppercase tracking-tight w-fit">
-              တကယ်ကြာချိန်: {formatMyanmarDuration(duration)}
+            <div className="px-5 py-2 bg-white/5 text-amber-400 border border-amber-400/20 rounded-full text-[10px] font-black uppercase tracking-widest">
+              Duration: {formatMyanmarDuration(duration)}
             </div>
           )}
         </div>
       </div>
 
-      <div className="space-y-8">
+      <div className="space-y-12">
+        {result.isFallback && (
+          <div className="bg-amber-400/10 border border-amber-400/30 rounded-3xl p-6 flex flex-col sm:flex-row items-center gap-5 text-center sm:text-left group animate-pulse-soft">
+            <div className="p-4 bg-amber-400/20 rounded-2xl text-amber-400">
+              <AlertCircle size={28} />
+            </div>
+            <div className="space-y-1">
+              <p className="font-black text-amber-400 uppercase tracking-widest text-xs">AI Fallback Active</p>
+              <p className="text-slate-400 text-[11px] leading-relaxed font-medium">
+                Gemini AI is currently unavailable or rate-limited. The system is using your device's native voice as a temporary backup (English only).
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Modern Audio Player Card */}
-        <div className="bg-slate-50/80 dark:bg-slate-800/40 backdrop-blur-md rounded-[32px] p-8 border border-slate-200/50 dark:border-slate-700/50 shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.1)] relative overflow-hidden group flex flex-col items-center space-y-8">
-          <div className="absolute inset-0 bg-gradient-to-br from-brand-purple/5 via-transparent to-blue-500/5 pointer-events-none" />
+        <div className="bg-black/40 backdrop-blur-2xl rounded-[40px] p-10 border border-white/5 shadow-2xl relative overflow-hidden group/player flex flex-col items-center space-y-10">
+          <div className="absolute inset-0 bg-gradient-to-br from-amber-400/5 via-transparent to-transparent opacity-50 pointer-events-none" />
           
           {/* Waveform Visualizer Area */}
-          <div className="relative h-32 w-full rounded-2xl overflow-hidden shrink-0">
+          <div className="relative h-40 w-full rounded-3xl overflow-hidden shrink-0 bg-black/60 shadow-inner border border-white/5 p-4">
             <canvas 
               ref={canvasRef} 
-              className="w-full h-full opacity-90"
-              width={800}
-              height={128}
+              className="w-full h-full"
+              width={1200}
+              height={160}
             />
           </div>
 
-          {/* Centered Play/Pause Button */}
-          <div className="flex justify-center w-full relative z-10 shrink-0">
-            <button
-              onClick={togglePlay}
-              className="w-20 h-20 bg-gradient-to-tr from-brand-purple to-blue-500 text-white rounded-full flex items-center justify-center shadow-[0_0_30px_rgba(139,92,246,0.4)] hover:shadow-[0_0_40px_rgba(139,92,246,0.6)] hover:scale-105 active:scale-95 transition-all group/play"
-            >
-              {isPlaying ? (
-                <Pause size={32} fill="currentColor" />
-              ) : (
-                <Play size={32} fill="currentColor" className="ml-1.5" />
-              )}
-            </button>
-          </div>
+          <div className="w-full flex flex-col items-center gap-8">
+            {/* Centered Play/Pause Button */}
+        <button
+          onClick={togglePlay}
+          className="w-24 h-24 bg-amber-400 text-black rounded-full flex items-center justify-center shadow-[0_0_50px_rgba(234,179,8,0.3)] hover:shadow-[0_0_60px_rgba(234,179,8,0.5)] hover:scale-105 active:scale-95 transition-all group/play relative overflow-hidden"
+          aria-label={isPlaying ? "Pause" : "Play"}
+        >
+          <div className="absolute inset-0 bg-gradient-to-tr from-white/20 to-transparent opacity-0 group-hover/play:opacity-100 transition-opacity" />
+          {isPlaying ? (
+            <Pause size={40} fill="currentColor" />
+          ) : (
+            <Play size={40} fill="currentColor" className="ml-2" />
+          )}
+        </button>
 
-          {/* Bottom Controls Area */}
-          <div className="w-full flex flex-col gap-4 relative z-10">
-            
             {/* Timeline Bar (Scrubber) */}
-            <div className="w-full flex flex-col gap-2">
-              <div className="relative flex items-center w-full group/slider">
+            <div className="w-full space-y-4">
+              <div className="relative flex items-center w-full px-2">
                 <input
                   type="range"
                   min={0}
@@ -583,90 +671,147 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
                   step={0.01}
                   value={currentTime}
                   onChange={handleSeek}
-                  className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full appearance-none cursor-pointer accent-brand-purple hover:h-2 transition-all"
+                  className="w-full h-2 bg-white/5 rounded-full appearance-none cursor-pointer accent-amber-400 hover:h-2.5 transition-all shadow-inner"
                   style={{
-                    background: `linear-gradient(to right, #8B5CF6 0%, #3B82F6 ${(currentTime / (duration || 1)) * 100}%, transparent ${(currentTime / (duration || 1)) * 100}%, transparent 100%)`
+                    background: `linear-gradient(to right, #EAB308 0%, #EAB308 ${(currentTime / (duration || 1)) * 100}%, rgba(255, 255, 255, 0.05) ${(currentTime / (duration || 1)) * 100}%, rgba(255, 255, 255, 0.05) 100%)`
                   }}
                 />
               </div>
               
-              <div className="flex items-center justify-between w-full px-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-medium text-slate-900 dark:text-white">
-                    {formatTime(currentTime).split(',')[0]}
-                  </span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs font-medium text-slate-900 dark:text-white">
-                    {formatTime(duration).split(',')[0]}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-          </div>
-        </div>
-
-      {/* Subtitle Preview Box */}
-          <div className="space-y-3 flex-1">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                  <FileText size={14} /> {t('output.srtPreview')}
-                </h3>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleCopy(currentSrt, 'srt')}
-                    className="p-2 bg-slate-100 dark:bg-white/5 rounded-lg text-slate-500 hover:text-brand-purple transition-all"
-                    title={t('translator.copy')}
-                  >
-                    {isSrtCopied ? <Check size={14} className="text-emerald-500" /> : <Clipboard size={14} />}
-                  </button>
-                </div>
-              </div>
-            <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 h-64 overflow-y-auto custom-scrollbar shadow-inner relative group/srt">
-              <pre className="text-[11px] sm:text-xs font-mono text-slate-600 dark:text-slate-400 whitespace-pre-wrap break-keep leading-[1.6]">
-                {currentSrt}
-              </pre>
-            </div>
-          </div>
-
-          {/* Download Buttons & Status */}
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <button
-                onClick={handleDownloadAudio}
-                className="flex items-center justify-center gap-3 py-4 bg-brand-purple/10 text-brand-purple rounded-2xl font-bold hover:bg-brand-purple hover:text-white transition-all border border-brand-purple/20 group"
-              >
-                <Music size={20} className="group-hover:scale-110 transition-transform" />
-                {t('output.downloadMp3')}
-              </button>
-              <button
-                onClick={() => downloadFile(currentSrt, `vlogs-by-saw-subs.srt`)}
-                className="flex items-center justify-center gap-3 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all border border-slate-200 dark:border-slate-700 group"
-              >
-                <FileText size={20} className="group-hover:scale-110 transition-transform" />
-                {t('output.downloadSrt')}
-              </button>
-            </div>
-
-            {/* Subtle Engine Status Dot */}
-            <div className="flex items-center justify-center gap-4 py-2">
-              <div className="flex items-center gap-2 px-3 py-1 bg-slate-100/50 dark:bg-white/5 rounded-full border border-slate-200/50 dark:border-white/5">
-                <div className={`w-2 h-2 rounded-full animate-pulse ${
-                  engineStatus === 'ready' ? 'bg-emerald-500' : 
-                  engineStatus === 'cooling' ? 'bg-amber-500' : 'bg-rose-500'
-                }`} />
-                <span className={`text-[10px] font-bold uppercase tracking-widest ${
-                  engineStatus === 'ready' ? 'text-emerald-500' : 
-                  engineStatus === 'cooling' ? 'text-amber-500' : 'text-rose-500'
-                }`}>
-                  {engineStatus === 'ready' ? t('generate.engineReady') : 
-                   engineStatus === 'cooling' ? `${t('generate.engineCooling')} (${retryCountdown}s)` : t('generate.engineLimit')}
+              <div className="flex items-center justify-between w-full px-6">
+                <span className="text-[10px] font-black font-mono text-slate-500 uppercase tracking-widest">
+                  {formatTime(currentTime).split(',')[0]}
+                </span>
+                <span className="text-[10px] font-black font-mono text-slate-500 uppercase tracking-widest">
+                  {formatTime(duration).split(',')[0]}
                 </span>
               </div>
             </div>
           </div>
         </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+          {/* Subtitle Preview Box */}
+          <div className="space-y-6">
+            <div className="flex items-center justify-between px-2">
+              <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] flex items-center gap-3">
+                <FileText size={16} className="text-amber-400/50" /> {t('output.srtPreview')}
+              </h3>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleCopy(currentSrt, 'srt')}
+                  className="p-2.5 bg-white/5 rounded-xl text-slate-500 hover:text-amber-400 transition-all border border-white/5"
+                  title={t('translator.copy')}
+                >
+                  {isSrtCopied ? <Check size={16} className="text-emerald-500" /> : <Clipboard size={16} />}
+                </button>
+              </div>
+            </div>
+            <div className="bg-black/60 border border-white/5 rounded-[32px] p-8 h-80 overflow-y-auto custom-scrollbar shadow-inner relative group/srt">
+              <pre className="text-xs font-mono text-slate-400 whitespace-pre-wrap break-keep leading-relaxed tracking-tight">
+                {currentSrt}
+              </pre>
+            </div>
+          </div>
+
+          {/* Action Column */}
+          <div className="flex flex-col justify-between gap-6 py-2">
+            <div className="space-y-4">
+              <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] px-2">Export Studio Assets</p>
+              <div className="grid grid-cols-1 gap-4">
+                <button
+                  onClick={handleDownloadAudio}
+                  disabled={!result || (!result.audioData && !result.rawAudio)}
+                  className={`flex items-center justify-center gap-4 py-6 rounded-[24px] font-black uppercase tracking-widest transition-all shadow-xl group ${
+                    !result || (!result.audioData && !result.rawAudio)
+                      ? 'bg-white/5 text-slate-500 cursor-not-allowed border border-white/10' 
+                      : 'bg-amber-400 text-black hover:scale-[1.02] active:scale-[0.98]'
+                  }`}
+                >
+                  <Music size={24} />
+                  {t('output.downloadWav')}
+                </button>
+                <div className="grid grid-cols-3 gap-3">
+                  <button
+                    onClick={() => {
+                      if (result) {
+                        const srt = generateSRT(result.subtitles);
+                        const ts = new Date().getTime();
+                        downloadFile(srt, `vlogs-saw-subtitles-${ts}.srt`);
+                      }
+                    }}
+                    className="flex flex-col items-center justify-center gap-2 py-4 bg-amber-400 text-black rounded-[24px] font-black uppercase tracking-widest hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-amber-400/10 text-[9px]"
+                  >
+                    <FileText size={16} />
+                    SRT
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (result) {
+                        const srt = generateSRT(result.subtitles);
+                        const ts = new Date().getTime();
+                        downloadFile(srt, `vlogs-saw-subtitles-${ts}.txt`);
+                      }
+                    }}
+                    className="flex flex-col items-center justify-center gap-2 py-4 bg-white/5 text-white rounded-[24px] font-black uppercase tracking-widest border border-white/10 hover:bg-white/10 transition-all text-[9px]"
+                  >
+                    <FileText size={16} />
+                    TXT
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (result) {
+                        const ass = generateASS(result.subtitles);
+                        const ts = new Date().getTime();
+                        downloadFile(ass, `vlogs-saw-subtitles-${ts}.ass`);
+                      }
+                    }}
+                    className="flex flex-col items-center justify-center gap-2 py-4 bg-white/5 text-slate-300 rounded-[24px] font-black uppercase tracking-widest border border-white/10 hover:bg-white/10 transition-all text-[9px]"
+                  >
+                    <FileText size={16} />
+                    ASS
+                  </button>
+                </div>
+                
+                <div className="grid grid-cols-1">
+                  <button
+                    onClick={() => {
+                      if (result) {
+                        const lrc = generateLRC(result.subtitles);
+                        downloadFile(lrc, `audio-lyrics.lrc`);
+                      }
+                    }}
+                    className="flex items-center justify-center gap-3 py-3 bg-white/5 text-slate-500 rounded-[20px] font-black uppercase tracking-widest border border-white/5 hover:bg-white/10 transition-all text-[10px]"
+                  >
+                    LRC Lyrics
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Status Information */}
+            <div className="bg-white/5 rounded-[24px] p-6 border border-white/5 flex items-center justify-between shadow-2xl">
+              <div className="flex items-center gap-3">
+                <div className={`w-2.5 h-2.5 rounded-full animate-pulse ${
+                  engineStatus === 'ready' ? 'bg-emerald-500' : 
+                  engineStatus === 'cooling' ? 'bg-amber-500' : 'bg-rose-500'
+                } shadow-[0_0_8px_currentColor]`} />
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-0.5">Engine Status</span>
+                  <span className={`text-xs font-black uppercase tracking-widest ${
+                    engineStatus === 'ready' ? 'text-emerald-500' : 
+                    engineStatus === 'cooling' ? 'text-amber-500' : 'text-rose-500'
+                  }`}>
+                    {engineStatus === 'ready' ? t('generate.engineReady') : 
+                     engineStatus === 'cooling' ? `${t('generate.engineCooling')} (${retryCountdown}s)` : t('generate.engineLimit')}
+                  </span>
+                </div>
+              </div>
+              <Sparkles size={16} className="text-slate-700" />
+            </div>
+          </div>
+        </div>
       </div>
-    );
-  };
+    </div>
+  );
+};

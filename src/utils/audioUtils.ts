@@ -32,6 +32,8 @@ export function pcmToWav(pcmData: Uint8Array, sampleRate: number = 24000): Blob 
   // Data chunk length
   view.setUint32(40, pcmData.length, true);
 
+  console.log(`audioUtils: Generated WAV with ${pcmData.length} bytes of PCM data. Total size: ${header.byteLength + pcmData.length} bytes.`);
+
   return new Blob([header, pcmData], { type: 'audio/wav' });
 }
 
@@ -124,27 +126,36 @@ export function parseSRTTime(timeStr: string): number {
 }
 
 /**
- * Applies speed using OfflineAudioContext with Pitch Preservation.
- * Uses native source.preservesPitch if available for best quality.
+ * Applies speed, pitch, and volume adjustments using OfflineAudioContext.
+ * Uses native preservesPitch for high-quality time-stretching.
+ * 
+ * @param audioBlob The source audio blob (MP3 or WAV)
+ * @param config Processing options: speed (0.5x-2x), pitch (-10 to +10 semitones), volume (0dB to +20dB)
  */
-export async function renderSpeedAdjustedAudio(wavBlob: Blob, speed: number): Promise<{ blob: Blob; duration: number }> {
-  if (speed === 1.0) {
-    const arrayBuffer = await wavBlob.arrayBuffer();
-    const AudioContextClass = (window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext) as typeof AudioContext;
-    const audioCtx = new AudioContextClass();
-    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-    const duration = audioBuffer.duration;
-    await audioCtx.close();
-    return { blob: wavBlob, duration };
-  }
+export async function renderProcessedAudio(
+  audioBlob: Blob, 
+  config: { speed: number; pitch: number; volume: number }
+): Promise<{ blob: Blob; duration: number }> {
+  const { speed = 1.0, pitch = 0, volume = 0 } = config;
   
-  console.log(`audioUtils: Rendering pitch-preserved audio at ${speed}x using native preservesPitch...`);
-  const arrayBuffer = await wavBlob.arrayBuffer();
+  console.log(`audioUtils: Rendering processed audio (Speed: ${speed}x, Pitch: ${pitch}, Volume: ${volume}dB)`);
+  
+  const arrayBuffer = await audioBlob.arrayBuffer();
   const AudioContextClass = (window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext) as typeof AudioContext;
   const audioCtx = new AudioContextClass();
-  const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+  
+  console.log(`audioUtils: Decoding source audio blob (${audioBlob.size} bytes, type: ${audioBlob.type})...`);
+  let audioBuffer: AudioBuffer;
+  try {
+    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+  } catch (decodeErr) {
+    console.error("audioUtils: Failed to decode audio data for processing:", decodeErr);
+    await audioCtx.close();
+    throw decodeErr;
+  }
   await audioCtx.close();
   
+  // Calculate output duration based on speed
   const outputLength = Math.ceil(audioBuffer.length / speed);
   const sampleRate = audioBuffer.sampleRate;
   const numberOfChannels = audioBuffer.numberOfChannels;
@@ -157,20 +168,38 @@ export async function renderSpeedAdjustedAudio(wavBlob: Blob, speed: number): Pr
   
   const source = offlineCtx.createBufferSource();
   source.buffer = audioBuffer;
+  
+  // 1. Apply Speed (Playback Rate)
   source.playbackRate.setValueAtTime(speed, offlineCtx.currentTime);
   
-  // NATIVE PITCH PRESERVATION (Most modern browsers)
-  // This is the most robust way to change speed without changing pitch
+  // 2. Apply Pitch (Tone)
+  // We use detune for semitones (1 semitone = 100 cents)
+  // To keep speed and pitch independent, we use preservesPitch
   if ('preservesPitch' in source) {
     (source as AudioBufferSourceNode & { preservesPitch: boolean }).preservesPitch = true;
+    source.detune.setValueAtTime(pitch * 100, offlineCtx.currentTime);
+  } else {
+    // Fallback: If preservesPitch is not supported, detune will change speed too
+    // but at least it still shifts the pitch.
+    source.detune.setValueAtTime(pitch * 100, offlineCtx.currentTime);
   }
   
-  source.connect(offlineCtx.destination);
+  // 3. Apply Volume Booster (Gain)
+  // gain = 10^(dB/20)
+  const gainNode = offlineCtx.createGain();
+  const gainValue = Math.pow(10, volume / 20);
+  gainNode.gain.setValueAtTime(gainValue, offlineCtx.currentTime);
+  
+  // Chain: Source -> Gain -> Destination
+  source.connect(gainNode);
+  gainNode.connect(offlineCtx.destination);
+  
   source.start(0);
   
   const renderedBuffer = await offlineCtx.startRendering();
-  console.log(`audioUtils: Rendered duration: ${renderedBuffer.duration}s with pitch correction (Native)`);
+  console.log(`audioUtils: Rendered duration: ${renderedBuffer.duration}s`);
   
+  // Convert back to WAV (no more MP3)
   const finalBlob = audioBufferToWav(renderedBuffer);
   return { blob: finalBlob, duration: renderedBuffer.duration };
 }

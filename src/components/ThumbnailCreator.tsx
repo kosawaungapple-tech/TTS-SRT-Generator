@@ -21,12 +21,10 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { GeminiTTSService } from '../services/geminiService';
 
 interface ThumbnailTabProps {
-  isDarkMode: boolean;
   showToast: (message: string, type: 'success' | 'error') => void;
   getApiKey: () => string | null;
   isAdmin: boolean;
   isPremium: boolean;
-  allowThumbnailAdminKey?: boolean;
 }
 
 interface Platform {
@@ -256,12 +254,10 @@ function applyTextOverlay(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasEleme
 }
 
 export const ThumbnailCreator: React.FC<ThumbnailTabProps> = ({ 
-  isDarkMode, 
   showToast, 
   getApiKey,
   isAdmin,
-  isPremium,
-  allowThumbnailAdminKey = false
+  isPremium
 }) => {
   const { t } = useLanguage();
   const [platform, setPlatform] = useState<Platform>(PLATFORMS[0]);
@@ -419,8 +415,8 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
 
   if (isThumbnailRestricted) {
     return (
-      <div className="premium-glass rounded-[32px] p-12 text-center shadow-2xl border border-amber-500/20">
-        <div className="w-20 h-20 bg-amber-500/10 text-amber-500 rounded-full flex items-center justify-center mx-auto mb-6">
+      <div className="premium-glass rounded-[32px] p-12 text-center shadow-2xl border border-amber-400/20">
+        <div className="w-20 h-20 bg-amber-400/10 text-amber-500 rounded-full flex items-center justify-center mx-auto mb-6">
           <AlertCircle size={40} />
         </div>
         <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-4">{t('thumbnailFeature.locked')}</h2>
@@ -428,7 +424,7 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
           {t('thumbnailFeature.temporarilyDisabled')}
         </p>
         <div className="mt-8 flex items-center justify-center gap-3">
-          <div className="px-4 py-2 bg-amber-500/10 text-amber-600 rounded-lg text-[10px] font-bold uppercase tracking-widest border border-amber-500/20">
+          <div className="px-4 py-2 bg-amber-400/10 text-amber-500 rounded-lg text-[10px] font-bold uppercase tracking-widest border border-amber-400/20">
             Admin Controlled Gate
           </div>
         </div>
@@ -443,7 +439,7 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
         <div className="lg:col-span-5 space-y-6">
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <ImageIcon size={20} className="text-brand-purple" />
+              <ImageIcon size={20} className="text-amber-500" />
               {t('nav.thumbnail')}
             </h2>
             {isPremium && (
@@ -456,7 +452,7 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
         {/* Platform Selector */}
         <div className="glass-card p-6 rounded-[28px] border border-white/40 dark:border-slate-800/40 shadow-xl space-y-4">
           <div className="flex items-center gap-3 mb-2">
-            <div className="p-2 bg-brand-purple/10 rounded-xl text-brand-purple">
+            <div className="p-2 bg-amber-400/10 rounded-xl text-amber-500">
               <Monitor size={18} />
             </div>
             <h3 className="text-sm font-bold text-slate-800 dark:text-white uppercase tracking-widest">Platform</h3>
@@ -469,8 +465,8 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
                 onClick={() => setPlatform(p)}
                 className={`p-3 rounded-2xl border transition-all flex flex-col items-center gap-2 ${
                   platform.id === p.id 
-                    ? 'bg-brand-purple border-brand-purple text-white shadow-lg shadow-brand-purple/20' 
-                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-brand-purple/40'
+                    ? 'bg-amber-400 border-amber-400 text-black shadow-lg shadow-amber-400/20' 
+                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-amber-400/40'
                 }`}
               >
                 {p.icon}
@@ -484,7 +480,7 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
         {/* Preset Themes */}
         <div className="glass-card p-6 rounded-[28px] border border-white/40 dark:border-slate-800/40 shadow-xl space-y-4">
           <div className="flex items-center gap-3 mb-2">
-            <div className="p-2 bg-neon-magenta/10 rounded-xl text-neon-magenta">
+            <div className="p-2 bg-amber-400/10 rounded-xl text-amber-500">
               <Sparkles size={18} />
             </div>
             <h3 className="text-sm font-bold text-slate-800 dark:text-white uppercase tracking-widest">Preset Themes</h3>
@@ -503,8 +499,8 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
                 }}
                 className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl border transition-all ${
                   selectedPreset === preset.id
-                    ? 'bg-brand-purple border-brand-purple text-white shadow-lg shadow-brand-purple/20'
-                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-brand-purple/40'
+                    ? 'bg-amber-400 border-amber-400 text-black shadow-lg shadow-amber-400/20'
+                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-amber-400/40'
                 }`}
               >
                 <span className="text-xl">{preset.emoji}</span>
@@ -514,8 +510,8 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
           </div>
 
           {selectedPreset && (
-            <div className="flex items-center gap-2 px-3 py-2 bg-brand-purple/10 rounded-xl border border-brand-purple/20">
-              <span className="text-[10px] font-bold text-brand-purple uppercase tracking-widest">
+            <div className="flex items-center gap-2 px-3 py-2 bg-amber-400/10 rounded-xl border border-amber-400/20">
+              <span className="text-[10px] font-bold text-amber-500 uppercase tracking-widest">
                 {THUMBNAIL_PRESETS.find(p => p.id === selectedPreset)?.emoji} {THUMBNAIL_PRESETS.find(p => p.id === selectedPreset)?.label} Theme Active
               </span>
               <button
@@ -528,10 +524,9 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
           )}
         </div>
 
-        {/* Prompt Input */}
         <div className="glass-card p-6 rounded-[28px] border border-white/40 dark:border-slate-800/40 shadow-xl space-y-5">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-amber-500/10 rounded-xl text-amber-500">
+            <div className="p-2 bg-amber-400/10 rounded-xl text-amber-500">
               <Sparkles size={18} />
             </div>
             <h3 className="text-sm font-bold text-slate-800 dark:text-white uppercase tracking-widest">AI Description</h3>
@@ -546,7 +541,7 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 placeholder="ဥပမာ- 'အနီရောင်နောက်ခံ၊ ကြယ်တွေနဲ့ Myanmar title text' သို့မဟုတ် 'A gamer sitting in a high-tech room with purple lighting'"
-                className="w-full h-40 px-4 py-4 bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-purple/50 resize-none transition-all placeholder:text-slate-400 dark:placeholder:text-slate-600 leading-relaxed"
+                className="w-full h-40 px-4 py-4 bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400/50 resize-none transition-all placeholder:text-slate-400 dark:placeholder:text-slate-600 leading-relaxed"
               />
             </div>
           </div>
@@ -555,7 +550,7 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
           {/* Text Overlay Section */}
           <div className="glass-card p-6 rounded-[28px] border border-white/40 dark:border-slate-800/40 shadow-xl space-y-5">
             <div className="flex items-center gap-3">
-              <div className="p-2 bg-brand-purple/10 rounded-xl text-brand-purple">
+              <div className="p-2 bg-amber-400/10 rounded-xl text-amber-500">
                 <Type size={18} />
               </div>
               <h3 className="text-sm font-bold text-slate-800 dark:text-white uppercase tracking-widest">ထည့်စေချင်သော စာသား (Text Overlay)</h3>
@@ -567,7 +562,7 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
                   value={overlayText}
                   onChange={(e) => setOverlayText(e.target.value)}
                   placeholder="Enter text here..."
-                  className="w-full h-24 px-4 py-3 bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-purple/50 resize-none transition-all"
+                  className="w-full h-24 px-4 py-3 bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400/50 resize-none transition-all"
                 />
               </div>
 
@@ -582,7 +577,7 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
                   max="120" 
                   value={fontSize} 
                   onChange={(e) => setFontSize(parseInt(e.target.value))}
-                  className="w-full h-1.5 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-brand-purple"
+                  className="w-full h-1.5 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-400"
                 />
               </div>
 
@@ -598,7 +593,7 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
                       onClick={() => setTextPosition(pos.id)}
                       className={`py-2 px-1 rounded-xl border text-[9px] font-bold transition-all ${
                         textPosition === pos.id 
-                          ? 'bg-brand-purple border-brand-purple text-white' 
+                          ? 'bg-amber-400 border-amber-400 text-black' 
                           : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-500'
                       }`}
                     >
@@ -620,7 +615,7 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
                       onClick={() => setTextStyle(style.id)}
                       className={`py-2 px-1 rounded-xl border text-[9px] font-bold transition-all ${
                         textStyle === style.id 
-                          ? 'bg-brand-purple border-brand-purple text-white' 
+                          ? 'bg-amber-400 border-amber-400 text-black' 
                           : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-500'
                       }`}
                     >
@@ -633,7 +628,7 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
               <button
                 onClick={handleApplyText}
                 disabled={!generatedImage || isApplyingText}
-                className="w-full py-3 bg-slate-100 dark:bg-white/5 hover:bg-brand-purple hover:text-white text-slate-600 dark:text-slate-400 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all border border-slate-200 dark:border-slate-800 hover:border-brand-purple"
+                className="w-full py-3 bg-slate-100 dark:bg-white/5 hover:bg-amber-400 hover:text-black text-slate-600 dark:text-slate-400 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all border border-slate-200 dark:border-slate-800 hover:border-amber-400"
               >
                 {isApplyingText ? 'Applying...' : 'Apply Text'}
               </button>
@@ -647,7 +642,7 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
           className={`w-full py-5 rounded-2xl font-bold flex items-center justify-center gap-3 transition-all shadow-xl active:scale-[0.98] disabled:opacity-50 ${
             isGenerating 
               ? 'bg-slate-200 dark:bg-slate-800 text-slate-500 cursor-not-allowed' 
-              : 'bg-brand-purple hover:bg-brand-purple/90 text-white shadow-brand-purple/20'
+              : 'bg-amber-400 hover:bg-amber-500 text-black shadow-amber-400/20'
           }`}
         >
           {isGenerating ? (
@@ -661,7 +656,7 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
 
       {/* Preview Column */}
       <div className="lg:col-span-7 space-y-6">
-        <div className={`glass-card p-6 rounded-[32px] border shadow-2xl relative overflow-hidden h-fit transition-all ${isDarkMode ? 'border-slate-800/40' : 'border-white/40'}`}>
+        <div className={`glass-card p-6 rounded-[32px] border shadow-2xl relative overflow-hidden h-fit transition-all border-slate-800/40`}>
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
               <div className={`w-2 h-2 rounded-full ${isGenerating ? 'bg-amber-500 animate-pulse' : 'bg-brand-purple'}`} />
@@ -707,9 +702,9 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
                   className="flex flex-col items-center gap-4 py-20"
                 >
                    <div className="relative">
-                      <div className="w-16 h-16 border-4 border-brand-purple/20 border-t-brand-purple rounded-full animate-spin"></div>
+                      <div className="w-16 h-16 border-4 border-amber-400/20 border-t-amber-400 rounded-full animate-spin"></div>
                       <div className="absolute inset-0 flex items-center justify-center">
-                         <Sparkles size={20} className="text-brand-purple animate-pulse" />
+                         <Sparkles size={20} className="text-amber-500 animate-pulse" />
                       </div>
                    </div>
                    <div className="text-center">
@@ -753,16 +748,16 @@ CRITICAL: Generate ONLY the background visual. NO TEXT of any kind in the image.
         </div>
 
         {/* Instructions */}
-        <div className="p-6 bg-brand-purple/5 border border-brand-purple/10 rounded-3xl space-y-4">
+        <div className="p-6 bg-amber-400/5 border border-amber-400/10 rounded-3xl space-y-4">
           <div className="flex items-center justify-between">
-            <h4 className="text-xs font-bold text-brand-purple uppercase tracking-widest flex items-center gap-2">
+            <h4 className="text-xs font-bold text-amber-500 uppercase tracking-widest flex items-center gap-2">
               <ImageIcon size={14} /> AI Image Pro-Tips
             </h4>
           </div>
           <ul className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed font-semibold list-disc pl-4 space-y-2">
-            <li>For text, describe it clearly: <span className="text-brand-purple">"with bold yellow text that says 'NEW VIDEO'"</span>.</li>
-            <li>Specify the style for better results: <span className="text-brand-purple">"3D render, minimalist, neon, or cinematic"</span>.</li>
-            <li>Gemini Imagen 3 supports both <span className="text-brand-purple">Myanmar</span> and English prompts.</li>
+            <li>For text, describe it clearly: <span className="text-amber-500">"with bold yellow text that says 'NEW VIDEO'"</span>.</li>
+            <li>Specify the style for better results: <span className="text-amber-500">"3D render, minimalist, neon, or cinematic"</span>.</li>
+            <li>Gemini Imagen 3 supports both <span className="text-amber-500">Myanmar</span> and English prompts.</li>
             <li>Aspect ratios are automatically optimized for your chosen platform.</li>
           </ul>
         </div>
