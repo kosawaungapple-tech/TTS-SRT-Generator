@@ -29,8 +29,8 @@ export const GEMINI_MODELS = {
   VERIFY: 'gemini-3-flash-preview',
   REWRITE: 'gemini-3-flash-preview',
   TRANSLATE: 'gemini-3-flash-preview',
-  IMAGE: 'gemini-3-flash-preview',
-  TTS: 'gemini-2.5-flash-preview-tts',
+  IMAGE: 'gemini-2.5-flash-image',
+  TTS: 'gemini-3.1-flash-tts-preview',
   VIDEO: 'gemini-3-flash-preview'
 };
 

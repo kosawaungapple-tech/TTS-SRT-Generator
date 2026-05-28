@@ -33,27 +33,18 @@ import {
   Info,
   PartyPopper
 } from 'lucide-react';
-import { SystemConfig, PronunciationRule, GlobalSettings, VBSUserControl, ActivityLog, Announcement, CreditSettings } from '../types';
-import { db, collection, onSnapshot, query, orderBy, setDoc, doc, deleteDoc, updateDoc, handleFirestoreError, OperationType, getDoc, auth, where, limit, getDocs, serverTimestamp, Timestamp, getCurrentUserId } from '../firebase';
+import { SystemConfig, PronunciationRule, GlobalSettings, VBSUserControl, ActivityLog, Announcement } from '../types';
+import { db, collection, onSnapshot, query, orderBy, setDoc, doc, deleteDoc, updateDoc, handleFirestoreError, OperationType, getDoc, auth, where, limit, getDocs, serverTimestamp } from '../firebase';
 import { apiChannelManager, ApiChannel } from '../services/apiChannelManager';
 import { Toast, ToastType } from './Toast';
 import { Modal, ModalType } from './Modal';
 import { useLanguage } from '../contexts/LanguageContext';
-import { formatDate } from '../utils/dateUtils';
-import { giveWelcomeCredits } from '../services/creditService';
 
 interface AdminDashboardProps {
   isAuthReady: boolean;
   onAdminLogin?: (code: string) => void;
   configOnly?: boolean;
   isSessionSynced: boolean;
-}
-
-interface AdminKeyStats {
-  totalRequests: number;
-  rateLimitCount: number;
-  lastUsed: Timestamp | null;
-  lastStatus: string;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
@@ -83,21 +74,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return code === ADMIN_CODE;
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const timeSince = (timestamp: any) => {
-    if (!timestamp) return "Never";
-    
-    let date: Date;
-    if (timestamp?.toDate) {
-      date = timestamp.toDate();
-    } else if (timestamp?.seconds) {
-      date = new Date(timestamp.seconds * 1000);
-    } else {
-      date = new Date(timestamp);
-    }
-
-    if (isNaN(date.getTime())) return "Invalid Date";
-
+  const timeSince = (date: Date) => {
     const seconds = Math.floor((new Date().getTime() - date.getTime()) / 1000);
     if (seconds < 0) return "Just now";
     let interval = seconds / 31536000;
@@ -123,15 +100,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         orderBy('createdAt', 'desc'),
         limit(50)
       );
-      
-      const authUserId = getCurrentUserId();
-      if (!authUserId) {
-        console.warn('[VBS] Skipping logs fetch — not authenticated or anonymous');
-        setToast({ message: 'Auth Required', type: 'error', isVisible: true });
-        setIsLogsLoading(false);
-        return;
-      }
-
       const snapshot = await getDocs(q);
       const logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ActivityLog));
       setActivityLogs(logs);
@@ -144,11 +112,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleUpdateVbsUser = async (vbsId: string, updates: Partial<VBSUserControl>) => {
-    if (!getCurrentUserId()) {
-      console.warn('[VBS] Skipping user update — not authenticated or anonymous');
-      setToast({ message: 'Auth Required (Non-Anonymous)', type: 'error', isVisible: true });
-      return;
-    }
     try {
       await setDoc(doc(db, 'user_controls', vbsId), {
         ...updates,
@@ -164,7 +127,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const [searchQuery, setSearchQuery] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [newCredits, setNewCredits] = useState('5');
   const [visiblePasswords, setVisiblePasswords] = useState<Set<string>>(new Set());
   
   const togglePasswordVisibility = (id: string) => {
@@ -268,11 +230,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings>({
     allow_admin_keys: false,
     total_generations: 0,
-    api_keys: [''],
-    welcome_credits: 5,
-    recap_cost: 2,
-    tts_cost: 1,
-    rewrite_cost: 0.5
+    api_keys: ['']
   });
   const [isSavingSystem, setIsSavingSystem] = useState(false);
   const [isSystemLoading, setIsSystemLoading] = useState(true);
@@ -287,35 +245,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isRulesLoading, setIsRulesLoading] = useState(true);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
 
-  const [creditSettings, setCreditSettings] = useState<CreditSettings>({
-    videoRecapCost: 5,
-    ttsGenerationCost: 2,
-    aiRewriteCost: 2,
-    newPremiumWelcomeCredits: 20
-  });
-
   // New Channel Manager State
   const [adminChannels, setAdminChannels] = useState<ApiChannel[]>(apiChannelManager.getAdminChannels());
   const [channelSettings, setChannelSettings] = useState(apiChannelManager.getSettings());
   const [newAdminKey, setNewAdminKey] = useState('');
   const [showAdminKeys, setShowAdminKeys] = useState<Record<string, boolean>>({});
-  const [adminKeyStatsMap, setAdminKeyStatsMap] = useState<Record<string, AdminKeyStats>>({});
-
-  useEffect(() => {
-    const adminCode = localStorage.getItem('vbs_access_code') || '';
-    const isOwner = adminCode === 'saw_vlogs_2026';
-    if (!isAuthenticated || !isAuthReady || (!isSessionSynced && !isOwner) || !isAdmin(adminCode)) return;
-
-    const unsubscribe = onSnapshot(collection(db, 'adminKeyStats'), (snapshot) => {
-      const stats: Record<string, AdminKeyStats> = {};
-      snapshot.docs.forEach(doc => {
-        stats[doc.id] = doc.data() as AdminKeyStats;
-      });
-      setAdminKeyStatsMap(stats);
-    });
-
-    return () => unsubscribe();
-  }, [isAuthenticated, isAuthReady, isSessionSynced]);
 
   // Modal State
   const [modal, setModal] = useState<{
@@ -364,9 +298,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
       
       // Ensure session is synced on mount if already authenticated
-      const authUserId = getCurrentUserId();
-      if (isAuthReady && authUserId && adminCode) {
-        setDoc(doc(db, 'sessions', authUserId), {
+      if (isAuthReady && auth.currentUser && adminCode) {
+        setDoc(doc(db, 'sessions', auth.currentUser.uid), {
           accessCode: adminCode,
           createdAt: serverTimestamp()
         })
@@ -397,9 +330,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         localStorage.setItem('vbs_access_granted', 'true');
         localStorage.setItem('vbs_access_code', code);
         
-        const userId = getCurrentUserId();
-        if (userId) {
-          await setDoc(doc(db, 'sessions', userId), {
+        if (auth.currentUser) {
+          await setDoc(doc(db, 'sessions', auth.currentUser.uid), {
             accessCode: code,
             createdAt: serverTimestamp()
           });
@@ -448,8 +380,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       return;
     }
 
-    const isOwner = adminCode === 'saw_vlogs_2026';
-    if (!isSessionSynced && !isOwner) {
+    if (!isSessionSynced) {
       console.log("AdminDashboard: Waiting for session sync to Firestore rules...");
       setIsLoading(true);
       return;
@@ -495,8 +426,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   useEffect(() => {
     const adminCode = localStorage.getItem('vbs_access_code') || '';
-    const isOwner = adminCode === 'saw_vlogs_2026';
-    if (!isAuthenticated || !isAuthReady || (!isSessionSynced && !isOwner) || !isAdmin(adminCode)) return;
+    if (!isAuthenticated || !isAuthReady || !isSessionSynced || !isAdmin(adminCode)) return;
 
     const unsubscribe = onSnapshot(collection(db, 'globalRules'), (snapshot) => {
       const fetchedRules = snapshot.docs.map(doc => ({
@@ -519,12 +449,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleCreateRule = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRuleOriginal.trim() || !newRuleReplacement.trim()) return;
-
-    if (!getCurrentUserId()) {
-      console.warn('[VBS] Skipping rule creation — not authenticated or anonymous');
-      setToast({ message: 'Auth Required (Non-Anonymous)', type: 'error', isVisible: true });
-      return;
-    }
 
     setIsSavingRule(true);
     try {
@@ -575,11 +499,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       type: 'confirm',
       confirmText: 'Delete',
       onConfirm: async () => {
-        if (!getCurrentUserId()) {
-          console.warn('[VBS] Skipping rule deletion — not authenticated or anonymous');
-          setToast({ message: 'Auth Required', type: 'error', isVisible: true });
-          return;
-        }
         setIsDeletingRule(id);
         try {
           await deleteDoc(doc(db, 'globalRules', id));
@@ -595,8 +514,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   useEffect(() => {
-    const isOwner = localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
-    if (!isAuthenticated || !isAuthReady || (!isSessionSynced && !isOwner)) return;
+    if (!isAuthenticated || !isAuthReady || !isSessionSynced) return;
 
     const fetchSystemConfig = async () => {
       setIsSystemLoading(true);
@@ -616,12 +534,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             api_keys: data.api_keys || ['']
           });
         }
-
-        const creditsRef = doc(db, 'settings', 'credits');
-        const creditsSnap = await getDoc(creditsRef);
-        if (creditsSnap.exists()) {
-          setCreditSettings(creditsSnap.data() as CreditSettings);
-        }
       } catch (err) {
         console.error('Failed to fetch system config:', err);
       } finally {
@@ -637,22 +549,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       e.preventDefault();
       e.stopPropagation();
     }
-
-    if (!getCurrentUserId()) {
-      console.warn('[VBS] Skipping system config save — not authenticated or anonymous');
-      setToast({ message: 'Auth Required (Non-Anonymous)', type: 'error', isVisible: true });
-      return;
-    }
-
     setIsSavingSystem(true);
     try {
       await setDoc(doc(db, 'system_config', 'main'), {
         ...systemConfig,
-        updatedAt: serverTimestamp()
-      });
-      
-      await setDoc(doc(db, 'settings', 'credits'), {
-        ...creditSettings,
         updatedAt: serverTimestamp()
       });
       
@@ -685,94 +585,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setNewPassword(password);
   };
 
-  // Sync with singleton state changes
-  useEffect(() => {
-    const handleSync = () => {
-      setAdminChannels(apiChannelManager.getAdminChannels());
-      setChannelSettings(apiChannelManager.getSettings());
-    };
-    
-    const unsubscribe = apiChannelManager.subscribe(handleSync);
-    window.addEventListener('storage', handleSync);
-    
-    // Initial sync
-    handleSync();
-    
-    return () => {
-      unsubscribe();
-      window.removeEventListener('storage', handleSync);
-    };
-  }, []);
-
-  const handleAddAdminChannel = async () => {
+  // Channel Handlers
+  const handleAddAdminChannel = () => {
     if (!newAdminKey.trim()) return;
-    const success = await apiChannelManager.addAdminChannel(newAdminKey);
-    if (success) {
-      setNewAdminKey('');
-    } else {
-      setToast({ message: 'Failed to add key to Firestore', type: 'error', isVisible: true });
-    }
+    apiChannelManager.addAdminChannel(newAdminKey);
+    setAdminChannels(apiChannelManager.getAdminChannels());
+    setNewAdminKey('');
   };
 
-  const handleDeleteAdminChannel = async (id: string) => {
-    const success = await apiChannelManager.deleteAdminChannel(id);
-    if (!success) {
-      setToast({ message: 'Failed to delete key from Firestore', type: 'error', isVisible: true });
-    } else {
-      // Sync the potentially updated shared list to Firestore
-      const updatedSettings = apiChannelManager.getSettings();
-      try {
-        await setDoc(doc(db, 'settings', 'global'), {
-          sharedChannelIds: updatedSettings.sharedChannelIds,
-          updatedAt: serverTimestamp()
-        }, { merge: true });
-      } catch (err) {
-        console.error("Failed to sync shared channel list after deletion:", err);
-      }
-    }
+  const handleDeleteAdminChannel = (id: string) => {
+    apiChannelManager.deleteAdminChannel(id);
+    setAdminChannels(apiChannelManager.getAdminChannels());
+    setChannelSettings(apiChannelManager.getSettings());
   };
 
-  const handleToggleAdminKeySharing = async () => {
+  const handleToggleAdminKeySharing = () => {
     const newVal = !channelSettings.allowSharedKeys;
     apiChannelManager.updateSettings({ allowSharedKeys: newVal });
     setChannelSettings(prev => ({ ...prev, allowSharedKeys: newVal }));
-    
-    // Sync to Firestore global settings
-    try {
-      await setDoc(doc(db, 'settings', 'global'), {
-        allow_admin_keys: newVal,
-        updatedAt: serverTimestamp()
-      }, { merge: true });
-    } catch (err) {
-      console.error("Failed to sync admin key sharing toggle to Firestore:", err);
-    }
   };
 
-  const handleToggleSpecificChannelSharing = async (id: string) => {
+  const handleToggleSpecificChannelSharing = (id: string) => {
     apiChannelManager.toggleSharedChannel(id);
-    const updatedSettings = apiChannelManager.getSettings();
-    setChannelSettings(updatedSettings);
-    
-    // Sync to Firestore global settings
-    try {
-      await setDoc(doc(db, 'settings', 'global'), {
-        sharedChannelIds: updatedSettings.sharedChannelIds,
-        updatedAt: serverTimestamp()
-      }, { merge: true });
-    } catch (err) {
-      console.error("Failed to sync shared channel IDs to Firestore:", err);
-    }
+    setChannelSettings(apiChannelManager.getSettings());
   };
 
   const handleCreateId = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newId.trim() || isSubmitting) return;
-
-    if (!getCurrentUserId()) {
-      console.warn('[VBS] Skipping ID creation — not authenticated or anonymous');
-      setToast({ message: 'Auth Required (Non-Anonymous)', type: 'error', isVisible: true });
-      return;
-    }
 
     setIsSubmitting(true);
 
@@ -783,7 +623,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       await setDoc(doc(db, 'user_controls', accessCode), {
         vbsId: accessCode,
         dailyUsage: 0,
-        credits: parseInt(newCredits) || 0,
         lastUsedDate: new Date().toDateString(),
         isUnlimited: newRole === 'admin',
         membershipStatus: newRole === 'admin' ? 'premium' : 'standard',
@@ -800,7 +639,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setNewId('');
       setNewNote('');
       setNewPassword('');
-      setNewCredits('5');
       setNewExpiryDate('');
       setNewRole('user');
       setToast({
@@ -832,11 +670,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       confirmText: 'Update',
       onConfirm: async (password) => {
         if (!password) return;
-        if (!getCurrentUserId()) {
-           console.warn('[VBS] Skipping password update — not authenticated or anonymous');
-           setToast({ message: 'Auth Required', type: 'error', isVisible: true });
-           return;
-        }
         try {
           await updateDoc(doc(db, 'user_controls', id), {
             password: password.trim() || null,
@@ -860,11 +693,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleExtendExpiry = async (id: string, currentExpiry: string | undefined) => {
-    if (!getCurrentUserId()) {
-      console.warn('[VBS] Skipping expiry extension — not authenticated or anonymous');
-      setToast({ message: 'Auth Required', type: 'error', isVisible: true });
-      return;
-    }
     try {
       const now = new Date();
       let baseDate = now;
@@ -904,12 +732,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleSaveAnnouncement = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newAnnouncement.message?.trim()) return;
-
-    if (!getCurrentUserId()) {
-      console.warn('[VBS] Skipping announcement save — not authenticated or anonymous');
-      setToast({ message: 'Auth Required (Non-Anonymous)', type: 'error', isVisible: true });
-      return;
-    }
 
     setIsSavingAnnouncement(true);
     try {
@@ -984,11 +806,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       type: 'confirm',
       confirmText: 'Delete',
       onConfirm: async () => {
-        if (!getCurrentUserId()) {
-          console.warn('[VBS] Skipping announcement deletion — not authenticated or anonymous');
-          setToast({ message: 'Auth Required', type: 'error', isVisible: true });
-          return;
-        }
         try {
           const announcements = globalSettings.announcements || [];
           const updatedAnnouncements = announcements.filter(a => a.id !== id);
@@ -1027,12 +844,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       onConfirm: async (dateStr) => {
         if (!dateStr) return;
         
-        if (!getCurrentUserId()) {
-          console.warn('[VBS] Skipping custom expiry set — not authenticated or anonymous');
-          setToast({ message: 'Auth Required', type: 'error', isVisible: true });
-          return;
-        }
-
         try {
           const date = new Date(dateStr);
           if (isNaN(date.getTime())) {
@@ -1069,11 +880,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleToggleStatus = async (id: string, currentStatus: boolean) => {
-    if (!getCurrentUserId()) {
-      console.warn('[VBS] Skipping status toggle — not authenticated or anonymous');
-      setToast({ message: 'Auth Required', type: 'error', isVisible: true });
-      return;
-    }
     try {
       await updateDoc(doc(db, 'user_controls', id), {
         isActive: !currentStatus,
@@ -1101,11 +907,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       type: 'confirm',
       confirmText: 'Delete',
       onConfirm: async () => {
-        if (!getCurrentUserId()) {
-          console.warn('[VBS] Skipping ID deletion — not authenticated or anonymous');
-          setToast({ message: 'Auth Required', type: 'error', isVisible: true });
-          return;
-        }
         setIsDeletingUser(id);
         try {
           await deleteDoc(doc(db, 'user_controls', id));
@@ -1293,7 +1094,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
             </div>
 
-            <form onSubmit={handleCreateId} className={`space-y-4 ${(!isAdmin(localStorage.getItem('vbs_access_code')) || (!isSessionSynced && localStorage.getItem('vbs_access_code') !== 'saw_vlogs_2026')) ? 'opacity-50 pointer-events-none' : ''}`}>
+            <form onSubmit={handleCreateId} className={`space-y-4 ${(!isAdmin(localStorage.getItem('vbs_access_code')) || !isSessionSynced) ? 'opacity-50 pointer-events-none' : ''}`}>
               <div className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Access Code (User ID)</label>
                 <div className="relative">
@@ -1342,20 +1143,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     onChange={(e) => setNewPassword(e.target.value)}
                     placeholder="Enter or generate password"
                     className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm font-mono text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Initial Credits</label>
-                <div className="relative">
-                  <Sparkles className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                  <input
-                    type="number"
-                    value={newCredits}
-                    onChange={(e) => setNewCredits(e.target.value)}
-                    placeholder="e.g. 5"
-                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
                   />
                 </div>
               </div>
@@ -1458,7 +1245,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <tr className="border-b border-slate-200 dark:border-white/5">
                       <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest min-w-[140px]">{t('admin.id')}</th>
                       <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest min-w-[200px]">{t('admin.details')}</th>
-                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest min-w-[150px]">Credits</th>
+                      <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest min-w-[150px]">{t('admin.usage')}</th>
                       <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest min-w-[180px]">{t('admin.membership')}</th>
                       <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">{t('admin.actions')}</th>
                     </tr>
@@ -1495,98 +1282,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </div>
                         </td>
                         <td className="px-4 py-4">
-                          <div className="flex flex-col gap-1 min-w-[120px]">
-                            <div className="flex items-center gap-2">
-                              <span className={`text-sm font-black font-mono ${(u.credits || 0) > 0 ? 'text-brand-purple' : 'text-rose-500'}`}>
-                                {u.credits || 0}
-                              </span>
-                              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter">Credits</span>
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <button 
-                                onClick={() => handleUpdateVbsUser(u.vbsId, { credits: (u.credits || 0) + 10 })}
-                                className="px-1.5 py-0.5 bg-brand-purple/10 text-brand-purple text-[9px] font-bold rounded hover:bg-brand-purple transition-all hover:text-white"
-                              >
-                                +10
-                              </button>
-                              <button 
-                                onClick={() => handleUpdateVbsUser(u.vbsId, { credits: (u.credits || 0) + 50 })}
-                                className="px-1.5 py-0.5 bg-brand-purple/10 text-brand-purple text-[9px] font-bold rounded hover:bg-brand-purple transition-all hover:text-white"
-                              >
-                                +50
-                              </button>
-                              <button 
-                                onClick={() => {
-                                  openModal({
-                                    title: 'Set Credits',
-                                    message: `Enter exact credits for ${u.vbsId}:`,
-                                    type: 'prompt',
-                                    inputType: 'text',
-                                    defaultValue: (u.credits || 0).toString(),
-                                    onConfirm: (val) => {
-                                      const credits = parseInt(val || '0');
-                                      handleUpdateVbsUser(u.vbsId, { credits });
-                                    }
-                                  });
-                                }}
-                                className="px-1.5 py-0.5 bg-slate-100 dark:bg-white/5 text-slate-400 text-[9px] font-bold rounded hover:bg-brand-purple transition-all hover:text-white"
-                              >
-                                Set
-                              </button>
-                            </div>
-                            <div className="flex items-center justify-between mt-1 pt-1 border-t border-slate-100 dark:border-white/5">
-                              <span className="text-[10px] font-bold text-slate-500 truncate">
-                                {u.lastLoginAt ? timeSince(u.lastLoginAt) + " ago" : "Never"}
-                              </span>
-                              <button 
-                                onClick={() => handleShowActivityLogs(u.vbsId)} 
-                                className="p-1 text-slate-400 hover:text-brand-purple transition-all"
-                                title="View Logs"
-                              >
-                                <Eye size={10} />
-                              </button>
-                            </div>
-                            {/* Video Usage Info */}
-                            <div className="mt-2 pt-2 border-t border-slate-100 dark:border-white/5 space-y-1.5">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Recap Usage:</span>
-                                <span className={(() => {
-                                  const usedCount = u.lastVideoDate === new Date().toISOString().split("T")[0] ? (u.videosGeneratedToday || 0) : 0;
-                                  const limitCount = u.dailyVideoLimit || 2;
-                                  if (u.isUnlimited) return 'text-amber-500 text-[10px] font-bold';
-                                  return usedCount >= limitCount ? 'text-rose-500 text-[10px] font-bold' : 'text-emerald-500 text-[10px] font-bold';
-                                })()}>
-                                  {u.isUnlimited ? 'Unlimited' : `${u.lastVideoDate === new Date().toISOString().split("T")[0] ? u.videosGeneratedToday || 0 : 0} / ${u.dailyVideoLimit || 2}`}
+                          {(() => {
+                            const lastLogin = u.lastLoginAt ? new Date(u.lastLoginAt) : null;
+                            const isToday = u.lastUsedDate === new Date().toDateString();
+                            
+                            return (
+                              <div className="flex flex-col gap-1 min-w-[130px]">
+                                <span className="text-xs font-bold text-brand-purple flex items-center gap-1">
+                                  {isToday ? (u.dailyTasks || 0) : 0} {t('admin.tasksToday')}
+                                  <button onClick={() => handleShowActivityLogs(u.vbsId)} className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity"><Eye size={12} /></button>
+                                </span>
+                                <span className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                                  {lastLogin ? timeSince(lastLogin) + " ago" : "Never"}
                                 </span>
                               </div>
-                              <div className="flex items-center gap-1">
-                                <button 
-                                  onClick={() => {
-                                    openModal({
-                                      title: 'Set Daily Video Limit',
-                                      message: `Set daily video transcription limit for ${u.vbsId}:`,
-                                      type: 'prompt',
-                                      inputType: 'text',
-                                      defaultValue: (u.dailyVideoLimit || 2).toString(),
-                                      onConfirm: (val) => {
-                                        const limit = parseInt(val || '2');
-                                        handleUpdateVbsUser(u.vbsId, { dailyVideoLimit: limit });
-                                      }
-                                    });
-                                  }}
-                                  className="px-1.5 py-0.5 bg-slate-100 dark:bg-white/5 text-slate-500 text-[9px] font-bold rounded hover:bg-amber-500 transition-all hover:text-white"
-                                >
-                                  Shift Limit
-                                </button>
-                                <button 
-                                  onClick={() => handleUpdateVbsUser(u.vbsId, { isUnlimited: !u.isUnlimited })}
-                                  className={`px-1.5 py-0.5 text-[9px] font-bold rounded transition-all ${u.isUnlimited ? 'bg-amber-500 text-white' : 'bg-slate-100 dark:bg-white/5 text-slate-500 hover:bg-amber-500 hover:text-white'}`}
-                                >
-                                  {u.isUnlimited ? 'Unlimited ON' : 'Unlimited OFF'}
-                                </button>
-                              </div>
-                            </div>
-                          </div>
+                            );
+                          })()}
                         </td>
                         <td className="px-4 py-4">
                           <div className="flex flex-col gap-2">
@@ -1608,22 +1319,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                         if (isAdmin) return;
                                         const nextStatus = isPremium ? 'standard' : 'premium';
                                         await handleUpdateVbsUser(u.vbsId, { membershipStatus: nextStatus });
-                                        
-                                        // Award welcome credits if upgraded to premium
-                                        if (nextStatus === 'premium') {
-                                          await giveWelcomeCredits(u.vbsId);
-                                          setToast({ 
-                                            message: `Upgraded ${u.vbsId} to Premium! Welcome credits awarded. 🎉`, 
-                                            type: 'success', 
-                                            isVisible: true 
-                                          });
-                                        } else {
-                                          setToast({ 
-                                            message: `Downgraded ${u.vbsId} to Standard.`, 
-                                            type: 'info', 
-                                            isVisible: true 
-                                          });
-                                        }
                                       }}
                                       disabled={isAdmin}
                                       className={`relative w-8 h-4 transition-all duration-300 rounded-full p-0.5 border ${
@@ -1785,78 +1480,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div className="bg-slate-50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-6">
                 <div className="flex items-center justify-between">
                   <div className="space-y-1">
-                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">Video Recap Cost (Credits)</h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">Credits charged per video transcription action.</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      value={creditSettings.videoRecapCost}
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value);
-                        setCreditSettings({ ...creditSettings, videoRecapCost: isNaN(val) ? 0 : val });
-                      }}
-                      className="w-20 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-1.5 text-sm font-bold text-center"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">TTS Generation Cost (Credits)</h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">Credits charged per voice generation (up to 5,000 chars).</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      value={creditSettings.ttsGenerationCost}
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value);
-                        setCreditSettings({ ...creditSettings, ttsGenerationCost: isNaN(val) ? 0 : val });
-                      }}
-                      className="w-20 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-1.5 text-sm font-bold text-center"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">AI Rewrite Cost (Credits)</h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">Credits charged per AI rewrite action.</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      value={creditSettings.aiRewriteCost}
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value);
-                        setCreditSettings({ ...creditSettings, aiRewriteCost: isNaN(val) ? 0 : val });
-                      }}
-                      className="w-20 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-1.5 text-sm font-bold text-center"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">New Premium User Welcome Credits</h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">Default credits assigned to newly created premium accounts.</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      value={creditSettings.newPremiumWelcomeCredits}
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value);
-                        setCreditSettings({ ...creditSettings, newPremiumWelcomeCredits: isNaN(val) ? 0 : val });
-                      }}
-                      className="w-20 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-1.5 text-sm font-bold text-center"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
                     <h4 className="text-sm font-bold text-slate-900 dark:text-white">{t('admin.allowAdminKeys')}</h4>
                     <p className="text-xs text-slate-500 dark:text-slate-400">{t('admin.allowAdminKeysDesc')}</p>
                   </div>
@@ -1873,78 +1496,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <div className="space-y-4">
                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Admin Channels (Unlimited)</label>
                     <div className="space-y-3">
-                      {adminChannels.map((ch, idx) => {
-                        const stats = adminKeyStatsMap[ch.id];
-                        return (
-                          <div key={ch.id} className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl flex flex-col gap-3 shadow-sm hover:border-brand-purple/20 transition-all">
-                            <div className="flex items-center justify-between gap-4">
-                              <div className="flex-1 truncate">
-                                <div className="flex items-center gap-2 mb-1">
-                                   <span className="text-xs font-bold text-slate-700 dark:text-slate-200">{ch.label}</span>
-                                   {apiChannelManager.getAdminActiveIndex() === idx && (
-                                     <span className="text-[9px] bg-emerald-500 text-white px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider animate-pulse">Active</span>
-                                   )}
-                                   {channelSettings.sharedChannelIds.includes(ch.id) && (
-                                      <span className="text-[9px] bg-brand-purple/10 text-brand-purple px-1.5 py-0.5 rounded-md font-bold uppercase">Shared</span>
-                                   )}
-                                </div>
-                                <div className="font-mono text-[11px] text-slate-400 truncate tracking-tight">
-                                   {showAdminKeys[ch.id] ? ch.key : `${ch.key.substring(0, 8)}••••••••${ch.key.slice(-4)}`}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-1">
-                                 <button 
-                                   onClick={() => handleToggleSpecificChannelSharing(ch.id)}
-                                   className={`p-2 rounded-lg transition-colors ${channelSettings.sharedChannelIds.includes(ch.id) ? 'bg-emerald-500/10 text-emerald-500' : 'bg-slate-100 dark:bg-white/5 text-slate-400'}`}
-                                   title="Toggle User Access"
-                                 >
-                                   <ShieldCheck size={16} />
-                                 </button>
-                                 <button
-                                   onClick={() => setShowAdminKeys(prev => ({ ...prev, [ch.id]: !prev[ch.id] }))}
-                                   className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-white"
-                                 >
-                                   {showAdminKeys[ch.id] ? <EyeOff size={16} /> : <Eye size={16} />}
-                                 </button>
-                                 <button
-                                   onClick={() => handleDeleteAdminChannel(ch.id)}
-                                   className="p-2 text-slate-400 hover:text-rose-500"
-                                 >
-                                   <Trash2 size={16} />
-                                 </button>
-                              </div>
+                      {adminChannels.map((ch, idx) => (
+                        <div key={ch.id} className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl flex items-center justify-between gap-4">
+                          <div className="flex-1 truncate">
+                            <div className="flex items-center gap-2 mb-1">
+                               <span className="text-xs font-bold text-slate-700 dark:text-slate-200">{ch.label}</span>
+                               {apiChannelManager.getAdminActiveIndex() === idx && (
+                                 <span className="text-[9px] bg-emerald-500 text-white px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider animate-pulse">Active</span>
+                               )}
+                               {channelSettings.sharedChannelIds.includes(ch.id) && (
+                                  <span className="text-[9px] bg-brand-purple/10 text-brand-purple px-1.5 py-0.5 rounded-md font-bold uppercase">Shared</span>
+                               )}
                             </div>
-                            
-                            {/* Stats Row */}
-                            <div className="pt-2 border-t border-slate-100 dark:border-white/5 flex items-center justify-between">
-                               <div className="flex items-center gap-4 text-[10px] text-slate-500 font-medium">
-                                  <div className="flex items-center gap-1 px-1.5 py-0.5 bg-emerald-500/5 rounded-md border border-emerald-500/10">
-                                    <CheckCircle2 size={12} className="text-emerald-500" />
-                                    <span>{stats?.totalRequests || 0} requests</span>
-                                  </div>
-                                  <div className="flex items-center gap-1 px-1.5 py-0.5 bg-amber-500/5 rounded-md border border-amber-500/10">
-                                    <AlertCircle size={12} className="text-amber-500" />
-                                    <span>{stats?.rateLimitCount || 0} rate limits</span>
-                                  </div>
-                                  <div className="text-[9px] text-slate-400 italic font-mono uppercase tracking-tighter">
-                                    Last used: {stats?.lastUsed ? timeSince(stats.lastUsed) + " ago" : 'Never'}
-                                  </div>
-                               </div>
-                               <button 
-                                 onClick={async () => {
-                                   const success = await apiChannelManager.resetKeyStats(ch.id);
-                                   if (success) {
-                                     setToast({ message: 'Channel stats reset! ✨', type: 'success', isVisible: true });
-                                   }
-                                 }}
-                                 className="text-[9px] font-black uppercase text-slate-400 hover:text-brand-purple transition-all px-2 py-1 bg-slate-100 dark:bg-white/5 rounded-md"
-                               >
-                                 Reset Stats
-                               </button>
+                            <div className="font-mono text-[11px] text-slate-400 truncate tracking-tight">
+                               {showAdminKeys[ch.id] ? ch.key : `${ch.key.substring(0, 8)}••••••••${ch.key.slice(-4)}`}
                             </div>
                           </div>
-                        );
-                      })}
+                          <div className="flex items-center gap-2">
+                             <button 
+                               onClick={() => handleToggleSpecificChannelSharing(ch.id)}
+                               className={`p-2 rounded-lg transition-colors ${channelSettings.sharedChannelIds.includes(ch.id) ? 'bg-emerald-500/10 text-emerald-500' : 'bg-slate-100 dark:bg-white/5 text-slate-400'}`}
+                               title="Toggle User Access"
+                             >
+                               <ShieldCheck size={16} />
+                             </button>
+                             <button
+                               onClick={() => setShowAdminKeys(prev => ({ ...prev, [ch.id]: !prev[ch.id] }))}
+                               className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-white"
+                             >
+                               {showAdminKeys[ch.id] ? <EyeOff size={16} /> : <Eye size={16} />}
+                             </button>
+                             <button
+                               onClick={() => handleDeleteAdminChannel(ch.id)}
+                               className="p-2 text-slate-400 hover:text-rose-500"
+                             >
+                               <Trash2 size={16} />
+                             </button>
+                          </div>
+                        </div>
+                      ))}
 
                       {adminChannels.length === 0 && (
                         <div className="text-center py-8 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
@@ -2588,7 +2178,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               {log.type}
                             </span>
                             <span className="text-[10px] text-slate-500 font-medium">
-                              {formatDate(log.createdAt)}
+                              {log.createdAt ? new Date(log.createdAt).toLocaleString() : '—'}
                             </span>
                           </div>
                           <p className="text-sm text-slate-700 dark:text-slate-300 font-medium leading-relaxed">
