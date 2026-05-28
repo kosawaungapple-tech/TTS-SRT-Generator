@@ -1,12 +1,18 @@
 import { VoiceOption } from './types';
 
 export const VOICE_OPTIONS: VoiceOption[] = [
-  { id: 'zephyr', name: 'Burmese Female (အမျိုးသမီး) - Zephyr', gender: 'female', voiceName: 'Zephyr' },
-  { id: 'kore', name: 'Burmese Male (အမျိုးသား) - Kore', gender: 'male', voiceName: 'Kore' },
-  { id: 'puck', name: 'Burmese Male (အမျိုးသား) - Puck', gender: 'male', voiceName: 'Puck' },
-  { id: 'charon', name: 'Burmese Male (အမျိုးသား) - Charon', gender: 'male', voiceName: 'Charon' },
-  { id: 'fenrir', name: 'Burmese Male (အမျိုးသား) - Fenrir', gender: 'male', voiceName: 'Fenrir' },
+  { id: 'puck', name: 'Myanmar Male (အမျိုးသား) - Puck', gender: 'male', voiceName: 'Puck' },
+  { id: 'charon', name: 'Myanmar Male (အမျိုးသား) - Charon', gender: 'male', voiceName: 'Charon' },
+  { id: 'kore', name: 'Myanmar Male (အမျိုးသား) - Kore', gender: 'male', voiceName: 'Kore' },
+  { id: 'fenrir', name: 'Myanmar Male (အမျိုးသား) - Fenrir', gender: 'male', voiceName: 'Fenrir' },
+  { id: 'aoede', name: 'Myanmar Female (အမျိုးသမီး) - Aoede', gender: 'female', voiceName: 'Aoede' },
+  { id: 'orbit', name: 'Myanmar Female (အမျိုးသမီး) - Orbit', gender: 'female', voiceName: 'Orbit' },
+  { id: 'zephyr', name: 'Myanmar Female (အမျိုးသမီး) - Zephyr', gender: 'female', voiceName: 'Zephyr' },
+  { id: 'leda', name: 'Myanmar Female (အမျိုးသမီး) - Leda', gender: 'female', voiceName: 'Leda' },
 ];
+
+// Supported voices are listed in VOICE_OPTIONS
+export const SUPPORTED_VOICES = VOICE_OPTIONS.map(v => v.id);
 
 export const DEFAULT_RULES = [
   { id: '1', original: 'Vlogs By Saw', replacement: 'ဗလော့ ဘိုင် စော' },
@@ -20,7 +26,18 @@ export const DEFAULT_RULES = [
 ];
 
 export const GEMINI_MODELS = {
-  VERIFY: 'gemini-3-flash-preview',
-  LIVE: 'gemini-2.5-flash-native-audio-preview-12-2025',
-  TTS: 'gemini-2.5-flash-preview-tts',
+  VERIFY: 'gemini-2.5-flash',
+  REWRITE: 'gemini-2.5-flash',
+  TRANSLATE: 'gemini-2.5-flash',
+  IMAGE: 'gemini-2.5-flash',
+  TTS: 'gemini-3.1-flash-tts-preview',
+  VIDEO: 'gemini-2.5-flash'
 };
+
+export const ELEVENLABS_VOICES = [
+  { id: 'rachel', name: 'Rachel - Female (English)', voiceId: '21m00Tcm4TlvDq8ikWAM' },
+  { id: 'antoni', name: 'Antoni - Male (English)', voiceId: 'ErXwobaYiN019PkySvjV' },
+  { id: 'bella', name: 'Bella - Female (English)', voiceId: 'EXAVITQu4vr4xnSDxMaL' },
+  { id: 'josh', name: 'Josh - Male (English)', voiceId: 'TxGEqnHWrfWFTfGW9XjX' },
+  { id: 'arnold', name: 'Arnold - Male (English)', voiceId: 'VR6AewLTigWG4xSOukaG' },
+];
