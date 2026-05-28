@@ -28,6 +28,9 @@ export const translateError = (err: unknown, language: Language = 'mm'): string 
     return t('errors.modelNotFound');
   }
   if (status == 400 || rawMessage.includes('INVALID_ARGUMENT') || errorCode.includes('INVALID_ARGUMENT')) {
+    if (rawMessage.includes('API KEY IS REQUIRED')) {
+      return t('generate.noApiKey');
+    }
     return t('errors.invalidArgument');
   }
   if (status == 429 || rawMessage.includes('RATE_LIMIT') || rawMessage.includes('RESOURCE_EXHAUSTED') || errorCode.includes('RESOURCE_EXHAUSTED')) {

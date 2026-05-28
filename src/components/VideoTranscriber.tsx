@@ -2,11 +2,13 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Upload, FileVideo, CheckCircle2, AlertCircle, Sparkles, Trash2, ShieldCheck, Lock } from 'lucide-react';
 import { GeminiTTSService } from '../services/geminiService';
+import { apiChannelManager } from '../services/apiChannelManager';
 import { logActivity } from '../services/activityService';
 import { translateError } from '../utils/errorUtils';
 import { VBSUserControl } from '../types';
-import { db, doc, updateDoc } from '../firebase';
+import { db, doc, updateDoc, increment, getCurrentUserId } from '../firebase';
 import { useLanguage } from '../contexts/LanguageContext';
+import { checkAndDeductCredits } from '../services/creditService';
 
 interface VideoTranscriberProps {
   onTranscriptionComplete: (text: string, duration?: number) => void;
@@ -14,8 +16,9 @@ interface VideoTranscriberProps {
   showToast: (message: string, type: 'success' | 'error') => void;
   isAdmin: boolean;
   userControl: VBSUserControl | null;
-  isUsingAdminKey: boolean;
+  isSharedKey: boolean;
   allowVideoRecapAdminKey?: boolean;
+  recapCost?: number;
 }
 
 export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({ 
@@ -24,8 +27,9 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
   showToast,
   isAdmin,
   userControl,
-  isUsingAdminKey,
-  allowVideoRecapAdminKey = true
+  isSharedKey,
+  allowVideoRecapAdminKey = true,
+  recapCost = 2
 }) => {
   const { language, t } = useLanguage();
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -33,6 +37,42 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
   const [videoDuration, setVideoDuration] = useState<number | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Daily Limit Check
+  const checkRecapLimit = () => {
+    // Admin always bypasses all limits
+    if (isAdmin || userControl?.vbsId === "saw_vlogs_2026") return true;
+    
+    if (!userControl) return true;
+
+    const today = new Date().toISOString().split("T")[0];
+    const lastDate = userControl.lastVideoDate || "";
+    const count = lastDate === today ? (userControl.videosGeneratedToday || 0) : 0;
+    const limit = userControl.dailyVideoLimit ?? 2;
+    const unlimited = userControl.isUnlimited ?? false;
+
+    if (!unlimited && count >= limit) {
+      return false;
+    }
+    return true;
+  };
+
+  const incrementRecapCount = async () => {
+    if (!userControl?.vbsId || !getCurrentUserId()) return;
+    
+    const today = new Date().toISOString().split("T")[0];
+    const lastDate = userControl.lastVideoDate || "";
+
+    try {
+      await updateDoc(doc(db, 'user_controls', userControl.vbsId), {
+        videosGeneratedToday: lastDate === today ? increment(1) : 1,
+        lastVideoDate: today,
+        updatedAt: new Date()
+      });
+    } catch (err) {
+      console.error("Failed to increment recap count:", err);
+    }
+  };
 
   useEffect(() => {
     if (videoFile) {
@@ -59,28 +99,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
     }
   })();
   const isPremium = isAdmin || (userControl?.membershipStatus === 'premium' && !isExpired);
-  const isRecapRestricted = isUsingAdminKey && !allowVideoRecapAdminKey;
-
-  const incrementUsage = async () => {
-    if (isPremium) return;
-    if (!userControl?.vbsId) return;
-
-    const today = new Date().toDateString();
-    const currentUsage = userControl.lastUsedDate === today ? userControl.dailyUsage : 0;
-    const newCount = currentUsage + 1;
-    
-    try {
-      await updateDoc(doc(db, 'user_controls', userControl.vbsId), {
-        dailyUsage: newCount,
-        lastUsedDate: today,
-        updatedAt: new Date()
-      });
-    } catch (err) {
-      console.error("Failed to update usage in Firestore:", err);
-      // Fallback to localStorage if Firestore fails
-      localStorage.setItem('vbs_transcription_usage', JSON.stringify({ date: today, count: newCount }));
-    }
-  };
+  const isRecapRestricted = isSharedKey && !allowVideoRecapAdminKey;
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -113,16 +132,21 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
   };
 
   const handleTranscribe = async () => {
-    if (!videoFile) return;
+    if (!videoFile || !userControl?.vbsId) return;
 
     if (!isAdmin) {
-      if (userControl?.isBlocked) {
+      if (userControl.isBlocked) {
         showToast(t('video.blocked'), 'error');
         return;
       }
 
       if (!isPremium) {
-        showToast(`${t('video.recapLocked')} - ${t('video.contactAdmin')} [${userControl?.vbsId || 'VBS-XXXX'}]`, 'error');
+        showToast(`${t('video.recapLocked')} - ${t('video.contactAdmin')} [${userControl.vbsId}]`, 'error');
+        return;
+      }
+
+      if (!checkRecapLimit()) {
+        showToast("ယနေ့ Video ထုတ်ယူခွင့် ကုန်သွားပြီ။ Admin ထံ ဆက်သွယ်ပါ။", 'error');
         return;
       }
 
@@ -141,11 +165,19 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
 
     setIsTranscribing(true);
     
-    // Increment usage IMMEDIATELY to prevent bypass
-    await incrementUsage();
-
     try {
-      const gemini = new GeminiTTSService(apiKey);
+      // Deduct credits ONLY if using shared admin key and not the owner/admin
+      if (!isAdmin && isSharedKey) {
+        const creditResult = await checkAndDeductCredits(userControl.vbsId, 'video');
+        if (!creditResult.success) {
+          showToast(creditResult.message || 'Credit နှုတ်ယူခြင်း မအောင်မြင်ပါ။', 'error');
+          setIsTranscribing(false);
+          return;
+        }
+      }
+
+      const useManaged = isAdmin || apiChannelManager.getSettings().useAdminKeys;
+      const gemini = new GeminiTTSService(useManaged ? '' : apiKey, isAdmin);
       
       // Step 1: Transcribe using File API (Unified multi-step upload)
       const transcription = await gemini.transcribeVideoFile(videoFile);
@@ -156,7 +188,10 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
       onTranscriptionComplete(translatedText, videoDuration || undefined);
       showToast(t('video.success'), 'success');
       
-      if (userControl?.vbsId) {
+      // Update usage tracking (daily limit count)
+      await incrementRecapCount();
+
+      if (userControl.vbsId) {
         logActivity(userControl.vbsId, 'transcription', `Transcribed video: ${videoFile.name}`);
       }
       
@@ -231,6 +266,16 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
         </div>
 
         <div className="flex items-center gap-3">
+          {userControl && (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-brand-purple/5 dark:bg-brand-purple/10 rounded-xl border border-brand-purple/10">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Credits Remaining:</span>
+              <span className={`text-xs font-black font-mono ${
+                (userControl.credits || 0) > 0 ? 'text-brand-purple' : 'text-rose-500'
+              }`}>
+                {userControl.credits || 0}
+              </span>
+            </div>
+          )}
           {isPremium ? (
             <motion.div 
               initial={{ opacity: 0, scale: 0.9 }}
@@ -332,7 +377,16 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
             ) : (
               <Sparkles size={28} />
             )}
-            {isTranscribing ? t('video.transcribing') : t('video.transcribeBtn')}
+            {isTranscribing ? t('video.transcribing') : (
+              <div className="flex items-center gap-2">
+                {t('video.transcribeBtn')}
+                {!isAdmin && (
+                  <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-md font-black tracking-tighter">
+                    {isSharedKey ? `${recapCost} Credits` : 'FREE'}
+                  </span>
+                )}
+              </div>
+            )}
           </button>
         </div>
       )}

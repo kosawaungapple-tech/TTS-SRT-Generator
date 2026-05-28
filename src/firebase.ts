@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, User as FirebaseUser, browserLocalPersistence, setPersistence } from 'firebase/auth';
-import { initializeFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, serverTimestamp, Timestamp } from 'firebase/firestore';
+import { initializeFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, serverTimestamp, Timestamp, increment } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL, uploadString } from 'firebase/storage';
 
 // Import the Firebase configuration
@@ -81,7 +81,34 @@ export const getIdToken = async () => {
   return await auth.currentUser.getIdToken();
 };
 
-export { signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadBytes, getDownloadURL, uploadString, serverTimestamp, Timestamp };
+export function getCurrentUserId(): string | null {
+  const user = auth.currentUser;
+  // Previously we blocked anonymous writes here, but this app uses Access Code login
+  // which leaves users technically anonymous. We must allow them to write their own docs.
+  if (!user) return null;
+  return user.uid;
+}
+
+export async function getUserControls(userId: string) {
+  const currentUser = auth.currentUser;
+  
+  // Requirement: Allow fetching for authorized anonymous users
+  if (!currentUser) {
+    console.warn("[VBS] Skipping getUserControls — not logged in");
+    return null;
+  }
+
+  try {
+    const docRef = doc(db, "user_controls", userId);
+    const snap = await getDoc(docRef);
+    return snap.exists() ? snap.data() : null;
+  } catch (err) {
+    console.error("[VBS] getUserControls error:", err);
+    return null;
+  }
+}
+
+export { signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadBytes, getDownloadURL, uploadString, serverTimestamp, Timestamp, increment };
 export type { FirebaseUser };
 
 // Test connection to Firestore

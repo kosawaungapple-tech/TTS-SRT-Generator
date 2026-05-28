@@ -18,6 +18,19 @@
       },
       "required": ["uid", "email", "role"]
     },
+    "ApiChannel": {
+      "title": "API Key Channel",
+      "description": "An admin-managed API key channel for rotation and sharing.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "key": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "idle", "limit"] },
+        "label": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "key", "status"]
+    },
     "PronunciationRule": {
       "title": "Pronunciation Rule",
       "description": "A rule for phonetic mapping.",
@@ -76,8 +89,14 @@
         "isUnlimited": { "type": "boolean" },
         "isBlocked": { "type": "boolean" },
         "membershipStatus": { "type": "string", "enum": ["standard", "premium"] },
+        "credits": { "type": "number", "description": "Remaining credits for transactions." },
+        "videosGeneratedToday": { "type": "number", "description": "Number of videos generated today." },
+        "dailyVideoLimit": { "type": "number", "description": "Maximum allowed videos per day." },
+        "lastVideoDate": { "type": "string", "description": "The date of the last video generation (YYYY-MM-DD)." },
+        "admin_override_active": { "type": "boolean", "description": "Whether an admin has overridden the daily limit." },
         "expiryDate": { "type": "string", "format": "date" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "lastLoginAt": { "type": "string", "format": "date-time" }
       },
       "required": ["vbsId", "dailyUsage", "lastUsedDate", "isUnlimited", "isBlocked"]
     },
@@ -91,7 +110,10 @@
         "api_keys": { "type": "array", "items": { "type": "string" } },
         "primary_key": { "type": "string" },
         "secondary_key": { "type": "string" },
-        "backup_key": { "type": "string" }
+        "backup_key": { "type": "string" },
+        "welcome_credits": { "type": "number", "description": "Default credits for new premium users." },
+        "recap_cost": { "type": "number", "description": "Credits cost for video-to-text recap." },
+        "tts_cost": { "type": "number", "description": "Credits cost for text-to-speech generation." }
       }
     },
     "Session": {
@@ -116,6 +138,30 @@
       },
       "required": ["vbsId", "type", "details", "createdAt"]
     },
+    "AdminKeyStats": {
+      "title": "Admin API Key Stats",
+      "description": "Activity statistics for a specific Admin API Key.",
+      "type": "object",
+      "properties": {
+        "totalRequests": { "type": "number" },
+        "rateLimitCount": { "type": "number" },
+        "lastUsed": { "type": "string", "format": "date-time" },
+        "lastStatus": { "type": "string", "enum": ["success", "rate_limited", "error"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "CreditSettings": {
+      "title": "Credit Costs",
+      "description": "System-wide credit costs for AI features.",
+      "type": "object",
+      "properties": {
+        "videoRecapCost": { "type": "integer" },
+        "ttsGenerationCost": { "type": "integer" },
+        "aiRewriteCost": { "type": "integer" },
+        "newPremiumWelcomeCredits": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
     "SystemConfig": {
       "title": "System Configuration",
       "description": "Global system configuration for Firebase and Telegram.",
@@ -139,6 +185,10 @@
     "/settings/global": {
       "schema": "GlobalSettings",
       "description": "Global system settings."
+    },
+    "/settings/credits": {
+      "schema": "CreditSettings",
+      "description": "System-wide credit costs and welcome gifts."
     },
     "/globalRules/{ruleId}": {
       "schema": "PronunciationRule",
@@ -167,6 +217,14 @@
     "/activity_logs/{logId}": {
       "schema": "ActivityLog",
       "description": "System activity logs."
+    },
+    "/adminKeyStats/{keyId}": {
+      "schema": "AdminKeyStats",
+      "description": "Stats for each admin key."
+    },
+    "/admin_channels/{channelId}": {
+      "schema": "ApiChannel",
+      "description": "Admin API key channels for the global pool."
     }
   }
 }
