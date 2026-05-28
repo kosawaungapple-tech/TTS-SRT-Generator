@@ -1,209 +1,191 @@
-import { GoogleGenAI } from "@google/genai";
+import { GenerateContentResponse } from "@google/genai";
 import { TTSConfig, AudioResult, SRTSubtitle } from "../types";
-import { VOICE_OPTIONS, GEMINI_MODELS } from "../constants";
-import { formatTime } from "../utils/audioUtils";
-import { generateOptimizedSubtitles } from "../utils/subtitleUtils";
-import { apiChannelManager } from "./apiChannelManager";
+import { GEMINI_MODELS, VOICE_OPTIONS } from "../constants";
+import { pcmToWav, formatTime } from "../utils/audioUtils";
+import { getIdToken } from "../firebase";
 
-interface GeminiResponse {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{
-        text?: string;
-        inlineData?: {
-          data: string;
-          mimeType: string;
-        };
-      }>;
-    };
-  }>;
-}
-
-/**
- * GeminiTTSService handles integration with Google Generative AI
- */
 export class GeminiTTSService {
   private apiKey: string;
-  private isAdmin: boolean;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private ai: any = null;
 
-  constructor(apiKey?: string, isAdmin: boolean = false) {
-    this.apiKey = apiKey || '';
-    this.isAdmin = isAdmin;
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private getAI(key: string): any {
-    if (!this.ai || this.apiKey !== key) {
-      this.ai = new GoogleGenAI({ apiKey: key });
-    }
-    return this.ai;
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private async geminiRequest(modelName: string, body: { contents: any[]; generationConfig?: any }): Promise<GeminiResponse> {
-    const executeRequest = async (key: string) => {
-      const ai = this.getAI(key);
-      const modelPath = modelName.startsWith('models/') ? modelName : `models/${modelName}`;
-      
-      console.log(`Gemini SDK Request [${modelName}]:`, modelPath);
-      
-      const response = await ai.models.generateContent({
-        model: modelPath,
-        contents: body.contents,
-        config: body.generationConfig
-      });
-      
-      // Map SDK response back to our internal GeminiResponse interface
-      return {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        candidates: response.candidates?.map((c: any) => ({
-          content: {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            parts: c.content?.parts?.map((p: any) => ({
-              text: p.text,
-              inlineData: p.inlineData ? {
-                data: p.inlineData.data,
-                mimeType: p.inlineData.mimeType
-              } : undefined
-            }))
-          }
-        }))
-      } as GeminiResponse;
-    };
-
-    if (this.apiKey) {
-      return executeRequest(this.apiKey);
-    }
-
-    return apiChannelManager.callWithAutoSwitch((key) => executeRequest(key), this.isAdmin);
-  }
-
-  public static getActiveKeyIndex(): number {
-    return apiChannelManager.getAdminActiveIndex();
+  constructor(apiKey?: string) {
+    const rawKey = apiKey || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '') || '';
+    this.apiKey = rawKey.trim();
+    console.log("GeminiTTSService: Initialized with key:", this.apiKey ? `Present (Starts with ${this.apiKey.substring(0, 4)}...)` : "Missing");
   }
 
   async verifyConnection(): Promise<{ isValid: boolean; status?: number; error?: string }> {
-    try {
-      await this.geminiRequest(GEMINI_MODELS.VERIFY, {
-        contents: [{ parts: [{ text: "ping" }] }]
-      });
-      return { isValid: true };
-    } catch (err: unknown) {
-      const error = err as { error?: { message?: string, status?: number } };
-      return { 
-        isValid: false, 
-        error: error.error?.message || "Connection failed", 
-        status: error.error?.status 
-      };
+    if (!this.apiKey) {
+      console.error("GeminiTTSService: Cannot verify connection - API Key is empty");
+      return { isValid: false, error: "Empty API Key" };
     }
-  }
 
-  private convertPCMToWav(base64PCM: string, sampleRate: number = 24000): Blob {
-    const pcmBytes = Uint8Array.from(atob(base64PCM), c => c.charCodeAt(0));
-    const wavBuffer = new ArrayBuffer(44 + pcmBytes.length);
-    const view = new DataView(wavBuffer);
+    try {
+      console.log("GeminiTTSService: Verifying connection via proxy...");
+      const idToken = await getIdToken();
+      if (!idToken) throw new Error("Unauthenticated: No ID Token");
 
-    // WAV header
-    const writeString = (offset: number, str: string) => {
-      for (let i = 0; i < str.length; i++) {
-        view.setUint8(offset + i, str.charCodeAt(i));
-      }
-    };
-
-    writeString(0, 'RIFF');
-    view.setUint32(4, 36 + pcmBytes.length, true);
-    writeString(8, 'WAVE');
-    writeString(12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);       // PCM format
-    view.setUint16(22, 1, true);       // mono
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * 2, true);
-    view.setUint16(32, 2, true);
-    view.setUint16(34, 16, true);
-    writeString(36, 'data');
-    view.setUint32(40, pcmBytes.length, true);
-
-    // Copy PCM data
-    new Uint8Array(wavBuffer, 44).set(pcmBytes);
-
-    return new Blob([wavBuffer], { type: 'audio/wav' });
-  }
-
-  async generateTTS(text: string, config: TTSConfig): Promise<AudioResult> {
-    const voice = VOICE_OPTIONS.find(v => v.id === config.voiceId) || VOICE_OPTIONS[0];
-
-    const pitchInstruction = config.pitch > 0
-      ? `Speak with a noticeably higher pitched, brighter voice tone (+${config.pitch} semitones higher than normal). `
-      : config.pitch < 0
-      ? `Speak with a noticeably deeper, lower pitched voice tone (${config.pitch} semitones lower than normal). `
-      : '';
-
-    const styleInstruction = config.styleInstruction?.trim() || '';
-    const combinedInstruction = `${pitchInstruction}${styleInstruction}`.trim();
-
-    const textWithInstruction = combinedInstruction
-      ? `[${combinedInstruction}]\n\n${text}`
-      : text;
-
-    const body = {
-      contents: [{ parts: [{ text: textWithInstruction }] }],
-      generationConfig: {
-        responseModalities: ["AUDIO"],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: {
-              voiceName: voice.voiceName || "Puck"
+      const response = await fetch("/api/proxy", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${idToken}`
+        },
+        body: JSON.stringify({
+          apiKey: this.apiKey,
+          model: GEMINI_MODELS.TTS,
+          contents: [{ parts: [{ text: "Hello" }] }],
+          config: {
+            responseModalities: ["AUDIO"],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: {
+                  voiceName: VOICE_OPTIONS[0].voiceName
+                }
+              }
             }
           }
-        }
+        })
+      });
+
+      if (response.ok) {
+        return { isValid: true };
+      } else {
+        const data = await response.json();
+        return { isValid: false, error: data.error || "Proxy verification failed", status: response.status };
       }
+    } catch (err: any) {
+      console.error("GeminiTTSService: Verification failed:", err);
+      return { isValid: false, error: err.message, status: err.status };
+    }
+  }
+
+  async generateTTS(text: string, config: TTSConfig, forceMock: boolean = false): Promise<AudioResult & { isSimulation?: boolean }> {
+    console.log("TTS Service: Starting generation...", { 
+      forceMock, 
+      textLength: text.length,
+      hasKey: !!this.apiKey,
+      keyPreview: this.apiKey ? `${this.apiKey.substring(0, 4)}...` : 'none'
+    });
+
+    const runMock = async () => {
+      console.log("TTS Service: Running in SIMULATION mode");
+      await new Promise(resolve => setTimeout(resolve, 1500)); // Brief delay for realism
+      
+      const dummyBytes = new Uint8Array(24000 * 2 * 5); // 5 seconds of silence for mock
+      const wavBlob = pcmToWav(dummyBytes, 24000);
+      const audioUrl = URL.createObjectURL(wavBlob);
+      const duration = dummyBytes.length / (24000 * 2);
+      const subtitles = this.generateMockSRT(text, duration);
+      const srtContent = subtitles.map(s => 
+        `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}\n`
+      ).join('\n');
+
+      console.log("TTS Service: Simulation generation successful");
+      return {
+        audioUrl,
+        audioData: "MOCK_DATA",
+        srtContent,
+        subtitles,
+        isSimulation: true
+      };
     };
 
-    const data = await this.geminiRequest(GEMINI_MODELS.TTS, body);
-    const audioPart = data.candidates?.[0]?.content?.parts?.[0]?.inlineData;
-    const base64Audio = audioPart?.data;
-
-    if (!base64Audio) {
-      console.error('No audio in response:', JSON.stringify(data));
-      throw new Error('No audio data returned from Gemini candidates. Ensure the model supports TTS and voice config is correct.');
+    if (forceMock) {
+      return await runMock();
     }
 
-    // [PCM to WAV CONVERSION] 
-    // Gemini returns raw PCM at 24000Hz, browsers need WAV headers to play correctly
-    const audioBlob = this.convertPCMToWav(base64Audio, 24000);
-    const audioUrl = URL.createObjectURL(audioBlob);
-    const arrayBuffer = await audioBlob.arrayBuffer();
+    if (!this.apiKey) {
+      console.error("TTS Service: API Key missing, falling back to simulation");
+      return await runMock();
+    }
 
-    // Duration estimation for subtitles
-    const AudioContextClass = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext) as typeof AudioContext;
-    const audioContext = new AudioContextClass();
-    let totalDuration = 0;
+    const voice = VOICE_OPTIONS.find(v => v.id === config.voiceId) || VOICE_OPTIONS[0];
+    const language = voice.name.split(' ')[0];
+    
+    // Request Validation (Error 400 Fix)
+    const speed = Math.max(0.25, Math.min(4.0, parseFloat(String(config.speed)) || 1.0));
+    const pitch = Math.max(-20.0, Math.min(20.0, parseFloat(String(config.pitch)) || 0.0));
+    const volume = Math.max(0, Math.min(100, parseFloat(String(config.volume)) || 80));
+    const volumeGainDb = Math.max(-96.0, Math.min(16.0, -96.0 + (volume / 100) * 112.0));
+
+    console.log("TTS Service: Sending request to Gemini API via Server Proxy...", { speed, pitch, volumeGainDb });
+
     try {
-      const decodedBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
-      totalDuration = decodedBuffer.duration;
-    } catch (e) {
-      console.warn("Failed to decode audio duration, using estimation", e);
-      totalDuration = text.length * 0.08; // Rough estimation
-    } finally {
-      await audioContext.close();
+      const idToken = await getIdToken();
+      if (!idToken) throw new Error("Unauthenticated: No ID Token");
+
+      const response = await fetch("/api/proxy", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${idToken}`
+        },
+        body: JSON.stringify({
+          apiKey: this.apiKey,
+          model: GEMINI_MODELS.TTS,
+          contents: [{ parts: [{ text: `Narrate the following text in a natural, clear, and cinematic ${language} ${voice.gender} voice. 
+          Speaking rate: ${speed.toFixed(2)}x. 
+          Pitch: ${pitch.toFixed(1)}. 
+          Volume: ${volume}%.
+          Ensure word-for-word accuracy and do not summarize: ${text}` }] }],
+          config: {
+            responseModalities: ["AUDIO"],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: {
+                  voiceName: voice.voiceName
+                }
+              }
+            }
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Proxy error: ${response.status}`);
+      }
+
+      const data: GenerateContentResponse = await response.json();
+      console.log("TTS Service: Received response from Proxy");
+
+      const base64Audio = data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+
+      if (!base64Audio) {
+        throw new Error('No audio data received from Gemini');
+      }
+
+      const binaryString = window.atob(base64Audio);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+
+      // Gemini TTS returns raw PCM (24000Hz, 16-bit, mono)
+      const wavBlob = pcmToWav(bytes, 24000);
+      const audioUrl = URL.createObjectURL(wavBlob);
+      
+      // Calculate actual duration from PCM bytes
+      // 24000 samples/sec * 2 bytes/sample (16-bit) * 1 channel (mono)
+      const duration = bytes.length / (24000 * 2);
+      console.log(`TTS Service: Calculated audio duration: ${duration.toFixed(3)}s`);
+      
+      const subtitles = this.generateMockSRT(text, duration);
+      const srtContent = subtitles.map(s => 
+        `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}\n`
+      ).join('\n');
+
+      return {
+        audioUrl,
+        audioData: base64Audio,
+        srtContent,
+        subtitles
+      };
+    } catch (err: any) {
+      console.error("TTS Service: Proxy API call failed. Full error details:", err);
+      // Fallback to mock if it's a network error, timeout, or CORS issue
+      return await runMock();
     }
-
-    const subtitles = generateOptimizedSubtitles(text, totalDuration);
-
-    return {
-      audioUrl,
-      audioData: base64Audio,
-      rawAudio: arrayBuffer,
-      srtContent: subtitles.map(s => `${s.index}\n${s.startTime} --> ${s.endTime}\n${s.text}\n`).join('\n'),
-      subtitles,
-      baseDuration: totalDuration,
-      oneXDuration: totalDuration,
-      speed: 1.0,
-      duration: totalDuration
-    };
   }
 
   static parseSRT(srt: string): SRTSubtitle[] {
@@ -212,158 +194,209 @@ export class GeminiTTSService {
       const lines = block.split('\n');
       if (lines.length < 3) return null;
       const index = parseInt(lines[0]);
-      if (isNaN(index)) return null;
       const [startTime, endTime] = lines[1].split(' --> ');
-      const text = lines.slice(2).join(' ');
+      const text = lines.slice(2).join('\n');
       return { index, startTime, endTime, text };
     }).filter((s): s is SRTSubtitle => s !== null);
   }
 
-  private async generateSRTWithGemini(text: string, totalDuration: number): Promise<SRTSubtitle[]> {
-    try {
-      console.log("TTS Service: Generating optimized subtitles with strict chunking rules...");
-      // Using the deterministic chunking logic to ensure strict adherence to character and line limits
-      const subtitles = generateOptimizedSubtitles(text, totalDuration);
-      
-      if (subtitles.length === 0) {
-        throw new Error("Generated zero subtitles");
-      }
-      
-      return subtitles;
-    } catch (error) {
-      console.error("TTS Service: Failed to generate optimized SRT, falling back to mock:", error);
-      return this.generateMockSRT(text, totalDuration);
-    }
-  }
-
-  private generateMockSRT(text: string, totalDuration: number = 0): SRTSubtitle[] {
-    const words = text.split(/\s+/);
+  private generateMockSRT(text: string, duration: number): SRTSubtitle[] {
+    // 1. Split text into meaningful phrases (Burmese phrase-aware)
+    const segments = this.splitTextIntoPhrases(text);
     const subtitles: SRTSubtitle[] = [];
-    const estimatedTotalDuration = totalDuration > 0 ? totalDuration : text.length * 0.1;
-    const wordsPerSubtitle = 5;
-    const totalChunks = Math.ceil(words.length / wordsPerSubtitle);
-    const durationPerChunk = estimatedTotalDuration / Math.max(1, totalChunks);
+    
+    const TOTAL_DURATION = duration; 
+    const totalChars = text.length;
+    const charPerSec = totalChars / TOTAL_DURATION;
+    
+    const MIN_SEGMENT_DURATION = 1.8; // Minimum 1.8 seconds per segment
+    
+    // First pass: calculate raw durations
+    let rawDurations = segments.map(s => (s.length / totalChars) * TOTAL_DURATION);
+    
+    // Second pass: enforce minimum duration
+    let totalAssigned = 0;
+    let adjustedDurations = rawDurations.map(d => {
+      const adj = Math.max(d, MIN_SEGMENT_DURATION);
+      totalAssigned += adj;
+      return adj;
+    });
+
+    // If total assigned exceeds 40s, we need to scale back (but keep min if possible)
+    // If it's less, we distribute the remainder
+    const scaleFactor = TOTAL_DURATION / totalAssigned;
+    adjustedDurations = adjustedDurations.map(d => d * scaleFactor);
 
     let currentTime = 0;
 
-    for (let i = 0; i < words.length; i += wordsPerSubtitle) {
-      const chunk = words.slice(i, i + wordsPerSubtitle).join(' ');
+    segments.forEach((segmentText, index) => {
+      const formattedText = this.applyInternalLineBreaks(segmentText, 45);
+      const segmentDuration = adjustedDurations[index];
       
+      const startTime = currentTime;
+      let endTime = currentTime + segmentDuration;
+      
+      // Ensure the last segment ends exactly at 40.000
+      if (index === segments.length - 1) {
+        endTime = TOTAL_DURATION;
+      }
+
       subtitles.push({
-        index: Math.floor(i / wordsPerSubtitle) + 1,
-        startTime: formatTime(currentTime),
-        endTime: formatTime(currentTime + durationPerChunk),
-        text: chunk
+        index: index + 1,
+        startTime: formatTime(startTime),
+        endTime: formatTime(endTime),
+        text: formattedText
       });
       
-      currentTime += durationPerChunk;
-    }
+      currentTime = endTime;
+    });
 
     return subtitles;
   }
 
-  /**
-   * Rewrites content to be unique using gemini-2.5-flash with specific styles
-   */
-  async rewriteContent(text: string, style: 'conversational' | 'storytelling' | 'news' | 'poetic' | 'educational' = 'conversational'): Promise<string> {
-    const stylePrompts = {
-      conversational: "Rewrite this Myanmar text to be conversational and natural. Remove formal endings.",
-      storytelling: "Rewrite this Myanmar text in a storytelling style. Make it engaging.",
-      news: "Rewrite this Myanmar text in a formal news anchor style.",
-      poetic: "Rewrite this Myanmar text to be poetic and rhythmic.",
-      educational: "Rewrite this Myanmar text using very simple, short sentences."
-    };
-
-    const prompt = `${stylePrompts[style]}\n\nOriginal Text:\n${text}\n\nOutput only the rewritten Myanmar text.`;
-    const data = await this.geminiRequest(GEMINI_MODELS.REWRITE, {
-      contents: [{ parts: [{ text: prompt }] }]
-    });
-    const textResult = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!textResult) throw new Error('No text generated by Gemini');
-    return textResult.trim();
+  private isBurmeseDependent(char: string): boolean {
+    if (!char) return false;
+    const code = char.charCodeAt(0);
+    // Burmese dependent characters (vowels, medials, asat, etc.)
+    // Range: \u102B-\u103E
+    return (code >= 0x102B && code <= 0x103E);
   }
 
-  async translateContent(text: string): Promise<string> {
-    const prompt = `Translate the following text into natural, cinematic Burmese for high-end video narration: ${text}`;
-    const data = await this.geminiRequest(GEMINI_MODELS.TRANSLATE, {
-      contents: [{ parts: [{ text: prompt }] }]
-    });
-    return (data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+  private getSafeSplitIndex(text: string, index: number): number {
+    let safeIndex = index;
+    while (safeIndex < text.length && this.isBurmeseDependent(text[safeIndex])) {
+      safeIndex++;
+    }
+    return safeIndex;
   }
 
-  private async fileToBase64(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result as string;
-        const base64 = result.split(',')[1];
-        resolve(base64);
-      };
-      reader.onerror = (e) => reject(new Error(`File reading failed: ${e}`));
-      reader.readAsDataURL(file);
-    });
-  }
-
-  async transcribeVideoFile(file: File): Promise<string> {
-    console.log(`[VBS Video] Starting transcription using inline base64 for: ${file.name} (${file.size} bytes)`);
+  private splitTextIntoPhrases(text: string): string[] {
+    // Burmese phrase markers and punctuation
+    const punctuation = ['။', '၊'];
     
-    // Check for size limit (Gemini inline data limit is ~20MB)
-    const MAX_INLINE_SIZE = 20 * 1024 * 1024;
-    if (file.size > MAX_INLINE_SIZE) {
-      throw new Error(`File too large for direct processing (${(file.size / 1024 / 1024).toFixed(1)}MB). Please use a file smaller than 20MB.`);
-    }
+    // First, split by punctuation which are definitive breaks
+    let segments: string[] = [text];
 
-    try {
-      const base64Data = await this.fileToBase64(file);
-      console.log(`[VBS Video] File converted to base64, requesting transcription...`);
+    punctuation.forEach(p => {
+      let nextTemp: string[] = [];
+      segments.forEach(s => {
+        const parts = s.split(p);
+        parts.forEach((part, i) => {
+          let trimmed = part.trim();
+          if (trimmed) {
+            // Add the punctuation back if it's not the last part
+            if (i < parts.length - 1) trimmed += p;
+            nextTemp.push(trimmed);
+          }
+        });
+      });
+      segments = nextTemp;
+    });
 
-      const body = {
-        contents: [{
-          parts: [
-            {
-              inlineData: {
-                mimeType: file.type || 'video/mp4',
-                data: base64Data
-              }
-            },
-            { text: "Transcribe this video in Myanmar language accurately. Output only the transcription text, formatted nicely." }
-          ]
-        }]
-      };
+    // Now further split long segments by spaces, markers or character limits
+    // Increased limit to 70 chars for better phrase integrity as requested
+    const MAX_PHRASE_CHARS = 70; 
+    const MIN_PHRASE_CHARS = 20;
+    const markers = ['ကြောင့်', 'ပြီး', 'ဆို', 'ကို', 'မှာ', 'ဖြင့်', 'လျှင်', 'သော်လည်း', 'သဖြင့်', '၍', '၏', '၌', 'မှ', 'သို့', 'နှင့်', 'လည်း', 'ပင်', 'သာ', 'ကော', 'ပါ', 'ဦး', 'တော့', 'လေ', 'ပေါ့', 'နော်', 'ဖြစ်', 'သည်', '၏', 'က', 'ကို', 'မှ'];
 
-      const data = await this.geminiRequest(GEMINI_MODELS.VIDEO, body);
-      const resultText = (data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
-      
-      if (!resultText) {
-        console.warn(`[VBS Video] Gemini returned empty response`);
-        return "No transcription could be generated for this video.";
+    let intermediateSegments: string[] = [];
+    segments.forEach(s => {
+      if (s.length <= MAX_PHRASE_CHARS) {
+        intermediateSegments.push(s);
+      } else {
+        let subCurrent = s;
+        while (subCurrent.length > MAX_PHRASE_CHARS) {
+          // 1. Try splitting at space first for phrase integrity
+          let splitIdx = subCurrent.lastIndexOf(' ', MAX_PHRASE_CHARS);
+          
+          // 2. If no space, try markers
+          if (splitIdx === -1) {
+            for (const marker of markers) {
+              const idx = subCurrent.lastIndexOf(marker, MAX_PHRASE_CHARS);
+              if (idx > splitIdx) splitIdx = idx + marker.length;
+            }
+          }
+
+          if (splitIdx !== -1 && splitIdx > 10) {
+            // Ensure we don't split a cluster even at a marker/space
+            splitIdx = this.getSafeSplitIndex(subCurrent, splitIdx);
+            intermediateSegments.push(subCurrent.substring(0, splitIdx).trim());
+            subCurrent = subCurrent.substring(splitIdx).trim();
+          } else {
+            // 3. Fallback to character limit with safe split
+            const safeIdx = this.getSafeSplitIndex(subCurrent, MAX_PHRASE_CHARS);
+            intermediateSegments.push(subCurrent.substring(0, safeIdx).trim());
+            subCurrent = subCurrent.substring(safeIdx).trim();
+          }
+        }
+        if (subCurrent) intermediateSegments.push(subCurrent);
       }
+    });
 
-      console.log(`[VBS Video] Transcription successful!`);
-      return resultText;
-    } catch (error) {
-      console.error(`[VBS Video] Error in transcribeVideoFile:`, error);
-      throw error;
+    // Final pass: Combine segments that are too short to ensure natural reading flow
+    let finalSegments: string[] = [];
+    let currentBuffer = "";
+
+    intermediateSegments.forEach((seg) => {
+      if (currentBuffer === "") {
+        currentBuffer = seg;
+      } else if (currentBuffer.length + seg.length < MAX_PHRASE_CHARS) {
+        // Combine if the result is still within a reasonable phrase length
+        // Use space if it's not already ending with punctuation
+        const separator = /[။၊]$/.test(currentBuffer) ? "" : " ";
+        currentBuffer += separator + seg;
+      } else {
+        finalSegments.push(currentBuffer.trim());
+        currentBuffer = seg;
+      }
+    });
+    
+    if (currentBuffer) {
+      if (currentBuffer.length < MIN_PHRASE_CHARS && finalSegments.length > 0) {
+        const separator = /[။၊]$/.test(finalSegments[finalSegments.length - 1]) ? "" : " ";
+        finalSegments[finalSegments.length - 1] += separator + currentBuffer;
+      } else {
+        finalSegments.push(currentBuffer.trim());
+      }
     }
+
+    return finalSegments.filter(s => s.length > 0);
   }
 
-  async generateImage(prompt: string): Promise<string> {
-    const body = {
-      contents: [{ parts: [{ text: `Generate thumbnail: ${prompt}` }] }],
-      generationConfig: {
-        responseModalities: ["TEXT", "IMAGE"]
-      }
-    };
+  private splitTextIntoSegments(text: string, maxWords: number, maxChars: number): string[] {
+    // This is now a legacy method, but we'll keep it for compatibility if needed
+    return this.splitTextIntoPhrases(text);
+  }
 
-    const data = await this.geminiRequest(GEMINI_MODELS.IMAGE, body);
+  private applyInternalLineBreaks(text: string, maxCharsPerLine: number): string {
+    if (text.length <= maxCharsPerLine) return text;
     
-    for (const part of data.candidates?.[0]?.content?.parts || []) {
-      if (part.inlineData?.mimeType?.startsWith('image/')) {
-        return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+    // Find a good place to split (e.g., middle space)
+    const mid = Math.floor(text.length / 2);
+    const spaceBefore = text.lastIndexOf(' ', mid);
+    const spaceAfter = text.indexOf(' ', mid);
+    
+    let splitIdx = -1;
+    if (spaceBefore !== -1 && spaceAfter !== -1) {
+      splitIdx = (mid - spaceBefore < spaceAfter - mid) ? spaceBefore : spaceAfter;
+    } else {
+      splitIdx = spaceBefore !== -1 ? spaceBefore : spaceAfter;
+    }
+    
+    if (splitIdx !== -1) {
+      const safeSplitIdx = this.getSafeSplitIndex(text, splitIdx);
+      // If we adjusted the split index, we might have moved past a space, 
+      // so we handle the newline carefully
+      if (safeSplitIdx === splitIdx) {
+        return text.substring(0, splitIdx).trim() + '\n' + text.substring(splitIdx + 1).trim();
+      } else {
+        return text.substring(0, safeSplitIdx).trim() + '\n' + text.substring(safeSplitIdx).trim();
       }
     }
-
-    throw new Error("No image data received from Gemini candidates");
+    
+    // No space found, split at mid but ensure it's safe
+    const safeMid = this.getSafeSplitIndex(text, mid);
+    if (safeMid >= text.length - 1) return text; // Don't split if it's too close to the end
+    return text.substring(0, safeMid).trim() + '\n' + text.substring(safeMid).trim();
   }
 }
-

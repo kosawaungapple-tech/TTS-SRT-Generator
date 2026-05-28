@@ -1,135 +1,145 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // ==========================================
-    // 0. GLOBAL SAFETY NET
-    // ==========================================
-    match /{document=**} {
-      allow read, write: if false;
-    }
 
-    // ==========================================
-    // 1. PRIMITIVE HELPERS
-    // ==========================================
-    function isSignedIn() {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: accessCode (e.g., VIP-0001)
+    // Fields:
+    //   - id: string (Access ID)
+    //   - name: string
+    //   - createdAt: string
+    //   - expiryDate: string
+    //   - isActive: boolean
+    //   - api_key_stored: string (optional)
+    //
+    // Collection: config
+    // Document ID: "main"
+    // Fields:
+    //   - gemini_api_key: string
+    //   - rapidapi_key: string
+    //   - openai_api_key: string
+    //   - isSystemLive: boolean
+    //   - allow_global_key: boolean
+    //
+    // Collection: sessions
+    // Document ID: uid
+    // Fields:
+    //   - accessCode: string
+    //   - createdAt: string
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
       return request.auth != null;
     }
 
-    function isOwner(uid) {
-      return isSignedIn() && request.auth.uid == uid;
+    function getAccessCode() {
+      return exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) 
+        ? get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode 
+        : null;
     }
 
-    function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
-    function incoming() {
-      return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
-    }
-
-    // Helper to check for Master Admin status
-    // Master Admin is anyone who has a session linked to the 'saw_vlogs_2026' access code.
     function isAdmin() {
-      return isSignedIn() && 
-             exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) &&
-             get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == 'saw_vlogs_2026';
+      return isAuthenticated() && 
+        ((request.auth.token.email == "specialmyanmar95@gmail.com" && request.auth.token.email_verified == true) ||
+         (exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == 'saw_vlogs_2026'));
     }
 
-    // ==========================================
-    // 2. ENTITY VALIDATION HELPERS
-    // ==========================================
-    
-    function isValidVBSUserControl(data) {
-      return data.vbsId is string && data.vbsId.size() <= 64 &&
-             data.dailyUsage is number && data.dailyUsage >= 0 &&
-             (data.lastUsedDate is string || data.lastUsedDate == null) &&
-             data.isUnlimited is bool &&
-             data.isBlocked is bool &&
-             (data.membershipStatus == 'standard' || data.membershipStatus == 'premium' || data.membershipStatus == null);
+    function isDocOwner(userId) {
+      return isAuthenticated() && getAccessCode() == userId;
     }
 
-    function isValidActivityLog(data) {
-      return data.vbsId is string && data.vbsId.size() <= 64 &&
-             data.type is string && data.type.size() <= 32 &&
-             data.details is string && data.details.size() <= 1024 &&
-             data.createdAt is timestamp;
+    function isValidUser(data) {
+      return data.keys().hasAll(['id', 'name', 'createdAt', 'expiryDate', 'isActive']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() < 50 &&
+             data.name is string && data.name.size() < 100 &&
+             data.createdAt is string &&
+             data.expiryDate is string &&
+             data.isActive is bool &&
+             (!('api_key_stored' in data) || (data.api_key_stored is string && data.api_key_stored.size() < 200));
+    }
+
+    function isValidConfig(data) {
+      return data.keys().hasAll(['isSystemLive', 'allow_global_key']) &&
+             data.isSystemLive is bool &&
+             data.allow_global_key is bool &&
+             (!('gemini_api_key' in data) || (data.gemini_api_key is string && data.gemini_api_key.size() < 200)) &&
+             (!('rapidapi_key' in data) || (data.rapidapi_key is string && data.rapidapi_key.size() < 200)) &&
+             (!('openai_api_key' in data) || (data.openai_api_key is string && data.openai_api_key.size() < 200)) &&
+             (!('total_generations' in data) || data.total_generations is number);
     }
 
     function isValidSession(data) {
-      return data.accessCode is string && data.accessCode.size() <= 64 &&
-             data.createdAt is timestamp;
+      return data.keys().hasAll(['accessCode', 'createdAt']) &&
+             data.accessCode is string && data.accessCode.size() > 0 && data.accessCode.size() < 50 &&
+             data.createdAt is string;
     }
 
-    function isValidHistoryItem(data) {
-      return data.userId is string && data.userId.size() <= 64 &&
-             data.audioStorageUrl is string && data.audioStorageUrl.size() <= 1024 &&
-             data.createdAt is timestamp;
+    function isValidRule(data) {
+      return data.keys().hasAll(['original', 'replacement']) &&
+             data.original is string && data.original.size() > 0 && data.original.size() < 500 &&
+             data.replacement is string && data.replacement.size() > 0 && data.replacement.size() < 500;
     }
 
-    // ==========================================
-    // 3. COLLECTION RULES
-    // ==========================================
+    function isValidHistory(data) {
+      return data.keys().hasAll(['userId', 'text', 'createdAt']) &&
+             data.userId is string && data.userId.size() > 0 &&
+             data.text is string && data.text.size() < 10000 &&
+             data.createdAt is string &&
+             (!('audioStorageUrl' in data) || (data.audioStorageUrl is string && data.audioStorageUrl.size() < 1000)) &&
+             (!('srtStorageUrl' in data) || (data.srtStorageUrl is string && data.srtStorageUrl.size() < 1000));
+    }
 
-    // SESSION SYNC: Critical for Auth & Rules
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
     match /sessions/{uid} {
-      allow get: if isOwner(uid);
-      allow write: if isOwner(uid) && isValidSession(incoming());
-      allow list, delete: if isAdmin();
+      allow read: if isAuthenticated() && request.auth.uid == uid;
+      allow write: if isAuthenticated() && request.auth.uid == uid && isValidSession(request.resource.data);
     }
 
-    // USER CONTROLS: Access codes and usage limits
-    match /user_controls/{vbsId} {
-      // Allow get for anyone signed in (needed for login check)
-      allow get: if isSignedIn() && isValidId(vbsId);
-      
-      // Admin only for management
+    match /users/{userId} {
+      // Anyone can try to get a specific user to log in (needed for Access Code check)
+      allow get: if true;
+      // Only admins can list all users
       allow list: if isAdmin();
       
-      // Allow creation of master codes IF they don't exist (Bootstrap phase)
-      allow create: if (isAdmin() || vbsId == 'saw_vlogs_2026' || vbsId == 'SAW-ADMIN-2026') && isValidVBSUserControl(incoming());
-      
-      allow update: if (isAdmin() || (isSignedIn() && incoming().diff(existing()).affectedKeys().hasOnly(['dailyUsage', 'lastUsedDate', 'updatedAt', 'lastLoginAt']))) && isValidVBSUserControl(incoming());
-      
+      // Admins can create/update/delete users
+      allow create: if isAdmin() && isValidUser(request.resource.data);
+      allow update: if (isAdmin() || (isAuthenticated() && isDocOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['api_key_stored']))) && isValidUser(request.resource.data);
       allow delete: if isAdmin();
     }
 
-    // SETTINGS: Global configuration
-    match /settings/{docId} {
-      allow get: if isSignedIn();
-      allow list: if isSignedIn();
-      allow write: if isAdmin();
+    match /config/main {
+      // System config should be readable by everyone to check if system is live
+      allow read: if true;
+      allow write: if isAdmin() && isValidConfig(request.resource.data);
     }
 
-    // GLOBAL RULES: Phonetic mappings
     match /globalRules/{ruleId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      // Rules should be readable by everyone to apply them
+      allow read: if true;
+      allow write: if isAdmin() && isValidRule(request.resource.data);
     }
 
-    // HISTORY: User voiceover records
     match /history/{historyId} {
-      // Users can list their own history
-      allow list: if isSignedIn() && (isAdmin() || resource.data.userId == get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode);
-      allow get: if isSignedIn() && (isAdmin() || resource.data.userId == get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode);
-      allow create: if isSignedIn() && isValidHistoryItem(incoming()) && (isAdmin() || incoming().userId == get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode);
-      allow update: if isAdmin();
-      allow delete: if isAdmin();
+      allow read: if isAuthenticated() && (resource.data.userId == getAccessCode() || isAdmin());
+      allow create: if isAuthenticated() && request.resource.data.userId == getAccessCode() && isValidHistory(request.resource.data);
+      allow update: if isAuthenticated() && (resource.data.userId == getAccessCode() || isAdmin()) && isValidHistory(request.resource.data);
+      allow delete: if isAuthenticated() && (resource.data.userId == getAccessCode() || isAdmin());
     }
 
-    // SYSTEM CONFIG: High sensitivity config
-    match /system_config/{docId} {
-      allow read, write: if isAdmin();
-    }
-
-    // ACTIVITY LOGS: Audit trails
-    match /activity_logs/{logId} {
-      allow read: if isAdmin();
-      allow create: if isSignedIn() && isValidActivityLog(incoming());
+    match /test/{docId} {
+      allow read: if true;
+      allow write: if false;
     }
   }
 }

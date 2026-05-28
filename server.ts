@@ -1,27 +1,24 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
-import { getFirestore } from "firebase-admin/firestore";
-import { getAuth, DecodedIdToken } from "firebase-admin/auth";
-import { initializeApp, getApps, getApp } from "firebase-admin/app";
+import { fileURLToPath } from "url";
+import admin from "firebase-admin";
 import firebaseConfig from "./firebase-applet-config.json" with { type: "json" };
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 // Initialize Firebase Admin
-const app = getApps().length 
-  ? getApp() 
-  : initializeApp({
-      projectId: firebaseConfig.projectId,
-    });
-
-const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-const auth = getAuth(app);
-
-interface AuthenticatedRequest extends express.Request {
-  user?: DecodedIdToken;
+if (!admin.apps.length) {
+  admin.initializeApp({
+    projectId: firebaseConfig.projectId,
+  });
 }
 
+const db = admin.firestore();
+
 // Middleware to verify Firebase ID Token
-const authenticate = async (req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) => {
+const authenticate = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthenticated: Missing authorization header' });
@@ -29,11 +26,11 @@ const authenticate = async (req: AuthenticatedRequest, res: express.Response, ne
 
   const idToken = authHeader.split('Bearer ')[1];
   try {
-    const decodedToken = await auth.verifyIdToken(idToken);
-    req.user = decodedToken;
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    (req as any).user = decodedToken;
     next();
-  } catch (err) {
-    console.error('Error verifying Firebase ID token:', err);
+  } catch (error) {
+    console.error('Error verifying Firebase ID token:', error);
     res.status(401).json({ error: 'Unauthenticated: Invalid token' });
   }
 };
@@ -98,11 +95,8 @@ async function startServer() {
   });
 
   // Example protected route
-  app.get("/api/user/profile", authenticate, async (req: AuthenticatedRequest, res) => {
-    const userId = req.user?.uid;
-    if (!userId) {
-      return res.status(401).json({ error: 'Unauthenticated' });
-    }
+  app.get("/api/user/profile", authenticate, async (req, res) => {
+    const userId = (req as any).user.uid;
     try {
       const userDoc = await db.collection('users').doc(userId).get();
       if (userDoc.exists) {
@@ -110,9 +104,41 @@ async function startServer() {
       } else {
         res.status(404).json({ error: 'User not found' });
       }
-    } catch (err) {
-      console.error("Profile fetch error:", err);
+    } catch (error) {
       res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // Gemini API Proxy
+  app.post("/api/proxy", authenticate, async (req, res) => {
+    const { apiKey, model, contents, config } = req.body;
+
+    if (!apiKey) {
+      return res.status(400).json({ error: "Missing API Key" });
+    }
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ contents, ...config })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        console.error("Gemini Proxy: API Error:", data);
+        return res.status(response.status).json(data);
+      }
+
+      res.json(data);
+    } catch (error) {
+      console.error("Gemini Proxy: Network Error:", error);
+      res.status(500).json({ error: "Failed to proxy request to Gemini" });
     }
   });
 
