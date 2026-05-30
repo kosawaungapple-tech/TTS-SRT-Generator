@@ -317,6 +317,7 @@ export const VideoStudio: React.FC = () => {
 
       const response = await fetch("/api/video/process", {
         method: "POST",
+        credentials: "include",
         body: formData,
       });
 

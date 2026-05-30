@@ -145,13 +145,27 @@ export async function renderProcessedAudio(
   const audioCtx = new AudioContextClass();
   
   console.log(`audioUtils: Decoding source audio blob (${audioBlob.size} bytes, type: ${audioBlob.type})...`);
+  
   let audioBuffer: AudioBuffer;
   try {
-    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    // Attempt standard decoding first (works for WAV, MP3, etc.)
+    // We slice the buffer because decodeAudioData usually neuters the source buffer
+    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
   } catch (decodeErr) {
-    console.error("audioUtils: Failed to decode audio data for processing:", decodeErr);
-    await audioCtx.close();
-    throw decodeErr;
+    // If decoding fails, it might be raw PCM (L16) without a header, common with Gemini TTS output
+    console.warn("audioUtils: Standard decoding failed, attempting to wrap as raw PCM (L16) with WAV header...");
+    try {
+      const pcmData = new Uint8Array(arrayBuffer);
+      // Gemini 3.1 TTS returns 24000Hz, 16-bit Mono PCM
+      const wavBlob = pcmToWav(pcmData, 24000);
+      const wavBuffer = await wavBlob.arrayBuffer();
+      audioBuffer = await audioCtx.decodeAudioData(wavBuffer);
+      console.log("audioUtils: Successfully decoded audio after wrapping raw PCM as WAV.");
+    } catch (pcmErr) {
+      console.error("audioUtils: Failed to decode audio even after wrapping as PCM/WAV:", pcmErr);
+      await audioCtx.close();
+      throw decodeErr; // Throw original decoding error
+    }
   }
   await audioCtx.close();
   

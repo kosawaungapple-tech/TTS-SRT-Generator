@@ -42,6 +42,7 @@ export default function App() {
     pitch: 0,
     volume: 0,
     styleInstruction: '',
+    selectedModel: 'gemini-3.1-flash-lite',
   });
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessingSpeed, setIsProcessingSpeed] = useState(false);
@@ -342,8 +343,10 @@ export default function App() {
   // Request notification permission on first interaction
   useEffect(() => {
     const requestPermission = () => {
-      if (Notification.permission === 'default') {
-        Notification.requestPermission();
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        if (window.Notification.permission === 'default') {
+          window.Notification.requestPermission();
+        }
       }
       window.removeEventListener('click', requestPermission);
     };
@@ -1001,7 +1004,7 @@ export default function App() {
           saveHistory();
         }
       } catch (err: unknown) {
-        const error = err as { message?: string, name?: string };
+        const error = err as { message?: string, name?: string, status?: number };
         if (error.name === 'AbortError') {
           setIsLoading(false);
           setAbortController(null);
@@ -1009,7 +1012,31 @@ export default function App() {
         }
 
         console.error("Gemini TTS failed:", err);
-        setError("AI generation failed. Please try again later.");
+        
+        // Error handling & fallback tips:
+        // If a user encounters a 429 Quota Exceeded error while using gemini-3.1-flash-tts,
+        // show a Toast/Alert notification: "ယခုဆာဗာ Quota ပြည့်သွားပါသဖြင့် 'Gemini 3.1 Flash Lite' သို့ ပြောင်းလဲအသုံးပြုပေးပါ။"
+        const isQuotaExceeded = 
+          (error.status === 429) || 
+          (error.message && (
+            error.message.includes('429') || 
+            error.message.toLowerCase().includes('quota') || 
+            error.message.toLowerCase().includes('rate limit') || 
+            error.message.includes('RESOURCES_EXHAUSTED')
+          ));
+
+        const isTtsModel = config.selectedModel === 'gemini-3.1-flash-tts' || 
+                           config.selectedModel === 'gemini-3.1-flash-tts-preview';
+
+        if (isQuotaExceeded && isTtsModel) {
+          const quotaMsg = "ယခုဆာဗာ Quota ပြည့်သွားပါသဖြင့် 'Gemini 3.1 Flash Lite' သို့ ပြောင်းလဲအသုံးပြုပေးပါ။";
+          setError(quotaMsg);
+          setToast({ message: quotaMsg, type: 'error' });
+          setTimeout(() => setToast(null), 8000);
+        } else {
+          setError(error.message || "AI generation failed. Please try again later.");
+        }
+        
         setIsLoading(false);
         setAbortController(null);
       }

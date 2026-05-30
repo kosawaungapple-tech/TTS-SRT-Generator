@@ -137,6 +137,7 @@ export interface TTSConfig {
   highFidelity?: boolean;
   fastTrack?: boolean;
   effects?: Record<string, boolean | number | string>;
+  selectedModel?: string;
 }
 
 export interface AudioResult {

@@ -1,5 +1,5 @@
 import React, { useMemo, useEffect, useState } from 'react';
-import { ChevronDown, Volume2, Wand2 } from 'lucide-react';
+import { ChevronDown, Volume2, Wand2, Server } from 'lucide-react';
 import { TTSConfig } from '../types';
 import { VOICE_OPTIONS } from '../constants';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -79,6 +79,36 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
     <div className="bg-white/5 backdrop-blur-xl rounded-2xl sm:rounded-3xl p-4 sm:p-8 border border-white/10 shadow-2xl relative overflow-hidden group">
       <div className="absolute top-0 left-0 w-64 h-64 bg-amber-400/5 blur-[100px] -z-10 group-hover:bg-amber-400/10 transition-colors duration-1000" />
       <div className="space-y-8 sm:space-y-10">
+        {/* AI Model Server Selection */}
+        <div className="group/item">
+          <label className="flex items-center gap-3 text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 sm:mb-4 group-hover/item:text-amber-500 transition-colors">
+            <div className="p-1.5 sm:p-2 bg-amber-400/10 rounded-lg text-amber-500">
+              <Server size={14} className="sm:w-4 sm:h-4" />
+            </div>
+            AI Model / ဆာဗာရွေးချယ်ရန်
+          </label>
+          <div className="relative">
+            <select
+              value={config.selectedModel || 'gemini-3.1-flash-lite'}
+              onChange={(e) => handleChange('selectedModel', e.target.value)}
+              className="w-full bg-black/40 border border-white/5 rounded-xl px-4 sm:px-5 py-3.5 sm:py-4 text-sm sm:text-base text-white appearance-none focus:outline-none focus:ring-1 focus:ring-amber-400/30 focus:border-amber-400/50 transition-all cursor-pointer font-medium"
+            >
+              <option value="gemini-3.1-flash-lite" className="bg-black text-white">
+                Gemini 3.1 Flash Lite (High Limit / ညွှန်းဆိုချက်)
+              </option>
+              <option value="gemini-3.1-flash-tts" className="bg-black text-white">
+                Gemini 3.1 Flash TTS (Standard Preview)
+              </option>
+              <option value="gemini-2.5-flash" className="bg-black text-white">
+                Gemini 2.5 Flash (Legacy Text + OpenAI TTS Fallback)
+              </option>
+            </select>
+            <div className="absolute right-8 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500 group-hover/item:text-amber-500 transition-colors">
+              <ChevronDown size={24} />
+            </div>
+          </div>
+        </div>
+
         {/* Voice Selection */}
         <div className="group/item">
           <label className="flex items-center gap-3 text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 sm:mb-4 group-hover/item:text-amber-500 transition-colors">

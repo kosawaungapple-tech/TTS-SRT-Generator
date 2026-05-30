@@ -34,7 +34,7 @@ export class GeminiTTSService {
 
   private async geminiRequest(
     modelName: string, 
-    body: { contents: unknown[]; generationConfig?: unknown }, 
+    body: { contents: unknown[]; generationConfig?: unknown; selectedModel?: string; isTts?: boolean }, 
     retryCount: number = 0,
     onRetry?: (seconds: number, message: string) => void
   ): Promise<GeminiResponse> {
@@ -58,11 +58,14 @@ export class GeminiTTSService {
           response = await fetch('/api/gemini/proxy', {
             method: 'POST',
             headers,
+            credentials: 'include',
             body: JSON.stringify({
               model: modelName,
+              selectedModel: body.selectedModel || modelName,
               contents: body.contents,
               config: body.generationConfig,
-              apiKey: key
+              apiKey: key,
+              isTts: body.isTts || false
             })
           });
         } catch (fetchErr) {
@@ -86,8 +89,13 @@ export class GeminiTTSService {
           // Handle non-JSON response (likely an HTML error page from proxy or infrastructure)
           const text = await response.text();
           const isStartingPage = text.includes("<title>Starting Server...") || text.includes("Starting Server...");
+          const isCookieCheck = text.includes("Cookie check") || text.includes("<title>Cookie check</title>");
           
           console.error(`Gemini Proxy: Non-JSON response received [${response.status}]:`, text.substring(0, 500));
+          
+          if (isCookieCheck) {
+            throw new Error("(ဘရောက်ဆာ၏ Cookie ကန့်သတ်ချက်ကြောင့် အလုပ်မလုပ်ပါက ညာဘက်အပေါ်ရှိ 'Open in a new tab' ကို နှိပ်ပြီး အသုံးပြုပေးပါ) Iframe session blocked by browser cookie restrictions. Please click 'Open in a new tab' at top-right to authorize and use the application.");
+          }
           
           // Retry on certain errors or platform splash pages (Starting Server...)
           if ((response.status === 200 || response.status === 500 || response.status === 503 || response.status === 504 || response.status === 502) && retryCount < MAX_RETRIES) {
@@ -359,6 +367,8 @@ export class GeminiTTSService {
       ? `[${combinedInstruction}]\n\n${audioText}`
       : audioText;
 
+    const selectedModel = config.selectedModel || GEMINI_MODELS.TTS;
+
     const body = {
       contents: [{ parts: [{ text: textWithInstruction }] }],
       generationConfig: {
@@ -370,15 +380,46 @@ export class GeminiTTSService {
             }
           }
         }
-      }
+      },
+      selectedModel: selectedModel,
+      isTts: true
     };
 
-    const data = await this.geminiRequest(GEMINI_MODELS.TTS, body, 0, onRetry);
-    const audioPart = data.candidates?.[0]?.content?.parts?.[0]?.inlineData;
-    const base64Audio = audioPart?.data;
+    const data = await this.geminiRequest(selectedModel, body, 0, onRetry);
+    
+    // Search all parts in the candidate content to find inlineData
+    const parts = data.candidates?.[0]?.content?.parts || [];
+    let audioPart = null;
+    for (const part of parts) {
+      if (part.inlineData) {
+        audioPart = part.inlineData;
+        break;
+      }
+    }
+
+    let base64Audio = audioPart?.data;
     const mimeType = audioPart?.mimeType || 'audio/pcm';
 
-    if (!base64Audio) {
+    // Handle serialized Buffer objects safely
+    if (
+      base64Audio && 
+      typeof base64Audio === 'object' && 
+      'type' in base64Audio && 
+      'data' in base64Audio && 
+      (base64Audio as Record<string, unknown>).type === 'Buffer' && 
+      Array.isArray((base64Audio as Record<string, unknown>).data)
+    ) {
+      console.log('TTS Service: Received serialized Buffer object, converting to base64 string...');
+      const bytes = new Uint8Array((base64Audio as Record<string, unknown>).data as number[]);
+      let binary = '';
+      const len = bytes.byteLength;
+      for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      base64Audio = btoa(binary);
+    }
+
+    if (!base64Audio || typeof base64Audio !== 'string') {
       console.error('No audio in response:', JSON.stringify(data));
       throw new Error('No audio data returned from Gemini');
     }

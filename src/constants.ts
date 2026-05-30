@@ -30,7 +30,7 @@ export const GEMINI_MODELS = {
   REWRITE: 'gemini-2.5-flash',
   TRANSLATE: 'gemini-2.5-flash',
   IMAGE: 'gemini-2.5-flash',
-  TTS: 'gemini-2.5-flash-preview-tts',
+  TTS: 'gemini-3.1-flash-tts-preview',
   VIDEO: 'gemini-2.5-flash'
 };
 

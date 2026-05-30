@@ -309,19 +309,117 @@ async function startServer() {
     }
   });
 
+  // Helper function to recursively convert server-side Buffer objects to Base64 strings for serialization
+  function convertBuffersToBase64(obj: unknown): unknown {
+    if (!obj) return obj;
+    if (Buffer.isBuffer(obj)) {
+      return obj.toString("base64");
+    }
+    if (Array.isArray(obj)) {
+      return obj.map(convertBuffersToBase64);
+    }
+    if (typeof obj === "object") {
+      const newObj: Record<string, unknown> = {};
+      const objRec = obj as Record<string, unknown>;
+      for (const key of Object.keys(objRec)) {
+        newObj[key] = convertBuffersToBase64(objRec[key]);
+      }
+      return newObj;
+    }
+    return obj;
+  }
+
   // Gemini Proxy Endpoint
   // This allows authorized users to access Gemini via this server.
   // It handles secure server-side API key management for admin keys.
   app.post("/api/gemini/proxy", authenticate, async (req, res) => {
-    console.log(`[Proxy] Hit /api/gemini/proxy. Model: ${req.body?.model}`);
-    const { model, contents, config, apiKey: providedKey } = req.body;
+    console.log(`[Proxy] Hit /api/gemini/proxy. Model: ${req.body?.model}, SelectedModel: ${req.body?.selectedModel}`);
+    const { model, contents, config, apiKey: providedKey, selectedModel, isTts } = req.body;
     
-    // Priority: 1. Key provided in body (Personal Key), 2. Admin Pool Keys from Firestore
-    const apiKey = providedKey;
+    let targetModel = selectedModel || model;
     
-    if (!model) {
+    if (!targetModel) {
       return res.status(400).json({ error: "Model name is required" });
     }
+
+    // Map friendly value to actual preview modelName only for TTS requests
+    if (isTts) {
+      if (targetModel === 'gemini-3.1-flash-tts' || targetModel === 'gemini-3.1-flash-tts-preview') {
+        targetModel = 'gemini-3.1-flash-tts-preview';
+      }
+    }
+
+    const isTwoStepTts = isTts && (targetModel === 'gemini-2.5-flash' || targetModel === 'gemini-3.1-flash-lite' || targetModel === 'gemini-3.1-flash-lite-8b');
+
+    // Priority: 1. Key provided in body (Personal Key), 2. Admin Pool Keys from Firestore
+    const apiKey = providedKey;
+
+    const executeWithClient = async (ai: GoogleGenAI): Promise<unknown> => {
+      if (isTwoStepTts) {
+        let firstStepModel = targetModel;
+        // Optimization: For 3.1 Lite, use it directly as it has high quota. 
+        // We only fallback to 2.5 flash if needed, but 3.1 lite is preferred if selected.
+        if (firstStepModel === 'gemini-3.1-flash-lite-8b') {
+          firstStepModel = 'gemini-3.1-flash-lite';
+        }
+
+        // Step 1: Clean/Strip audio args to prevent 400 Bad Request
+        const textOnlyConfig: Record<string, unknown> = config ? { ...config } : {};
+        delete textOnlyConfig.responseModalities;
+        delete textOnlyConfig.speechConfig;
+        delete textOnlyConfig.responseMimeType;
+
+        console.log(`[Proxy] Two-step TTS Step 1: Generating text with standard model: ${firstStepModel}`);
+        const textResult = await ai.models.generateContent({
+          model: firstStepModel,
+          contents,
+          config: textOnlyConfig
+        });
+
+        const generatedText = textResult.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!generatedText) {
+          throw new Error("No text generated from standard Gemini model in Step 1 of TTS pipeline");
+        }
+
+        console.log(`[Proxy] Two-step TTS Step 1 text output received: "${generatedText.substring(0, 50)}..."`);
+
+        // Grab any parenthesized or bracketed style instruction from prompt to carry forward
+        let styleMatch = "";
+        const originalText = contents?.[0]?.parts?.[0]?.text || "";
+        if (typeof originalText === "string" && originalText.startsWith("[")) {
+          const closingBracketIndex = originalText.indexOf("]");
+          if (closingBracketIndex !== -1) {
+            styleMatch = originalText.substring(0, closingBracketIndex + 1);
+          }
+        }
+
+        const ttsText = styleMatch ? `${styleMatch}\n\n${generatedText}` : generatedText;
+        const ttsContents = [{ parts: [{ text: ttsText }] }];
+
+        const ttsConfig: Record<string, unknown> = config ? { ...config } : {};
+        ttsConfig.responseModalities = ["AUDIO"];
+
+        console.log(`[Proxy] Two-step TTS Step 2: Pitching to dedicated audio pipeline gemini-3.1-flash-tts-preview`);
+        const ttsResult = await ai.models.generateContent({
+          model: "gemini-3.1-flash-tts-preview",
+          contents: ttsContents,
+          config: ttsConfig
+        });
+
+        return ttsResult;
+      } else {
+        const updatedConfig: Record<string, unknown> = config ? { ...config } : {};
+        if (isTts) {
+          updatedConfig.responseModalities = ["AUDIO"];
+        }
+
+        return await ai.models.generateContent({
+          model: targetModel,
+          contents,
+          config: updatedConfig
+        });
+      }
+    };
 
     try {
       // If no personal key provided, we fetch and rotate through admin keys from Firestore
@@ -352,14 +450,10 @@ async function startServer() {
             
             try {
               const ai = new GoogleGenAI({ apiKey: currentKey });
-              console.log(`[Proxy] Requesting model: ${model} with Admin Pool Key (${i + 1}/${maxAttempts})`);
+              console.log(`[Proxy] Requesting model: ${targetModel} with Admin Pool Key (${i + 1}/${maxAttempts})`);
               
-              const result = await ai.models.generateContent({
-                model: model,
-                contents,
-                config
-              });
-              return res.json(result);
+              const result = await executeWithClient(ai);
+              return res.json(convertBuffersToBase64(result));
             } catch (err: unknown) {
               lastError = err as Error;
               const errorObj = err as { status?: number; statusCode?: number; response?: { status: number }; message?: string };
@@ -394,14 +488,10 @@ async function startServer() {
       } else {
         // PERSONAL KEY MODE
         const ai = new GoogleGenAI({ apiKey });
-        console.log(`[Proxy] Requesting model: ${model} with Personal Key: ${apiKey.substring(0, 4)}...`);
+        console.log(`[Proxy] Requesting model: ${targetModel} with Personal Key: ${apiKey.substring(0, 4)}...`);
         
-        const result = await ai.models.generateContent({
-          model: model,
-          contents,
-          config
-        });
-        return res.json(result);
+        const result = await executeWithClient(ai);
+        return res.json(convertBuffersToBase64(result));
       }
     } catch (error: unknown) {
       console.error("[Proxy] Gemini Error:", error);
