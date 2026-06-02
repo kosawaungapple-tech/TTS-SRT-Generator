@@ -432,12 +432,17 @@ export class GeminiTTSService {
 
     // Only wrap in WAV header if it's raw PCM
     let audioBlob: Blob;
-    if (mimeType.includes('pcm')) {
+    let finalMimeType: string;
+    const isRawPcm = mimeType.toLowerCase().includes('pcm') || mimeType.toLowerCase().includes('l16');
+    
+    if (isRawPcm) {
       console.log(`TTS Service: Detected raw PCM (${mimeType}), wrapping in WAV header...`);
       audioBlob = pcmToWav(audioBytes, 24000);
+      finalMimeType = 'audio/wav';
     } else {
       console.log(`TTS Service: Detected pre-formatted audio (${mimeType}), using as is...`);
       audioBlob = new Blob([audioBytes], { type: mimeType });
+      finalMimeType = mimeType;
     }
     
     const audioUrl = URL.createObjectURL(audioBlob);
@@ -482,7 +487,8 @@ export class GeminiTTSService {
       oneXDuration: totalDuration,
       speed: 1.0,
       duration: totalDuration,
-      baseAudio: arrayBuffer
+      baseAudio: arrayBuffer,
+      mimeType: finalMimeType
     };
 
     // Save to Cache (non-blocking)

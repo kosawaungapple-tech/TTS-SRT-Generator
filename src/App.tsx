@@ -43,6 +43,7 @@ export default function App() {
     volume: 0,
     styleInstruction: '',
     selectedModel: 'gemini-3.1-flash-lite',
+    customFileName: '',
   });
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessingSpeed, setIsProcessingSpeed] = useState(false);
@@ -177,7 +178,7 @@ export default function App() {
         setIsProcessingSpeed(true);
         try {
           console.log(`App: Reactive re-processing (Speed: ${config.speed}x, Pitch: ${config.pitch}, Volume: ${config.volume}dB)...`);
-          const sourceBlob = new Blob([result.baseAudio!], { type: 'audio/wav' });
+          const sourceBlob = new Blob([result.baseAudio!], { type: result.mimeType || 'audio/wav' });
           const { blob: processedBlob, duration: finalDuration } = await renderProcessedAudio(sourceBlob, { 
             speed: config.speed, 
             pitch: config.pitch, 
@@ -925,15 +926,31 @@ export default function App() {
           }
         );
 
-        // Apply effects (Speed, Pitch, Volume) - renderProcessedAudio now returns WAV
-        const sourceBlob = new Blob([audioResult.baseAudio || audioResult.rawAudio!], { type: 'audio/wav' });
-        const { blob: processedBlob, duration: finalDuration } = await renderProcessedAudio(sourceBlob, { 
-          speed: config.speed, 
-          pitch: config.pitch, 
-          volume: config.volume 
-        });
+        // Check if we need to apply effects (Speed, Pitch, Volume) 
+        // If everything is default, we can use the raw MP3 directly
+        const isDefaultConfig = config.speed === 1.0 && config.pitch === 0 && config.volume === 0;
+        let finalProcessedBlob: Blob;
+        let finalDuration: number;
+
+        if (isDefaultConfig) {
+          // Use original audio from Gemini result
+          const currentMimeType = audioResult.mimeType || 'audio/wav';
+          finalProcessedBlob = new Blob([audioResult.rawAudio || audioResult.baseAudio!], { type: currentMimeType });
+          finalDuration = audioResult.baseDuration;
+        } else {
+          // Apply effects (returns WAV)
+          const currentMimeType = audioResult.mimeType || 'audio/wav';
+          const sourceBlob = new Blob([audioResult.baseAudio || audioResult.rawAudio!], { type: currentMimeType });
+          const processed = await renderProcessedAudio(sourceBlob, { 
+            speed: config.speed, 
+            pitch: config.pitch, 
+            volume: config.volume 
+          });
+          finalProcessedBlob = processed.blob;
+          finalDuration = processed.duration;
+        }
         
-        const processedBuffer = await processedBlob.arrayBuffer();
+        const processedBuffer = await finalProcessedBlob.arrayBuffer();
         const reader = new FileReader();
         const base64Promise = new Promise<string>((resolve) => {
           reader.onloadend = () => {
@@ -941,12 +958,12 @@ export default function App() {
             resolve(base64data.split(',')[1]);
           };
         });
-        reader.readAsDataURL(processedBlob);
+        reader.readAsDataURL(finalProcessedBlob);
         const finalBase64 = await base64Promise;
 
         const finalResult: AudioResult = {
           ...audioResult,
-          audioUrl: URL.createObjectURL(processedBlob),
+          audioUrl: URL.createObjectURL(finalProcessedBlob),
           audioData: finalBase64,
           rawAudio: processedBuffer, 
           baseAudio: audioResult.baseAudio,
@@ -974,12 +991,17 @@ export default function App() {
             const userId = getCurrentUserId();
             if (!userId) return;
             try {
-              const audioFileName = `audio/${accessCode}/${Date.now()}.wav`;
+              const ext = finalProcessedBlob.type === 'audio/wav' ? 'wav' : 'mp3';
+              const baseFileName = config.customFileName?.trim() 
+                ? config.customFileName.trim().replace(/\.(mp3|wav)$/i, '')
+                : `${Date.now()}`;
+              
+              const audioFileName = `audio/${accessCode}/${baseFileName}.${ext}`;
               const audioRef = ref(storage, audioFileName);
               await uploadString(audioRef, finalResult.audioData, 'base64');
               const audioStorageUrl = await getDownloadURL(audioRef);
 
-              const srtFileName = `srt/${accessCode}/${Date.now()}.srt`;
+              const srtFileName = `srt/${accessCode}/${baseFileName}.srt`;
               const srtRef = ref(storage, srtFileName);
               await uploadString(srtRef, finalResult.srtContent);
               const srtStorageUrl = await getDownloadURL(srtRef);
@@ -1758,6 +1780,7 @@ export default function App() {
                           engineStatus={engineStatus}
                           retryCountdown={retryCountdown}
                           showToast={showToast}
+                          config={config}
                         />
                       </motion.div>
                     )}
@@ -1939,14 +1962,25 @@ export default function App() {
                                 </button>
                                 <div className="h-10 w-[1px] bg-slate-200 dark:bg-slate-800 mx-1" />
                                 <button 
-                                  onClick={() => handleDownloadAudio(item.audioStorageUrl || '', `narration-${item.id}.mp3`)}
+                                  onClick={() => {
+                                    const baseName = item.config?.customFileName?.trim() 
+                                      ? item.config.customFileName.trim().replace(/\.(mp3|wav)$/i, '')
+                                      : `narration-${item.id}`;
+                                    const ext = item.audioStorageUrl?.split('?')[0].endsWith('.wav') ? 'wav' : 'mp3';
+                                    handleDownloadAudio(item.audioStorageUrl || '', `${baseName}.${ext}`);
+                                  }}
                                   className="p-3 bg-blue-500/10 text-blue-500 rounded-[14px] hover:bg-blue-500 hover:text-white transition-all border border-blue-500/20 shadow-sm"
                                   title={t('output.downloadMp3')}
                                 >
                                   <Music size={18} />
                                 </button>
                                 <button 
-                                  onClick={() => handleDownloadSRT(item.srtStorageUrl || item.srtContent || '', `subtitles-${item.id}.srt`)}
+                                  onClick={() => {
+                                    const baseName = item.config?.customFileName?.trim() 
+                                      ? item.config.customFileName.trim().replace(/\.(mp3|wav|srt)$/i, '')
+                                      : `subtitles-${item.id}`;
+                                    handleDownloadSRT(item.srtStorageUrl || item.srtContent || '', `${baseName}.srt`);
+                                  }}
                                   className="p-3 bg-brand-purple/10 text-brand-purple rounded-[14px] hover:bg-brand-purple hover:text-white transition-all border border-brand-purple/20 shadow-sm"
                                   title={t('output.downloadSrt')}
                                 >

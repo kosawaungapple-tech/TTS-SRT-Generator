@@ -138,6 +138,7 @@ export interface TTSConfig {
   fastTrack?: boolean;
   effects?: Record<string, boolean | number | string>;
   selectedModel?: string;
+  customFileName?: string;
 }
 
 export interface AudioResult {
@@ -156,6 +157,7 @@ export interface AudioResult {
   duration: number; // Duration in seconds
   isLoadingPartial?: boolean; // Flag to indicate more chunks are coming
   isFallback?: boolean; // Flag to indicate fallback logic was used
+  mimeType?: string; // Original MIME type of the audio
 }
 
 export interface ActivityLog {
