@@ -502,8 +502,9 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
     // CRLF line endings (\r\n) as requested for SRT files
     const sanitizedContent = content.replace(/\r?\n/g, '\r\n');
     
-    // Use text/plain as requested by user for better CapCut recognition
-    const blob = new Blob([sanitizedContent], { type: 'text/plain;charset=utf-8' });
+    // Use text/srt as requested by user for better CapCut recognition. 
+    // Standard SRT is UTF-8 without BOM.
+    const blob = new Blob([sanitizedContent], { type: 'text/srt;charset=utf-8' });
     
     console.log(`[DEBUG] Subtitle File Size: ${blob.size} bytes`);
 

@@ -1,5 +1,5 @@
 import { formatTime, pcmToWav } from "../utils/audioUtils";
-import { generateOptimizedSubtitles, generateSubtitlesFromTimestamps } from "../utils/subtitleUtils";
+import { generateOptimizedSubtitles, generateSubtitlesFromTimestamps, generateSRT } from "../utils/subtitleUtils";
 import { apiChannelManager } from "./apiChannelManager";
 import { getIdToken } from "../firebase";
 import { ttsCache } from "./ttsCache";
@@ -481,7 +481,7 @@ export class GeminiTTSService {
       audioData: finalBase64,
       pcmData: base64Audio,
       rawAudio: arrayBuffer,
-      srtContent: subtitles.map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join(''),
+      srtContent: generateSRT(subtitles),
       subtitles,
       baseDuration: totalDuration,
       oneXDuration: totalDuration,
@@ -548,7 +548,6 @@ export class GeminiTTSService {
     // 2. Merge Subtitles
     let cumulativeTime = 0;
     const allSubtitles: SRTSubtitle[] = [];
-    const srtParts: string[] = [];
     
     results.forEach((res) => {
       res.subtitles.forEach((sub) => {
@@ -562,7 +561,6 @@ export class GeminiTTSService {
           endTime: formatTime(end)
         };
         allSubtitles.push(newSub);
-        srtParts.push(`${newSub.index}\r\n${newSub.startTime} --> ${newSub.endTime}\r\n${newSub.text}\r\n\r\n`);
       });
       cumulativeTime += res.duration;
     });
@@ -572,7 +570,7 @@ export class GeminiTTSService {
       audioData: wavBase64,
       pcmData: pcmBase64,
       rawAudio: arrayBuffer,
-      srtContent: srtParts.join(''),
+      srtContent: generateSRT(allSubtitles),
       subtitles: allSubtitles,
       baseDuration: cumulativeTime,
       oneXDuration: cumulativeTime,
