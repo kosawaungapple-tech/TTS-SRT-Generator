@@ -119,10 +119,10 @@ export function parseSRTTime(timeStr: string): number {
   if (parts.length < 3) return 0;
   const h = parseFloat(parts[0]);
   const m = parseFloat(parts[1]);
-  const secondsAndMs = parts[2].split(',');
-  const s = parseFloat(secondsAndMs[0]);
-  const ms = secondsAndMs.length > 1 ? parseFloat(secondsAndMs[1]) : 0;
-  return h * 3600 + m * 60 + s + ms / 1000;
+  // Handle both comma and dot for millisecond separator
+  const lastPart = parts[2].replace(',', '.'); 
+  const seconds = parseFloat(lastPart);
+  return h * 3600 + m * 60 + seconds;
 }
 
 /**
@@ -220,6 +220,7 @@ export async function renderProcessedAudio(
 
 
 export function formatTime(seconds: number): string {
+  if (isNaN(seconds) || seconds < 0) seconds = 0;
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
