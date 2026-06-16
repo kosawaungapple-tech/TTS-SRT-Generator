@@ -160,6 +160,19 @@ export interface AudioResult {
   mimeType?: string; // Original MIME type of the audio
 }
 
+export interface GeminiPart {
+  text?: string;
+  inlineData?: {
+    mimeType: string;
+    data: string;
+  };
+}
+
+export interface GeminiContent {
+  role?: string;
+  parts: (GeminiPart | string)[];
+}
+
 export interface ActivityLog {
   id?: string;
   vbsId: string;

@@ -26,12 +26,13 @@ export const DEFAULT_RULES = [
 ];
 
 export const GEMINI_MODELS = {
-  VERIFY: 'gemini-2.5-flash',
-  REWRITE: 'gemini-2.5-flash',
-  TRANSLATE: 'gemini-2.5-flash',
-  IMAGE: 'gemini-2.5-flash',
+  VERIFY: 'gemini-flash-latest',
+  REWRITE: 'gemini-flash-latest',
+  TRANSLATE: 'gemini-flash-latest',
+  IMAGE: 'gemini-2.5-flash-image',
   TTS: 'gemini-3.1-flash-tts-preview',
-  VIDEO: 'gemini-2.5-flash'
+  VIDEO: 'gemini-flash-latest',
+  PRO: 'gemini-3.1-pro-preview'
 };
 
 export const ELEVENLABS_VOICES = [
