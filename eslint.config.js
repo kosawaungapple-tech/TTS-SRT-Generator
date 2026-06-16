@@ -4,7 +4,7 @@ import reactPlugin from 'eslint-plugin-react';
 
 export default [
   {
-    ignores: ['dist/**/*']
+    ignores: ['dist/**/*', 'android/**/*', 'ios/**/*']
   },
   ...tseslint.configs.recommended,
   {

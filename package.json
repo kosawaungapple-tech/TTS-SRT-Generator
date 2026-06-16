@@ -6,12 +6,17 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build",
+    "build:mobile": "vite build && npx cap sync",
     "preview": "vite preview",
     "start": "tsx server.ts",
     "clean": "rm -rf dist",
     "lint": "eslint . && tsc --noEmit"
   },
   "dependencies": {
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/cli": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/ios": "^6.0.0",
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "@firebase/eslint-plugin-security-rules": "^0.0.1",
