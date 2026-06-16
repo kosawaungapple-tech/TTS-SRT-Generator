@@ -1,5 +1,5 @@
 import React, { useMemo, useEffect, useState } from 'react';
-import { ChevronDown, Volume2, Wand2, Server, FileText, Plus, Minus } from 'lucide-react';
+import { ChevronDown, Volume2, Wand2, Server } from 'lucide-react';
 import { TTSConfig } from '../types';
 import { VOICE_OPTIONS } from '../constants';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -135,25 +135,6 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
           </div>
         </div>
 
-        {/* Custom File Name */}
-        <div className="group/item">
-          <label className="flex items-center gap-3 text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 sm:mb-4 group-hover/item:text-amber-500 transition-colors">
-            <div className="p-1.5 sm:p-2 bg-amber-400/10 rounded-lg text-amber-500">
-              <FileText size={14} className="sm:w-4 sm:h-4" />
-            </div>
-            ဖိုင်အမည်သတ်မှတ်ရန် (Optional)
-          </label>
-          <div className="relative">
-            <input
-              type="text"
-              value={config.customFileName || ''}
-              onChange={(e) => handleChange('customFileName', e.target.value)}
-              placeholder="ဥပမာ - vlogs_by_saw_audio"
-              className="w-full bg-black/40 border border-white/5 rounded-xl px-4 sm:px-5 py-3.5 sm:py-4 text-sm sm:text-base text-white focus:outline-none focus:ring-1 focus:ring-amber-400/30 focus:border-amber-400/50 transition-all font-medium placeholder:text-slate-600"
-            />
-          </div>
-        </div>
-
         {/* Style Instructions */}
         <div className="group/item">
           <label className="flex items-center gap-3 text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 sm:mb-4 group-hover/item:text-amber-500 transition-colors">
@@ -259,34 +240,13 @@ const Slider: React.FC<SliderProps> = ({ label, value, min, max, step, suffix, o
     onChange(val);
   };
 
-  const handleDecrement = () => {
-    const newVal = Math.max(min, Number((localValue - step).toFixed(2)));
-    setLocalValue(newVal);
-    onChange(newVal);
-  };
-
-  const handleIncrement = () => {
-    const newVal = Math.min(max, Number((localValue + step).toFixed(2)));
-    setLocalValue(newVal);
-    onChange(newVal);
-  };
-
   return (
     <div className="group">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4 mb-2">
         <span className="text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-200 group-hover:text-amber-500 transition-colors shrink-0">
           {label}
         </span>
-        <div className="flex-1 flex items-center gap-2 sm:gap-3">
-          <button
-            onClick={handleDecrement}
-            disabled={localValue <= min}
-            className="p-1 sm:p-1.5 rounded-lg bg-white/5 border border-white/10 text-slate-400 hover:text-amber-500 hover:border-amber-400/50 hover:bg-amber-400/5 transition-all disabled:opacity-20 disabled:cursor-not-allowed shrink-0"
-            title="Decrease"
-          >
-            <Minus size={14} className="sm:w-4 sm:h-4" />
-          </button>
-
+        <div className="flex-1 flex items-center gap-3 sm:gap-4">
           <div className="relative flex-1 flex items-center">
             <input
               type="range"
@@ -301,16 +261,6 @@ const Slider: React.FC<SliderProps> = ({ label, value, min, max, step, suffix, o
               }}
             />
           </div>
-
-          <button
-            onClick={handleIncrement}
-            disabled={localValue >= max}
-            className="p-1 sm:p-1.5 rounded-lg bg-white/5 border border-white/10 text-slate-400 hover:text-amber-500 hover:border-amber-400/50 hover:bg-amber-400/5 transition-all disabled:opacity-20 disabled:cursor-not-allowed shrink-0"
-            title="Increase"
-          >
-            <Plus size={14} className="sm:w-4 sm:h-4" />
-          </button>
-
           <div className="w-14 sm:w-16 px-1 sm:px-2 py-0.5 bg-amber-400/10 rounded-lg text-center shrink-0 border border-amber-400/10">
             <span className="text-[10px] sm:text-[11px] font-bold text-amber-500">
               {localValue > 0 && (label === 'Pitch' || label === 'အသံအနိမ့်အမြင့်') ? `+${localValue}` : localValue}

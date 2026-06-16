@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { Headphones, Play, Pause, FileText, Music, RefreshCw, Sparkles, Clipboard, Check, AlertCircle } from 'lucide-react';
 import { AudioResult } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
-import { formatTime, formatMyanmarDuration, pcmToWav } from '../utils/audioUtils';
+import { formatTime, formatMyanmarDuration } from '../utils/audioUtils';
 import { generateSRT, generateASS, generateLRC } from '../utils/subtitleUtils';
 
 interface OutputPreviewProps {
@@ -14,7 +14,6 @@ interface OutputPreviewProps {
   error?: string | null;
   onRetry?: () => void;
   showToast: (message: string, type: 'success' | 'error') => void;
-  config?: import('../types').TTSConfig;
 }
 
 const LoadingWaveform = () => {
@@ -54,8 +53,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   retryCountdown = 0,
   error = null,
   onRetry,
-  showToast,
-  config
+  showToast
 }) => {
   const { t } = useLanguage();
   const [isPlaying, setIsPlaying] = useState(false);
@@ -132,23 +130,10 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
             audioBufferRef.current = buffer;
             setDuration(buffer.duration);
             setIsFallback(false);
-          } catch {
-            console.warn("audioUtils: Standard decoding failed in Preview, attempting to wrap as raw PCM (L16) with WAV header...");
-            try {
-              const pcmData = new Uint8Array(bufferToDecode);
-              // Gemini 3.1 TTS returns 24000Hz, 16-bit Mono PCM
-              const wavBlob = pcmToWav(pcmData, 24000);
-              const wavBuffer = await wavBlob.arrayBuffer();
-              const buffer = await audioContextRef.current.decodeAudioData(wavBuffer);
-              audioBufferRef.current = buffer;
-              setDuration(buffer.duration);
-              setIsFallback(false);
-              console.log("audioUtils: Successfully decoded audio in Preview after wrapping raw PCM as WAV.");
-            } catch (pcmErr) {
-              console.error("Decode failed even after PCM wrapping, preparing fallback:", pcmErr);
-              setIsFallback(true);
-              setupFallbackAudio(bufferToDecode);
-            }
+          } catch (decodeErr) {
+            console.error("Decode failed, preparing fallback:", decodeErr);
+            setIsFallback(true);
+            setupFallbackAudio(bufferToDecode);
           }
         } catch (err) {
           console.error("Error in decode process:", err);
@@ -452,16 +437,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
       }
 
       const ext = finalBlob.type === 'audio/wav' ? 'wav' : 'mp3';
-      
-      let baseName = '';
-      if (config?.customFileName?.trim()) {
-        baseName = config.customFileName.trim();
-        // Remove .mp3 or .wav if user added it manually to avoid double extension
-        baseName = baseName.replace(/\.(mp3|wav)$/i, '');
-      } else {
-        baseName = `vbs_tts_${Date.now()}`;
-      }
-      const filename = `${baseName}.${ext}`;
+      const filename = `vlogs-by-saw-audio-${Date.now()}.${ext}`;
       
       console.log(`[DEBUG] Creating ObjectURL for download...`);
       const url = URL.createObjectURL(finalBlob);
@@ -502,9 +478,8 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
     // CRLF line endings (\r\n) as requested for SRT files
     const sanitizedContent = content.replace(/\r?\n/g, '\r\n');
     
-    // Use text/srt as requested by user for better CapCut recognition. 
-    // Standard SRT is UTF-8 without BOM.
-    const blob = new Blob([sanitizedContent], { type: 'text/srt;charset=utf-8' });
+    // Use text/plain as requested by user for better CapCut recognition
+    const blob = new Blob([sanitizedContent], { type: 'text/plain;charset=utf-8' });
     
     console.log(`[DEBUG] Subtitle File Size: ${blob.size} bytes`);
 
@@ -762,10 +737,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
                       if (result) {
                         const srt = generateSRT(result.subtitles);
                         const ts = new Date().getTime();
-                        const baseName = config?.customFileName?.trim() 
-                          ? config.customFileName.trim().replace(/\.(mp3|wav|srt|txt|ass)$/i, '')
-                          : `vbs-saw-subtitles-${ts}`;
-                        downloadFile(srt, `${baseName}.srt`);
+                        downloadFile(srt, `vlogs-saw-subtitles-${ts}.srt`);
                       }
                     }}
                     className="flex flex-col items-center justify-center gap-2 py-4 bg-amber-400 text-black rounded-[24px] font-black uppercase tracking-widest hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-amber-400/10 text-[9px]"
@@ -778,10 +750,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
                       if (result) {
                         const srt = generateSRT(result.subtitles);
                         const ts = new Date().getTime();
-                        const baseName = config?.customFileName?.trim() 
-                          ? config.customFileName.trim().replace(/\.(mp3|wav|srt|txt|ass)$/i, '')
-                          : `vbs-saw-subtitles-${ts}`;
-                        downloadFile(srt, `${baseName}.txt`);
+                        downloadFile(srt, `vlogs-saw-subtitles-${ts}.txt`);
                       }
                     }}
                     className="flex flex-col items-center justify-center gap-2 py-4 bg-white/5 text-white rounded-[24px] font-black uppercase tracking-widest border border-white/10 hover:bg-white/10 transition-all text-[9px]"
@@ -794,10 +763,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
                       if (result) {
                         const ass = generateASS(result.subtitles);
                         const ts = new Date().getTime();
-                        const baseName = config?.customFileName?.trim() 
-                          ? config.customFileName.trim().replace(/\.(mp3|wav|srt|txt|ass)$/i, '')
-                          : `vbs-saw-subtitles-${ts}`;
-                        downloadFile(ass, `${baseName}.ass`);
+                        downloadFile(ass, `vlogs-saw-subtitles-${ts}.ass`);
                       }
                     }}
                     className="flex flex-col items-center justify-center gap-2 py-4 bg-white/5 text-slate-300 rounded-[24px] font-black uppercase tracking-widest border border-white/10 hover:bg-white/10 transition-all text-[9px]"

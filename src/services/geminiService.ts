@@ -1,5 +1,5 @@
 import { formatTime, pcmToWav } from "../utils/audioUtils";
-import { generateOptimizedSubtitles, generateSubtitlesFromTimestamps, generateSRT } from "../utils/subtitleUtils";
+import { generateOptimizedSubtitles, generateSubtitlesFromTimestamps } from "../utils/subtitleUtils";
 import { apiChannelManager } from "./apiChannelManager";
 import { getIdToken } from "../firebase";
 import { ttsCache } from "./ttsCache";
@@ -432,17 +432,12 @@ export class GeminiTTSService {
 
     // Only wrap in WAV header if it's raw PCM
     let audioBlob: Blob;
-    let finalMimeType: string;
-    const isRawPcm = mimeType.toLowerCase().includes('pcm') || mimeType.toLowerCase().includes('l16');
-    
-    if (isRawPcm) {
+    if (mimeType.includes('pcm')) {
       console.log(`TTS Service: Detected raw PCM (${mimeType}), wrapping in WAV header...`);
       audioBlob = pcmToWav(audioBytes, 24000);
-      finalMimeType = 'audio/wav';
     } else {
       console.log(`TTS Service: Detected pre-formatted audio (${mimeType}), using as is...`);
       audioBlob = new Blob([audioBytes], { type: mimeType });
-      finalMimeType = mimeType;
     }
     
     const audioUrl = URL.createObjectURL(audioBlob);
@@ -481,14 +476,13 @@ export class GeminiTTSService {
       audioData: finalBase64,
       pcmData: base64Audio,
       rawAudio: arrayBuffer,
-      srtContent: generateSRT(subtitles),
+      srtContent: subtitles.map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join(''),
       subtitles,
       baseDuration: totalDuration,
       oneXDuration: totalDuration,
       speed: 1.0,
       duration: totalDuration,
-      baseAudio: arrayBuffer,
-      mimeType: finalMimeType
+      baseAudio: arrayBuffer
     };
 
     // Save to Cache (non-blocking)
@@ -548,6 +542,7 @@ export class GeminiTTSService {
     // 2. Merge Subtitles
     let cumulativeTime = 0;
     const allSubtitles: SRTSubtitle[] = [];
+    const srtParts: string[] = [];
     
     results.forEach((res) => {
       res.subtitles.forEach((sub) => {
@@ -561,6 +556,7 @@ export class GeminiTTSService {
           endTime: formatTime(end)
         };
         allSubtitles.push(newSub);
+        srtParts.push(`${newSub.index}\r\n${newSub.startTime} --> ${newSub.endTime}\r\n${newSub.text}\r\n\r\n`);
       });
       cumulativeTime += res.duration;
     });
@@ -570,7 +566,7 @@ export class GeminiTTSService {
       audioData: wavBase64,
       pcmData: pcmBase64,
       rawAudio: arrayBuffer,
-      srtContent: generateSRT(allSubtitles),
+      srtContent: srtParts.join(''),
       subtitles: allSubtitles,
       baseDuration: cumulativeTime,
       oneXDuration: cumulativeTime,

@@ -203,14 +203,11 @@ export function generateSRT(subtitles: SRTSubtitle[]): string {
       // Ensure strict format: Index\r\nTime --> Time\r\nText\r\n
       // Index must be an integer, HH:MM:SS,mmm format for times
       // Comma separator for milliseconds is standard for SubRip
-      // CapCut is very strict about HH:MM:SS,mmm format
-      const startTime = s.startTime.replace(/\./g, ',');
-      const endTime = s.endTime.replace(/\./g, ',');
-      // Force CRLF for the text lines inside the block
-      const text = s.text.trim().replace(/\r?\n/g, '\r\n');
-      return `${s.index}\r\n${startTime} --> ${endTime}\r\n${text}\r\n`;
+      const startTime = s.startTime.replace('.', ',');
+      const endTime = s.endTime.replace('.', ',');
+      return `${s.index}\r\n${startTime} --> ${endTime}\r\n${s.text.trim()}\r\n`;
     })
-    .join('\r\n'); // Ensures exactly one blank line between blocks as requested by CapCut
+    .join('\r\n'); // Strictly CRLF between blocks
 }
 
 export function generateASS(subtitles: SRTSubtitle[]): string {
