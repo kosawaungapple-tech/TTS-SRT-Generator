@@ -77,7 +77,7 @@ service cloud.firestore {
 
     // History - Users can read their own
     match /history/{id} {
-      allow read: if request.auth != null && (
+      allow read, update: if request.auth != null && (
         (exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 
          get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == resource.data.userId) ||
         (exists(/databases/$(database)/documents/sessions/$(request.auth.uid)) && 

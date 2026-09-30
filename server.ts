@@ -56,6 +56,51 @@ async function startServer() {
     res.json({ status: "ok", message: "Server is healthy", timestamp: new Date().toISOString() });
   });
 
+  // Audio Conversion Endpoint (WAV to MP3)
+  app.post("/api/audio/convert-to-mp3", upload.single("audio"), async (req: express.Request, res: express.Response) => {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: "No audio file received" });
+    }
+
+    const inputPath = file.path;
+    const outputPath = path.join("uploads", `converted_${Date.now()}_${Math.random().toString(36).substring(7)}.mp3`);
+
+    try {
+      ffmpeg(inputPath)
+        .toFormat("mp3")
+        .audioBitrate(192)
+        .on("end", () => {
+          res.download(outputPath, "audio.mp3", (err) => {
+            if (err) console.error("[Audio Convert] Send error:", err);
+            if (fs.existsSync(inputPath)) {
+              try { fs.unlinkSync(inputPath); } catch {}
+            }
+            if (fs.existsSync(outputPath)) {
+              try { fs.unlinkSync(outputPath); } catch {}
+            }
+          });
+        })
+        .on("error", (err) => {
+          console.error("[Audio Convert] FFmpeg error:", err);
+          if (fs.existsSync(inputPath)) {
+            try { fs.unlinkSync(inputPath); } catch {}
+          }
+          if (fs.existsSync(outputPath)) {
+            try { fs.unlinkSync(outputPath); } catch {}
+          }
+          res.status(500).json({ error: "Conversion to MP3 failed" });
+        })
+        .save(outputPath);
+    } catch (err) {
+      console.error("[Audio Convert] Route exception:", err);
+      if (fs.existsSync(inputPath)) {
+        try { fs.unlinkSync(inputPath); } catch {}
+      }
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // Video Processing Endpoint
   app.post("/api/video/process", upload.fields([
     { name: 'video', maxCount: 1 },
@@ -345,7 +390,7 @@ async function startServer() {
     // Map friendly value to actual preview modelName only for TTS requests
     if (isTts) {
       if (targetModel === 'gemini-3.1-flash-tts' || targetModel === 'gemini-3.1-flash-tts-preview') {
-        targetModel = 'gemini-3.1-flash-tts-preview';
+        targetModel = 'gemini-3.8-flash-lite-tts';
       }
     }
 
@@ -358,8 +403,7 @@ async function startServer() {
       if (isTwoStepTts) {
         let firstStepModel = targetModel;
         // Optimization: For 3.1 Lite, use it directly as it has high quota. 
-        // We only fallback to 2.5 flash if needed, but 3.1 lite is preferred if selected.
-        if (firstStepModel === 'gemini-3.1-flash-lite-8b') {
+        if (firstStepModel === 'gemini-3.1-flash-lite-8b' || firstStepModel === 'gemini-2.5-flash') {
           firstStepModel = 'gemini-3.1-flash-lite';
         }
 
@@ -394,14 +438,17 @@ async function startServer() {
         }
 
         const ttsText = styleMatch ? `${styleMatch}\n\n${generatedText}` : generatedText;
-        const ttsContents = [{ parts: [{ text: ttsText }] }];
+        
+        // Preserve audio parts from original contents if any (for voice cloning)
+        const audioParts = (contents?.[0]?.parts || []).filter((p: { inlineData?: { mimeType: string } }) => p.inlineData && p.inlineData.mimeType.startsWith('audio/'));
+        const ttsContents = [{ parts: [...audioParts, { text: ttsText }] }];
 
         const ttsConfig: Record<string, unknown> = config ? { ...config } : {};
         ttsConfig.responseModalities = ["AUDIO"];
 
-        console.log(`[Proxy] Two-step TTS Step 2: Pitching to dedicated audio pipeline gemini-3.1-flash-tts-preview`);
+        console.log(`[Proxy] Two-step TTS Step 2: Pitching to dedicated audio pipeline gemini-3.8-flash-lite-tts`);
         const ttsResult = await ai.models.generateContent({
-          model: "gemini-3.1-flash-tts-preview",
+          model: "gemini-3.8-flash-lite-tts",
           contents: ttsContents,
           config: ttsConfig
         });
@@ -413,11 +460,36 @@ async function startServer() {
           updatedConfig.responseModalities = ["AUDIO"];
         }
 
-        return await ai.models.generateContent({
-          model: targetModel,
-          contents,
-          config: updatedConfig
-        });
+        try {
+          return await ai.models.generateContent({
+            model: targetModel,
+            contents,
+            config: updatedConfig
+          });
+        } catch (directErr: unknown) {
+          const errMsg = String(directErr);
+          const isQuota = errMsg.includes('quota') || errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('resource_exhausted');
+          
+          if (isQuota) {
+            if (!isTts && (targetModel === 'gemini-3.8-flash' || targetModel !== 'gemini-3.1-flash-lite')) {
+              console.warn(`[Proxy] Quota exceeded on ${targetModel}, falling back to gemini-3.1-flash-lite`);
+              return await ai.models.generateContent({
+                model: 'gemini-3.1-flash-lite',
+                contents,
+                config: updatedConfig
+              });
+            }
+            if (isTts && targetModel === 'gemini-3.8-flash-tts') {
+              console.warn(`[Proxy] Quota exceeded on gemini-3.8-flash-tts, falling back to gemini-3.8-flash-lite-tts`);
+              return await ai.models.generateContent({
+                model: 'gemini-3.8-flash-lite-tts',
+                contents,
+                config: updatedConfig
+              });
+            }
+          }
+          throw directErr;
+        }
       }
     };
 
