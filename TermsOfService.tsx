@@ -1,50 +1,95 @@
-import { translations, Language } from '../translations';
+import React from 'react';
+import { FileText, ArrowLeft } from 'lucide-react';
+import { useLanguage } from '../contexts/LanguageContext';
 
-export const translateError = (err: unknown, language: Language = 'mm'): string => {
-  const t = (path: string): string => {
-    const keys = path.split('.');
-    let current: Record<string, unknown> = translations as unknown as Record<string, unknown>;
-    for (const key of keys) {
-      if (!current || (current as Record<string, unknown>)[key] === undefined) return path;
-      current = (current as Record<string, unknown>)[key] as Record<string, unknown>;
-    }
-    return (current as unknown as Record<Language, string>)[language] || (current as unknown as Record<string, string>)['en'] || path;
-  };
+interface TermsOfServiceProps {
+  onBack: () => void;
+}
 
-  const error = err as { 
-    status?: number; 
-    message?: string; 
-    error?: { code?: number; status?: string; message?: string } 
-  };
-  // Handle specific technical error codes or messages
-  const status = Number(error.status || (error.error?.code) || (error.message && error.message.match(/\b\d{3}\b/)?.[0]) || 0);
-  const rawMessage = (error.message || '').toUpperCase();
-  const errorCode = (error.error?.status || '').toUpperCase();
+export const TermsOfService: React.FC<TermsOfServiceProps> = ({ onBack }) => {
+  const { language } = useLanguage();
 
-  if (status == 403 || rawMessage.includes('PERMISSION_DENIED') || errorCode.includes('PERMISSION_DENIED')) {
-    return t('errors.apiKey');
-  }
-  if (status == 404 || rawMessage.includes('NOT_FOUND') || errorCode.includes('NOT_FOUND')) {
-    return t('errors.modelNotFound');
-  }
-  if (status == 400 || rawMessage.includes('INVALID_ARGUMENT') || errorCode.includes('INVALID_ARGUMENT')) {
-    if (rawMessage.includes('API KEY IS REQUIRED')) {
-      return t('generate.noApiKey');
-    }
-    return t('errors.invalidArgument');
-  }
-  if (status == 429 || rawMessage.includes('RATE_LIMIT') || rawMessage.includes('RESOURCE_EXHAUSTED') || errorCode.includes('RESOURCE_EXHAUSTED')) {
-    return t('errors.rateLimit');
-  }
-  if (status >= 500 || rawMessage.includes('INTERNAL') || errorCode.includes('INTERNAL')) {
-    return t('errors.connection');
-  }
-  if (rawMessage.includes('TIMEOUT') || rawMessage.includes('DEADLINE_EXCEEDED') || errorCode.includes('DEADLINE_EXCEEDED')) {
-    return t('errors.timeout');
-  }
-  if (rawMessage.includes('EMPTY_TEXT_ERROR')) {
-    return t('errors.emptyScript');
-  }
+  return (
+    <div className="max-w-4xl mx-auto py-10 px-6">
+      <button 
+        onClick={onBack}
+        className="flex items-center gap-2 text-slate-500 hover:text-brand-purple transition-colors mb-8 group"
+      >
+        <ArrowLeft size={20} className="group-hover:-translate-x-1 transition-transform" />
+        <span>Back to Studio</span>
+      </button>
 
-  return t('errors.default');
+      <div className="glass-card rounded-[40px] p-8 sm:p-12 shadow-2xl relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-64 h-64 bg-neon-indigo/5 blur-[100px] -z-10" />
+        
+        <div className="flex items-center gap-4 mb-10">
+          <div className="w-16 h-16 bg-neon-indigo/10 rounded-2xl flex items-center justify-center text-neon-indigo">
+            <FileText size={32} />
+          </div>
+          <div>
+            <h1 className="text-3xl font-black text-slate-900 dark:text-white">
+              {language === 'mm' ? 'ဝန်ဆောင်မှုဆိုင်ရာ စည်းကမ်းချက်များ' : 'Terms of Service'}
+            </h1>
+            <p className="text-slate-500 font-bold uppercase tracking-widest text-xs mt-1">Vlogs By Saw • v3.0 Global</p>
+          </div>
+        </div>
+
+        <div className="prose prose-slate dark:prose-invert max-w-none space-y-8 text-slate-600 dark:text-slate-300">
+          <section>
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-4 flex items-center gap-3">
+              <div className="w-2 h-8 bg-neon-indigo rounded-full" />
+              {language === 'mm' ? '၁။ အသုံးပြုမှုဆိုင်ရာ သဘောတူညီချက်' : '1. Acceptable Use'}
+            </h2>
+            <p className="leading-relaxed">
+              {language === 'mm' 
+                ? 'သင်သည် ဤဝန်ဆောင်မှုကို အသုံးပြုရာတွင် တည်ဆဲဥပဒေများကို လိုက်နာရန် သဘောတူပါသည်။ မဖွယ်မရာသော စာသားများ၊ တရားမဝင်သော အကြောင်းအရာများကို အသံထုတ်ယူခြင်း မပြုလုပ်ရန် တားမြစ်ပါသည်။' 
+                : 'By using this service, you agree to comply with all applicable laws. You are prohibited from generating audio for offensive, illegal, or harmful content.'}
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-4 flex items-center gap-3">
+              <div className="w-2 h-8 bg-neon-indigo rounded-full" />
+              {language === 'mm' ? '၂။ အကောင့်နှင့် သက်တမ်း' : '2. Accounts & Expiry'}
+            </h2>
+            <p className="leading-relaxed">
+              {language === 'mm'
+                ? 'Premium အကောင့်များသည် သတ်မှတ်ထားသော သက်တမ်းအတွင်းသာ အသုံးပြုနိုင်မည်ဖြစ်သည်။ သက်တမ်းကုန်ဆုံးပါက ဝန်ဆောင်မှုများကို ကန့်သတ်ခြင်း ခံရမည်ဖြစ်သည်။ User ID များကို ဝေမျှခြင်း မပြုလုပ်ရပါ။'
+                : 'Premium accounts are valid only for the specified duration. Services will be limited upon expiry. Sharing your User ID with unauthorized persons is strictly prohibited.'}
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-4 flex items-center gap-3">
+              <div className="w-2 h-8 bg-neon-indigo rounded-full" />
+              {language === 'mm' ? '၃။ မူပိုင်ခွင့်' : '3. Content Ownership'}
+            </h2>
+            <p className="leading-relaxed">
+              {language === 'mm'
+                ? 'သင်ထုတ်ယူလိုက်သော အသံဖိုင်များနှင့် စာတန်းထိုးများကို သင်ကိုယ်တိုင် စိတ်ကြိုက် အသုံးပြုခွင့်ရှိသည်။ သို့သော် အသုံးပြုထားသော AI နည်းပညာနှင့် စနစ်၏ မူပိုင်ခွင့်မှာ Vlogs By Saw ၏ ပိုင်ဆိုင်မှုသာ ဖြစ်ပါသည်။'
+                : 'You own the generated audio files and subtitles for your personal or commercial use. However, the AI technology and the platform infrastructure remain the intellectual property of Vlogs By Saw.'}
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-4 flex items-center gap-3">
+              <div className="w-2 h-8 bg-neon-indigo rounded-full" />
+              {language === 'mm' ? '၄။ တာဝန်ယူမှု ကန့်သတ်ချက်' : '4. Limitation of Liability'}
+            </h2>
+            <p className="leading-relaxed">
+              {language === 'mm'
+                ? 'AI မှ ထုတ်ပေးသော အကြောင်းအရာများအတွက် ကျွန်ုပ်တို့မှ တာဝန်ယူမည် မဟုတ်ပါ။ Gemini API ၏ မပြတ်သားမှု သို့မဟုတ် စနစ်ကြောင့် ဖြစ်ပေါ်လာသော အမှားများအတွက် ကျွန်ုပ်တို့မှ အာမခံချက် မရှိပါ။'
+                : 'We are not liable for content generated by the AI. There is no guarantee regarding the absolute accuracy of Gemini API outputs or potential system errors.'}
+            </p>
+          </section>
+        </div>
+
+        <div className="mt-12 pt-8 border-t border-slate-200 dark:border-white/5 text-center">
+          <p className="text-xs text-slate-500 font-medium tracking-widest uppercase">
+            EST. 2026 • Vlogs By Saw Narration Studio
+          </p>
+        </div>
+      </div>
+    </div>
+  );
 };

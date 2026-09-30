@@ -1,151 +1,105 @@
-import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { X, AlertCircle, CheckCircle2, HelpCircle, Info, Calendar, Lock, Key } from 'lucide-react';
+import React from 'react';
+import { ExternalLink, ShieldCheck, Info, Plus } from 'lucide-react';
+import { PronunciationRule } from '../types';
+import { useLanguage } from '../contexts/LanguageContext';
 
-export type ModalType = 'alert' | 'confirm' | 'prompt' | 'success' | 'error' | 'info';
-
-interface ModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onConfirm?: (value?: string) => void;
-  title: string;
-  message: string;
-  type?: ModalType;
-  confirmText?: string;
-  cancelText?: string;
-  placeholder?: string;
-  defaultValue?: string;
-  inputType?: 'text' | 'password' | 'date';
-  showIcon?: boolean;
+interface PronunciationRulesProps {
+  rules: PronunciationRule[];
+  globalRules: PronunciationRule[];
+  customRules: string;
+  setCustomRules: (rules: string) => void;
+  isAdmin: boolean;
+  onOpenTools: () => void;
+  showCustomRules?: boolean;
 }
 
-export const Modal: React.FC<ModalProps> = ({
-  isOpen,
-  onClose,
-  onConfirm,
-  title,
-  message,
-  type = 'alert',
-  confirmText = 'Confirm',
-  cancelText = 'Cancel',
-  placeholder = 'Enter value...',
-  defaultValue = '',
-  inputType = 'text',
-  showIcon = true,
+export const PronunciationRules: React.FC<PronunciationRulesProps> = ({
+  rules,
+  globalRules,
+  customRules,
+  setCustomRules,
+  isAdmin,
+  onOpenTools,
+  showCustomRules = true,
 }) => {
-  const [inputValue, setInputValue] = useState(defaultValue);
-
-  useEffect(() => {
-    if (isOpen) {
-      setInputValue(defaultValue);
-    }
-  }, [isOpen, defaultValue]);
-
-  const handleConfirm = () => {
-    if (onConfirm) {
-      onConfirm(type === 'prompt' ? inputValue : undefined);
-    }
-    onClose();
-  };
-
-  const getIcon = () => {
-    switch (type) {
-      case 'success':
-        return <CheckCircle2 className="text-emerald-500" size={24} />;
-      case 'error':
-      case 'alert':
-        return <AlertCircle className="text-red-500" size={24} />;
-      case 'confirm':
-        return <HelpCircle className="text-amber-500" size={24} />;
-      case 'prompt':
-        if (inputType === 'password') return <Lock className="text-amber-500" size={24} />;
-        if (inputType === 'date') return <Calendar className="text-amber-500" size={24} />;
-        return <Key className="text-amber-500" size={24} />;
-      case 'info':
-        return <Info className="text-amber-500" size={24} />;
-      default:
-        return <Info className="text-blue-500" size={24} />;
-    }
-  };
+  const { t } = useLanguage();
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6">
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="absolute inset-0 bg-[#020617]/80 backdrop-blur-sm"
+    <div className="glass-card rounded-[32px] p-6 sm:p-8 shadow-2xl transition-all duration-300">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+        <div className="flex items-center gap-4">
+          <div className="p-2 bg-brand-purple/10 rounded-lg text-brand-purple">
+            <ShieldCheck size={20} />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">{t('rules.title')}</h2>
+            <p className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest mt-1">{t('rules.subtitle')}</p>
+          </div>
+        </div>
+        <button
+          onClick={onOpenTools}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-brand-purple hover:bg-brand-purple/10 transition-all border border-brand-purple/20"
+        >
+          {isAdmin ? t('rules.manage') : t('rules.view')} <ExternalLink size={14} />
+        </button>
+      </div>
+
+      <div className={`overflow-hidden rounded-[20px] border border-slate-200/50 dark:border-slate-800/50 shadow-sm ${showCustomRules ? 'mb-10' : ''}`}>
+        <div className="overflow-x-auto custom-scrollbar">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="bg-slate-50/50 dark:bg-white/5 border-b border-slate-200/50 dark:border-white/5">
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em]">{t('rules.original')}</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em]">{t('rules.replacement')}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200/50 dark:divide-white/5">
+              {rules.map((rule) => (
+                <tr key={rule.id} className="hover:bg-slate-50/30 dark:hover:bg-white/5 transition-colors group">
+                  <td className="px-6 py-4">
+                    <span className="text-sm font-bold text-slate-700 dark:text-slate-200 group-hover:text-brand-purple transition-colors">{rule.original}</span>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className="text-sm font-bold text-brand-purple bg-brand-purple/10 px-3 py-1 rounded-lg border border-brand-purple/20">{rule.replacement}</span>
+                  </td>
+                </tr>
+              ))}
+              {globalRules.map((rule) => (
+                <tr key={rule.id} className="hover:bg-slate-50/30 dark:hover:bg-white/5 transition-colors group bg-brand-purple/5">
+                  <td className="px-6 py-4 flex items-center gap-3">
+                    <span className="text-sm font-bold text-slate-700 dark:text-slate-200 group-hover:text-brand-purple transition-colors">{rule.original}</span>
+                    <span className="px-2 py-0.5 bg-brand-purple/20 text-brand-purple rounded-full text-[8px] font-bold uppercase tracking-wider">{t('rules.global')}</span>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className="text-sm font-bold text-brand-purple bg-brand-purple/10 px-3 py-1 rounded-lg border border-brand-purple/20">{rule.replacement}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {showCustomRules && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <label className="flex items-center gap-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+              <Plus size={12} className="text-brand-purple" />
+              {t('rules.custom')}
+            </label>
+            <div className="flex items-center gap-1.5 text-[9px] text-slate-500 italic">
+              <Info size={10} />
+              {t('rules.regexSupported')}
+            </div>
+          </div>
+          <textarea
+            value={customRules}
+            onChange={(e) => setCustomRules(e.target.value)}
+            placeholder={t('rules.placeholder')}
+            className="w-full h-32 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 text-sm font-mono text-slate-900 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 resize-none custom-scrollbar transition-all"
           />
-          
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 20 }}
-            className="relative w-full max-w-md bg-white dark:bg-slate-900 rounded-[32px] shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden"
-          >
-            {/* Header */}
-            <div className="px-6 py-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-white/[0.02]">
-              <div className="flex items-center gap-3">
-                {showIcon && (
-                  <div className="w-10 h-10 bg-slate-100 dark:bg-slate-800 rounded-xl flex items-center justify-center">
-                    {getIcon()}
-                  </div>
-                )}
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">{title}</h2>
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest">Notification</p>
-                </div>
-              </div>
-              <button 
-                onClick={onClose}
-                className="p-2 hover:bg-slate-200 dark:hover:bg-white/10 rounded-full transition-colors text-slate-400 hover:text-slate-600 dark:hover:text-white"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            {/* Content */}
-            <div className="p-6 space-y-6">
-              <p className="text-slate-600 dark:text-slate-300 text-sm leading-relaxed">
-                {message}
-              </p>
-
-              {type === 'prompt' && (
-                <div className="relative">
-                  <input
-                    type={inputType}
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    placeholder={placeholder}
-                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl px-4 py-3.5 text-sm transition-all focus:outline-none focus:ring-2 focus:ring-amber-400/50 text-slate-900 dark:text-white placeholder:text-slate-400"
-                    autoFocus
-                  />
-                </div>
-              )}
-
-              <div className="flex gap-3">
-                {type !== 'alert' && type !== 'success' && type !== 'error' && type !== 'info' && (
-                  <button
-                    onClick={onClose}
-                    className="flex-1 py-3.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold text-sm transition-all hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-[0.98]"
-                  >
-                    {cancelText}
-                  </button>
-                )}
-                <button
-                  onClick={handleConfirm}
-                  className="flex-1 py-3.5 bg-amber-400 text-black rounded-2xl font-bold text-sm shadow-lg shadow-amber-400/20 transition-all hover:bg-amber-500 active:scale-[0.98]"
-                >
-                  {confirmText}
-                </button>
-              </div>
-            </div>
-          </motion.div>
         </div>
       )}
-    </AnimatePresence>
+    </div>
   );
 };

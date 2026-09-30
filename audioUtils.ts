@@ -1,0 +1,382 @@
+/**
+ * Converts raw PCM data (16-bit, mono, 24000Hz) to a WAV file Blob.
+ */
+export function pcmToWav(pcmData: Uint8Array, sampleRate: number = 24000): Blob {
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+
+  // RIFF identifier
+  writeString(view, 0, 'RIFF');
+  // File length
+  view.setUint32(4, 36 + pcmData.length, true);
+  // RIFF type
+  writeString(view, 8, 'WAVE');
+  // Format chunk identifier
+  writeString(view, 12, 'fmt ');
+  // Format chunk length
+  view.setUint32(16, 16, true);
+  // Sample format (1 is PCM)
+  view.setUint16(20, 1, true);
+  // Channel count
+  view.setUint16(22, 1, true);
+  // Sample rate
+  view.setUint32(24, sampleRate, true);
+  // Byte rate (sampleRate * blockAlign)
+  view.setUint32(28, sampleRate * 2, true);
+  // Block align (channelCount * bytesPerSample)
+  view.setUint16(32, 2, true);
+  // Bits per sample
+  view.setUint16(34, 16, true);
+  // Data chunk identifier
+  writeString(view, 36, 'data');
+  // Data chunk length
+  view.setUint32(40, pcmData.length, true);
+
+  console.log(`audioUtils: Generated WAV with ${pcmData.length} bytes of PCM data. Total size: ${header.byteLength + pcmData.length} bytes.`);
+
+  return new Blob([header, pcmData], { type: 'audio/wav' });
+}
+
+/**
+ * Converts base64 PCM data to a WAV Blob.
+ */
+export function pcmBase64ToWav(base64: string, sampleRate: number = 24000): Blob {
+  const binaryString = atob(base64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return pcmToWav(bytes, sampleRate);
+}
+
+/**
+ * Converts an AudioBuffer to a WAV Blob.
+ */
+export function audioBufferToWav(buffer: AudioBuffer): Blob {
+  const numOfChan = buffer.numberOfChannels;
+  const length = buffer.length * numOfChan * 2 + 44;
+  const buffer_out = new ArrayBuffer(length);
+  const view = new DataView(buffer_out);
+  const channels = [];
+  let i;
+  let sample;
+  let offset = 0;
+  let pos = 0;
+
+  function setUint16(data: number) {
+    view.setUint16(pos, data, true);
+    pos += 2;
+  }
+
+  function setUint32(data: number) {
+    view.setUint32(pos, data, true);
+    pos += 4;
+  }
+
+  // write WAVE header
+  setUint32(0x46464952);                         // "RIFF"
+  setUint32(length - 8);                         // file length - 8
+  setUint32(0x45564157);                         // "WAVE"
+
+  setUint32(0x20746d66);                         // "fmt " chunk
+  setUint32(16);                                 // length = 16
+  setUint16(1);                                  // PCM (uncompressed)
+  setUint16(numOfChan);
+  setUint32(buffer.sampleRate);
+  setUint32(buffer.sampleRate * 2 * numOfChan);  // avg. bytes/sec
+  setUint16(numOfChan * 2);                      // block-align
+  setUint16(16);                                 // 16-bit (hardcoded)
+
+  setUint32(0x61746164);                         // "data" - chunk
+  setUint32(length - pos - 4);                   // chunk length
+
+  // write interleaved data
+  for (i = 0; i < buffer.numberOfChannels; i++) {
+    channels.push(buffer.getChannelData(i));
+  }
+
+  while (pos < length) {
+    for (i = 0; i < numOfChan; i++) {             // interleave channels
+      sample = Math.max(-1, Math.min(1, channels[i][offset])); // clamp
+      sample = (sample < 0 ? sample * 0x8000 : sample * 0x7FFF) | 0; // scale to 16-bit signed int
+      view.setInt16(pos, sample, true);          // write 16-bit sample
+      pos += 2;
+    }
+    offset++;                                     // next source sample
+  }
+
+  return new Blob([buffer_out], { type: "audio/wav" });
+}
+
+function writeString(view: DataView, offset: number, string: string) {
+  for (let i = 0; i < string.length; i++) {
+    view.setUint8(offset + i, string.charCodeAt(i));
+  }
+}
+
+export function parseSRTTime(timeStr: string): number {
+  const parts = timeStr.trim().split(':');
+  if (parts.length < 3) return 0;
+  const h = parseFloat(parts[0]);
+  const m = parseFloat(parts[1]);
+  // Handle both comma and dot for millisecond separator
+  const lastPart = parts[2].replace(',', '.'); 
+  const seconds = parseFloat(lastPart);
+  return h * 3600 + m * 60 + seconds;
+}
+
+/**
+ * Applies speed, pitch, and gain control adjustments using OfflineAudioContext.
+ * Uses native preservesPitch for high-quality time-stretching.
+ * 
+ * @param audioBlob The source audio blob (MP3 or WAV)
+ * @param config Processing options: speed (0.5x-2x), pitch (-10 to +10 semitones), volume/gain boost (0dB to +10dB)
+ */
+export async function renderProcessedAudio(
+  audioBlob: Blob, 
+  config: { speed?: number; pitch?: number; volume?: number; gainBoost?: number }
+): Promise<{ blob: Blob; duration: number }> {
+  const { speed = 1.0, pitch = 0 } = config;
+  const rawVolume = config.volume ?? config.gainBoost ?? 0;
+  // Implement gain control node boosting output volume by up to 10dB (clamped between 0dB and 10dB)
+  const volumeDb = Math.max(0, Math.min(10, Number(rawVolume) || 0));
+  
+  console.log(`audioUtils: Rendering processed audio (Speed: ${speed}x, Pitch: ${pitch}, Gain Boost: +${volumeDb}dB)`);
+  
+  const arrayBuffer = await audioBlob.arrayBuffer();
+  const AudioContextClass = (window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext) as typeof AudioContext;
+  const audioCtx = new AudioContextClass();
+  
+  console.log(`audioUtils: Decoding source audio blob (${audioBlob.size} bytes, type: ${audioBlob.type})...`);
+  
+  let audioBuffer: AudioBuffer;
+  try {
+    // Attempt standard decoding first (works for WAV, MP3, etc.)
+    // We slice the buffer because decodeAudioData usually neuters the source buffer
+    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+  } catch (decodeErr) {
+    // If decoding fails, it might be raw PCM (L16) without a header, common with Gemini TTS output
+    console.warn("audioUtils: Standard decoding failed, attempting to wrap as raw PCM (L16) with WAV header...");
+    try {
+      const pcmData = new Uint8Array(arrayBuffer);
+      // Gemini 3.1 TTS returns 24000Hz, 16-bit Mono PCM
+      const wavBlob = pcmToWav(pcmData, 24000);
+      const wavBuffer = await wavBlob.arrayBuffer();
+      audioBuffer = await audioCtx.decodeAudioData(wavBuffer);
+      console.log("audioUtils: Successfully decoded audio after wrapping raw PCM as WAV.");
+    } catch (pcmErr) {
+      console.error("audioUtils: Failed to decode audio even after wrapping as PCM/WAV:", pcmErr);
+      await audioCtx.close();
+      throw decodeErr; // Throw original decoding error
+    }
+  }
+  await audioCtx.close();
+  
+  // Calculate output duration based on speed
+  const outputLength = Math.ceil(audioBuffer.length / speed);
+  const sampleRate = audioBuffer.sampleRate;
+  const numberOfChannels = audioBuffer.numberOfChannels;
+  
+  const offlineCtx = new OfflineAudioContext(
+    numberOfChannels,
+    outputLength,
+    sampleRate
+  );
+  
+  const source = offlineCtx.createBufferSource();
+  source.buffer = audioBuffer;
+  
+  // 1. Apply Speed (Playback Rate)
+  source.playbackRate.setValueAtTime(speed, offlineCtx.currentTime);
+  
+  // 2. Apply Pitch (Tone)
+  // We use detune for semitones (1 semitone = 100 cents)
+  // To keep speed and pitch independent, we use preservesPitch
+  if ('preservesPitch' in source) {
+    (source as AudioBufferSourceNode & { preservesPitch: boolean }).preservesPitch = true;
+    source.detune.setValueAtTime(pitch * 100, offlineCtx.currentTime);
+  } else {
+    // Fallback: If preservesPitch is not supported, detune will change speed too
+    // but at least it still shifts the pitch.
+    source.detune.setValueAtTime(pitch * 100, offlineCtx.currentTime);
+  }
+  
+  // 3. Apply Gain Control Node (Boosts output volume by up to 10dB)
+  // Linear gain formula from decibels: gain = 10^(dB / 20)
+  // At 0dB, gain = 1.0 (unity). At +10dB, gain ≈ 3.162 (+10dB boost).
+  const gainNode = offlineCtx.createGain();
+  const gainValue = Math.pow(10, volumeDb / 20);
+  gainNode.gain.setValueAtTime(gainValue, offlineCtx.currentTime);
+  
+  // Connect processing graph: Source -> Gain Node -> Destination
+  source.connect(gainNode);
+  gainNode.connect(offlineCtx.destination);
+  
+  source.start(0);
+  
+  const renderedBuffer = await offlineCtx.startRendering();
+  console.log(`audioUtils: Rendered duration: ${renderedBuffer.duration}s with Gain Boost: +${volumeDb}dB (x${gainValue.toFixed(2)})`);
+  
+  // Convert back to WAV (no more MP3)
+  const finalBlob = audioBufferToWav(renderedBuffer);
+  return { blob: finalBlob, duration: renderedBuffer.duration };
+}
+
+
+export function formatTime(seconds: number): string {
+  if (isNaN(seconds) || seconds < 0) seconds = 0;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  const ms = Math.floor((seconds % 1) * 1000);
+
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')},${ms.toString().padStart(3, '0')}`;
+}
+
+/**
+ * Myanmar specific duration estimation
+ * Average syllable = ~2.5 Unicode chars in Myanmar script
+ * Myanmar avg speaking rate: ~3.5 syllables/sec at 1x
+ */
+export const estimateMyanmarDuration = (text: string, speed: number): number => {
+  const charCount = text.replace(/\s/g, '').length || 0;
+  if (charCount === 0) return 0;
+  
+  // Basic check for Myanmar characters
+  const isBurmese = /[\u1000-\u109F]/.test(text);
+  
+  if (isBurmese) {
+    const syllables = charCount / 2.5;
+    const baseDuration = syllables / 3.5; // seconds at 1x
+    return baseDuration / speed;
+  } else {
+    // English/Latin fallback
+    const wordCount = text.trim().split(/\s+/).filter(w => w.length > 0).length;
+    const baseDuration = wordCount * 0.4; // avg speed for English
+    return baseDuration / speed;
+  }
+};
+
+/**
+ * Format duration for Myanmar display
+ */
+export const formatMyanmarDuration = (seconds: number): string => {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.round(seconds % 60);
+  if (mins === 0) return `${secs} စက္ကန့်`;
+  return `${mins} မိနစ် ${secs} စက္ကန့်`;
+};
+
+export async function applyAudioEffects(bytes: Uint8Array, effects: Record<string, boolean | number | string>): Promise<Uint8Array> {
+  // Stub for audio effects mapping
+  console.log("Applying mock effects to audio data...", effects);
+  return bytes;
+}
+
+/**
+ * Detects silence duration at the start and end of an AudioBuffer.
+ * @param buffer The AudioBuffer to scan
+ * @param threshold Amplitude threshold for silence (default 0.012 ≈ -38dB)
+ * @param safetyPadding Seconds of headroom to keep around speech (default 0.03s = 30ms)
+ */
+export function detectSilence(
+  buffer: AudioBuffer, 
+  threshold: number = 0.012,
+  safetyPadding: number = 0.03
+): { startSilence: number; endSilence: number } {
+  const sampleRate = buffer.sampleRate;
+  const numChannels = buffer.numberOfChannels;
+  const length = buffer.length;
+
+  if (length === 0) return { startSilence: 0, endSilence: 0 };
+
+  let startSample = 0;
+  outerStart: for (let i = 0; i < length; i++) {
+    for (let c = 0; c < numChannels; c++) {
+      if (Math.abs(buffer.getChannelData(c)[i]) > threshold) {
+        startSample = i;
+        break outerStart;
+      }
+    }
+  }
+
+  let endSample = length - 1;
+  outerEnd: for (let i = length - 1; i >= 0; i--) {
+    for (let c = 0; c < numChannels; c++) {
+      if (Math.abs(buffer.getChannelData(c)[i]) > threshold) {
+        endSample = i;
+        break outerEnd;
+      }
+    }
+  }
+
+  if (startSample >= endSample) {
+    return { startSilence: 0, endSilence: 0 };
+  }
+
+  const rawStart = startSample / sampleRate;
+  const rawEnd = (length - 1 - endSample) / sampleRate;
+
+  // Apply safety padding so speech onset and offset are preserved naturally
+  const startSilence = Math.max(0, Math.floor(Math.max(0, rawStart - safetyPadding) * 100) / 100);
+  const endSilence = Math.max(0, Math.floor(Math.max(0, rawEnd - safetyPadding) * 100) / 100);
+
+  return { startSilence, endSilence };
+}
+
+/**
+ * Trims audio start and end silence, returning a new AudioBuffer.
+ * @param buffer Source AudioBuffer
+ * @param trimStart Seconds to trim from the beginning
+ * @param trimEnd Seconds to trim from the end
+ */
+export function trimAudioBuffer(
+  buffer: AudioBuffer, 
+  trimStart: number, 
+  trimEnd: number
+): AudioBuffer {
+  const sampleRate = buffer.sampleRate;
+  const numChannels = buffer.numberOfChannels;
+
+  const safeTrimStart = Math.max(0, Math.min(buffer.duration - 0.05, trimStart));
+  const safeTrimEnd = Math.max(0, Math.min(buffer.duration - safeTrimStart - 0.05, trimEnd));
+
+  const startSample = Math.max(0, Math.min(buffer.length - 1, Math.floor(safeTrimStart * sampleRate)));
+  const endSample = Math.max(startSample + 1, Math.min(buffer.length, Math.floor((buffer.duration - safeTrimEnd) * sampleRate)));
+
+  const trimmedLength = Math.max(1, endSample - startSample);
+
+  const offlineCtx = new OfflineAudioContext(numChannels, trimmedLength, sampleRate);
+  const trimmed = offlineCtx.createBuffer(numChannels, trimmedLength, sampleRate);
+
+  for (let c = 0; c < numChannels; c++) {
+    const src = buffer.getChannelData(c);
+    const slice = src.subarray(startSample, endSample);
+    trimmed.copyToChannel(slice, c, 0);
+  }
+
+  return trimmed;
+}
+
+/**
+ * Converts a WAV Blob into an MP3 Blob using the server-side FFmpeg encoder.
+ * Falls back to the original blob if server is unreachable.
+ */
+export async function convertWavToMp3(wavBlob: Blob): Promise<Blob> {
+  try {
+    const formData = new FormData();
+    formData.append('audio', wavBlob, 'audio.wav');
+    const response = await fetch('/api/audio/convert-to-mp3', {
+      method: 'POST',
+      body: formData,
+    });
+    if (!response.ok) {
+      throw new Error(`MP3 conversion failed: ${response.statusText}`);
+    }
+    const mp3Blob = await response.blob();
+    return new Blob([mp3Blob], { type: 'audio/mpeg' });
+  } catch (err) {
+    console.warn("audioUtils: MP3 conversion failed, fallback to WAV blob:", err);
+    return wavBlob;
+  }
+}

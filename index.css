@@ -1,127 +1,175 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Play, Pause, Volume2, VolumeX } from 'lucide-react';
-import { pcmToWav } from '../utils/audioUtils';
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+Myanmar:wght@400;500;700&family=Metamorphous&display=swap');
+@import "tailwindcss";
 
-interface MiniAudioPlayerProps {
-  base64Data: string;
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mm: "Noto Sans Myanmar", "Pyidaungsu", "Myanmar3", "Zubchi", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-brand-purple: #EAB308;
+  --color-brand-dark: #000000;
+  --color-brand-black: #000000;
+  --color-brand-accent: #EAB308;
+  --color-neon-indigo: #6366F1;
+  --color-neon-magenta: #D946EF;
+  --color-glass-bg: rgba(0, 0, 0, 0.7);
+  --color-glass-border: rgba(255, 255, 255, 0.1);
 }
 
-export const MiniAudioPlayer: React.FC<MiniAudioPlayerProps> = ({ base64Data }) => {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [isMuted, setIsMuted] = useState(false);
-  const [audioUrl, setAudioUrl] = useState<string>('');
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+@layer utilities {
+  .noise-overlay {
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+    opacity: 0.05;
+    pointer-events: none;
+  }
 
-  useEffect(() => {
-    if (base64Data) {
-      try {
-        // [WAV CONVERSION]
-        // Gemini TTS returns LINEAR16 PCM. Wrapping with WAV header.
-        const binaryString = window.atob(base64Data);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-        
-        const wavBlob = pcmToWav(bytes, 24000);
-        const url = URL.createObjectURL(wavBlob);
-        setAudioUrl(url);
-        
-        // Force reload the audio element
-        if (audioRef.current) {
-          audioRef.current.load();
-          // [AUTO-PLAY REMOVED]
-          setIsPlaying(false);
-        }
+  .glass-card {
+    @apply bg-white/70 dark:bg-black/60 backdrop-blur-[20px] border border-white/40 dark:border-white/5 shadow-[0_8px_32px_0_rgba(31,38,135,0.07)] dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.8)];
+  }
 
-        return () => URL.revokeObjectURL(url);
-      } catch (err) {
-        console.error("Error creating audio URL:", err);
-      }
-    }
-  }, [base64Data]);
+  .premium-glass {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.01) 100%);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  }
 
-  const togglePlay = () => {
-    if (audioRef.current) {
-      if (isPlaying) {
-        audioRef.current.pause();
-      } else {
-        audioRef.current.play().catch(err => console.error("Playback error:", err));
-      }
-      setIsPlaying(!isPlaying);
-    }
-  };
+  .dark .premium-glass {
+    background: linear-gradient(135deg, rgba(20, 20, 20, 0.6) 0%, rgba(0, 0, 0, 0.8) 100%);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+  }
 
-  const handleProgressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (audioRef.current) {
-      const time = parseFloat(e.target.value);
-      audioRef.current.currentTime = time;
-      setCurrentTime(time);
-    }
-  };
+  .neon-glow-indigo {
+    box-shadow: 0 0 15px rgba(99, 102, 241, 0.3), 0 0 30px rgba(99, 102, 241, 0.1);
+  }
 
-  const toggleMute = () => {
-    if (audioRef.current) {
-      audioRef.current.muted = !isMuted;
-      setIsMuted(!isMuted);
-    }
-  };
+  .neon-glow-magenta {
+    box-shadow: 0 0 15px rgba(217, 70, 239, 0.3), 0 0 30px rgba(217, 70, 239, 0.1);
+  }
 
-  const formatTime = (seconds: number) => {
-    if (isNaN(seconds) || !isFinite(seconds)) return '0:00';
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return `${m}:${s.toString().padStart(2, '0')}`;
-  };
+  .metallic-btn {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%);
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.1), 0 4px 6px rgba(0, 0, 0, 0.2);
+  }
 
-  return (
-    <div className="flex items-center gap-4 bg-slate-50 dark:bg-slate-900 rounded-2xl px-5 py-3 border border-slate-200 dark:border-slate-800 group transition-all hover:bg-slate-100 dark:hover:bg-slate-800/80 transition-colors duration-300">
-      <button
-        onClick={togglePlay}
-        className="w-10 h-10 bg-brand-purple text-white rounded-full flex items-center justify-center hover:scale-105 transition-transform shadow-lg shadow-brand-purple/20"
-      >
-        {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="ml-0.5" />}
-      </button>
+  .dark .metallic-btn {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(0, 0, 0, 0.2) 100%);
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.05), 0 4px 6px rgba(0, 0, 0, 0.4);
+  }
+  
+  .glass-morphism {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
 
-      <div className="flex-1 flex flex-col gap-1.5">
-        <div className="relative w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
-          <div 
-            className="absolute top-0 left-0 h-full bg-brand-purple transition-all duration-100"
-            style={{ width: `${(currentTime / (duration || 1)) * 100}%` }}
-          />
-          <input
-            type="range"
-            min={0}
-            max={duration || 0}
-            step={0.1}
-            value={currentTime}
-            onChange={handleProgressChange}
-            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-          />
-        </div>
-        <div className="flex justify-between text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest">
-          <span>{formatTime(currentTime)}</span>
-          <span>{formatTime(duration)}</span>
-        </div>
-      </div>
+  .dark .glass-morphism {
+    background: rgba(15, 23, 42, 0.6);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+  }
+}
 
-      <button
-        onClick={toggleMute}
-        className="p-2 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition-colors"
-      >
-        {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
-      </button>
+@layer base {
+  body {
+    @apply bg-white text-slate-900 transition-colors duration-300 overflow-x-hidden;
+  }
+  
+  .dark body {
+    @apply bg-[#020617] text-white;
+  }
 
-      <audio 
-        ref={audioRef} 
-        src={audioUrl} 
-        className="hidden" 
-        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
-        onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-        onEnded={() => setIsPlaying(false)}
-      />
-    </div>
-  );
-};
+  /* Global Burmese Styling */
+  .mm-font body {
+    font-family: var(--font-mm);
+    line-height: 1.8;
+  }
+
+  .mm-font h1, .mm-font h2, .mm-font h3, .mm-font button, .mm-font label {
+    font-family: var(--font-mm);
+  }
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  @apply bg-slate-700 rounded-full;
+}
+
+.light .custom-scrollbar::-webkit-scrollbar-thumb {
+  @apply bg-slate-300;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@keyframes shine {
+  0% { transform: translateX(-100%) skewX(-15deg); }
+  100% { transform: translateX(200%) skewX(-15deg); }
+}
+
+.animate-shine {
+  position: relative;
+  overflow: hidden;
+}
+
+.animate-shine::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(to right, transparent, rgba(255, 255, 255, 0.2), transparent);
+  animation: shine 3s infinite;
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.8; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.02); }
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s infinite ease-in-out;
+}
+
+@keyframes marquee {
+  0%   { transform: translateX(100%); }
+  100% { transform: translateX(-100%); }
+}
+
+.marquee-container {
+  overflow: hidden;
+  white-space: nowrap;
+  width: 100%;
+}
+
+.marquee-text {
+  display: inline-block;
+  animation: marquee 15s linear infinite;
+}
+
+.marquee-text:hover {
+  animation-play-state: paused;
+}
+
+@keyframes gradientShift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+

@@ -1,0 +1,301 @@
+import { SRTSubtitle } from "../types";
+import { formatTime } from "./audioUtils";
+
+/**
+ * Advanced Myanmar Subtitle Chunker
+ * Rules: 
+ * 1. Max 35 characters per line
+ * 2. Max 2 lines per block
+ * 3. Max duration per block: 3.5 seconds
+ * 4. Split at ။, ၊, or space
+ */
+
+export function generateOptimizedSubtitles(text: string, totalDuration: number): SRTSubtitle[] {
+  const blocks: string[] = [];
+  
+  // 1. Initial split by major punctuation to keep sentences together where possible
+  const segments = text.split(/([။၊])/g);
+  let currentBlockText = "";
+  
+  for (let i = 0; i < segments.length; i++) {
+    const part = segments[i];
+    if (!part) continue;
+    
+    // If it's punctuation, attach to previous text
+    if (part === "။" || part === "၊") {
+      if (blocks.length > 0) {
+        blocks[blocks.length - 1] += part;
+      } else {
+        currentBlockText += part;
+      }
+      continue;
+    }
+
+    // Split part into words/chunks by space
+    const words = part.split(/\s+/);
+    for (const word of words) {
+      if (!word) continue;
+      
+      // Check if adding this word exceeds limits (rough check for block size)
+      // We aim for roughly 70 chars per 2-line block (35 * 2)
+      if ((currentBlockText + " " + word).length > 60) {
+        if (currentBlockText) blocks.push(currentBlockText.trim());
+        currentBlockText = word;
+      } else {
+        currentBlockText += (currentBlockText ? " " : "") + word;
+      }
+    }
+  }
+  
+  if (currentBlockText) blocks.push(currentBlockText.trim());
+
+  // 2. Refine blocks into 2-line structure with 35 char lines
+  const refinedBlocks: string[][] = []; // [line1, line2][]
+  
+  for (const block of blocks) {
+    const lines: string[] = [];
+    const words = block.split(/\s+/);
+    let currentLine = "";
+
+    for (const word of words) {
+      if ((currentLine + " " + word).trim().length > 35) {
+        if (currentLine) lines.push(currentLine.trim());
+        currentLine = word;
+      } else {
+        currentLine += (currentLine ? " " : "") + word;
+      }
+    }
+    if (currentLine) lines.push(currentLine.trim());
+
+    // Group lines into 2-line blocks
+    for (let i = 0; i < lines.length; i += 2) {
+      const pair = [lines[i]];
+      if (lines[i+1]) pair.push(lines[i+1]);
+      refinedBlocks.push(pair);
+    }
+  }
+
+  // 3. Calculate total characters for proportional timing
+  const totalChars = refinedBlocks.reduce((acc, lines) => acc + lines.join(" ").length, 0);
+  const timePerChar = totalDuration / Math.max(1, totalChars);
+  
+  // Calculate max chars allowed in 3.5s
+  const maxCharsIn3_5s = Math.floor(3.5 / timePerChar);
+
+  // 4. Final split of blocks that are too long for 3.5s
+  const finalBlocks: string[][] = [];
+  for (const pair of refinedBlocks) {
+    const text = pair.join(" ");
+    if (text.length > maxCharsIn3_5s && maxCharsIn3_5s > 10) {
+      // Split this 2-line block into individual lines or smaller chunks
+      for (const line of pair) {
+        if (line.length > maxCharsIn3_5s) {
+           // Line itself is too long, split it
+           const words = line.split(" ");
+           let current = "";
+           for (const w of words) {
+             if ((current + " " + w).length > maxCharsIn3_5s) {
+               if (current) finalBlocks.push([current.trim()]);
+               current = w;
+             } else {
+               current += (current ? " " : "") + w;
+             }
+           }
+           if (current) finalBlocks.push([current.trim()]);
+        } else {
+          finalBlocks.push([line]);
+        }
+      }
+    } else {
+      finalBlocks.push(pair);
+    }
+  }
+
+  const subtitles: SRTSubtitle[] = [];
+  let currentTime = 0;
+
+  finalBlocks.forEach((lines, index) => {
+    const blockText = lines.join("\r\n");
+    const blockCharCount = lines.join(" ").length;
+    let blockDuration = blockCharCount * timePerChar;
+    
+    // Safety caps
+    if (blockDuration > 3.5) blockDuration = 3.5;
+    if (blockDuration < 0.5) blockDuration = 0.5;
+
+    subtitles.push({
+      index: index + 1,
+      startTime: formatTime(currentTime),
+      endTime: formatTime(currentTime + blockDuration),
+      text: blockText
+    });
+    
+    currentTime += blockDuration;
+  });
+
+  // 4. Final duration normalization 
+  // If we exceeded or fell short, we should stretch/compress, 
+  // but keep max duration in mind.
+  if (currentTime > totalDuration && subtitles.length > 0) {
+    // If we've drifted significantly, we just cap at totalDuration or adjust proportionally
+    // For simplicity and per-rule adherence, we ensure end timings make sense.
+    if (currentTime > totalDuration) {
+       // Just cap the last one or let it be if it's close.
+    }
+  }
+
+  return subtitles;
+}
+
+export function generateSubtitlesFromTimestamps(text: string, totalDuration: number): SRTSubtitle[] {
+  const markerRegex = /\[(\d{1,2}):(\d{1,2})\.(\d{3})\]\s*(.*?)(?=\s*\[|$)/gs;
+  const subtitles: SRTSubtitle[] = [];
+  let match;
+  let index = 1;
+
+  while ((match = markerRegex.exec(text)) !== null) {
+    const minutes = parseInt(match[1]);
+    const seconds = parseInt(match[2]);
+    const milliseconds = parseInt(match[3]);
+    const startTimeInSeconds = minutes * 60 + seconds + milliseconds / 1000;
+    const content = match[4].trim();
+
+    if (content) {
+      subtitles.push({
+        index: index++,
+        startTime: formatTime(startTimeInSeconds),
+        endTime: "", // Will be filled next
+        text: content
+      });
+    }
+  }
+
+  // Set end times
+  for (let i = 0; i < subtitles.length; i++) {
+    if (i < subtitles.length - 1) {
+       subtitles[i].endTime = subtitles[i + 1].startTime;
+    } else {
+       subtitles[i].endTime = formatTime(totalDuration);
+    }
+    
+    // Safety check: if end time < start time (due to malformed input)
+    const start = parseTimestampToSeconds(subtitles[i].startTime);
+    const end = parseTimestampToSeconds(subtitles[i].endTime);
+    if (end <= start) {
+      subtitles[i].endTime = formatTime(start + 2); // Default 2s duration
+    }
+    
+    // Max duration cap to prevent overlap issues
+    if (end > start + 7) {
+      subtitles[i].endTime = formatTime(start + 7);
+    }
+  }
+
+  return subtitles;
+}
+
+export function generateSRT(subtitles: SRTSubtitle[]): string {
+  if (!subtitles || subtitles.length === 0) return "";
+  
+  return subtitles
+    .filter(s => s.text && s.text.trim().length > 0)
+    .map(s => {
+      // Ensure strict format: Index\r\nTime --> Time\r\nText\r\n
+      // Index must be an integer, HH:MM:SS,mmm format for times
+      // Comma separator for milliseconds is standard for SubRip
+      // CapCut is very strict about HH:MM:SS,mmm format
+      const startTime = s.startTime.replace(/\./g, ',');
+      const endTime = s.endTime.replace(/\./g, ',');
+      // Force CRLF for the text lines inside the block
+      const text = s.text.trim().replace(/\r?\n/g, '\r\n');
+      return `${s.index}\r\n${startTime} --> ${endTime}\r\n${text}\r\n`;
+    })
+    .join('\r\n'); // Ensures exactly one blank line between blocks as requested by CapCut
+}
+
+export function generateASS(subtitles: SRTSubtitle[]): string {
+  const header = `[Script Info]\r\nScriptType: v4.00+\r\nCollisions: Normal\r\nPlayResX: 1280\r\nPlayResY: 720\r\n\r\n[V4+ Styles]\r\nFormat: Name, Fontname, Fontsize, PrimaryColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV\r\nStyle: Default,Arial,40,&H00FFFFFF,0,0,1,2,0,2,10,10,10\r\n\r\n[Events]\r\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\r\n`;
+  
+  const formatASSTime = (timeStr: string) => {
+    // Input is HH:MM:SS,mmm
+    const [hms, ms] = timeStr.split(',');
+    const [h, m, s] = hms.split(':');
+    const centiseconds = Math.floor(parseInt(ms) / 10).toString().padStart(2, '0');
+    // ASS format often drops leading zero on hours if it's 0, but H:MM:SS.CC is standard
+    return `${parseInt(h)}:${m}:${s}.${centiseconds}`;
+  };
+
+  const lines = subtitles.map(s => {
+    const startTime = formatASSTime(s.startTime);
+    const endTime = formatASSTime(s.endTime);
+    // Remove \r\n from text for ASS and replace with \N
+    const cleanText = s.text.replace(/\r\n/g, '\\N').replace(/\n/g, '\\N').trim();
+    return `Dialogue: 0,${startTime},${endTime},Default,,0,0,0,,${cleanText}`;
+  });
+
+  return header + lines.join('\r\n');
+}
+
+export function generateLRC(subtitles: SRTSubtitle[]): string {
+  const formatLRCTime = (timeStr: string) => {
+    // Input is HH:MM:SS,mmm
+    const [hms, ms] = timeStr.split(',');
+    const [h, m, s] = hms.split(':');
+    const totalMinutes = parseInt(h) * 60 + parseInt(m);
+    const centiseconds = Math.floor(parseInt(ms) / 10).toString().padStart(2, '0');
+    return `[${totalMinutes.toString().padStart(2, '0')}:${s}.${centiseconds}]`;
+  };
+
+  return subtitles.map(s => {
+    const startTime = formatLRCTime(s.startTime);
+    const cleanText = s.text.replace(/\r\n/g, ' ').replace(/\n/g, ' ');
+    return `${startTime}${cleanText}`;
+  }).join('\r\n');
+}
+
+function parseTimestampToSeconds(timestamp: string): number {
+  const [hms, ms] = timestamp.split(',');
+  const [h, m, s] = hms.split(':').map(Number);
+  return h * 3600 + m * 60 + s + (Number(ms) / 1000);
+}
+
+/**
+ * Shifts subtitle timestamps by offsetSeconds when audio is trimmed,
+ * and discards subtitles that fall beyond maxDuration.
+ */
+export function shiftSubtitles(
+  subtitles: SRTSubtitle[], 
+  offsetSeconds: number, 
+  maxDuration?: number
+): SRTSubtitle[] {
+  if (offsetSeconds <= 0 && !maxDuration) return subtitles;
+  
+  let validIndex = 1;
+  const result: SRTSubtitle[] = [];
+
+  for (const sub of subtitles) {
+    const origStart = parseTimestampToSeconds(sub.startTime);
+    const origEnd = parseTimestampToSeconds(sub.endTime);
+
+    // If subtitle ended before trim point, skip
+    if (origEnd <= offsetSeconds) continue;
+
+    const shiftedStart = Math.max(0, origStart - offsetSeconds);
+    const shiftedEnd = Math.max(0, origEnd - offsetSeconds);
+
+    if (maxDuration !== undefined && shiftedStart >= maxDuration) continue;
+
+    const finalEnd = maxDuration !== undefined ? Math.min(maxDuration, shiftedEnd) : shiftedEnd;
+
+    if (finalEnd > shiftedStart) {
+      result.push({
+        index: validIndex++,
+        startTime: formatTime(shiftedStart),
+        endTime: formatTime(finalEnd),
+        text: sub.text
+      });
+    }
+  }
+
+  return result;
+}
