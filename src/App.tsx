@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Video, Clipboard, Mic2, Play, Info, Sparkles, Image as ImageIcon, X, Calendar } from 'lucide-react';
+import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Video, Clipboard, Mic2, Play, Info, Sparkles, Image as ImageIcon, X, Calendar, Layers, Pause, RotateCcw } from 'lucide-react';
 import { WelcomePage } from './components/WelcomePage';
 import { Header } from './components/Header';
 import { ApiKeyModal } from './components/ApiKeyModal';
@@ -15,6 +15,7 @@ import { PrivacyPolicy } from './components/PrivacyPolicy';
 import { TermsOfService } from './components/TermsOfService';
 import { AnnouncementPanel } from './components/AnnouncementPanel';
 import { Modal, ModalType } from './components/Modal';
+import { BatchQueueModal } from './components/BatchQueueModal';
 import { GeminiTTSService } from './services/geminiService';
 import { apiChannelManager } from './services/apiChannelManager';
 import { logActivity } from './services/activityService';
@@ -42,8 +43,10 @@ export default function App() {
     pitch: 0,
     volume: 0,
     styleInstruction: '',
-    selectedModel: 'gemini-3.1-flash-lite',
+    selectedModel: 'gemini-3.8-flash-lite-tts',
     customFileName: '',
+    voiceProfile: localStorage.getItem('vbs_custom_voice_profile') || undefined,
+    exportFormat: 'wav',
   });
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessingSpeed, setIsProcessingSpeed] = useState(false);
@@ -315,6 +318,20 @@ export default function App() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historySearch, setHistorySearch] = useState('');
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+
+  // Batch Queue System
+  const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
+  const [isBatchProcessing, setIsBatchProcessing] = useState(false);
+  const [isBatchPaused, setIsBatchPaused] = useState(false);
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<'all' | 'queued' | 'processing' | 'completed' | 'failed'>('all');
+  const isBatchProcessingRef = useRef(false);
+  const isBatchPausedRef = useRef(false);
+  const isBatchCancelledRef = useRef(false);
+  const historyRef = useRef<HistoryItem[]>(history);
+
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
   // Auth & Access State (Custom)
   const [accessCodeInput, setAccessCodeInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
@@ -397,7 +414,7 @@ export default function App() {
     });
   };
 
-  // Handle Anonymous Auth
+  // Handle Auth State
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
@@ -414,12 +431,16 @@ export default function App() {
           setIsSessionSynced(true);
         }
       } else {
+        // Attempt anonymous sign-in if enabled in Firebase; if restricted (auth/admin-restricted-operation),
+        // fallback gracefully without error so access-code / local credentials continue seamlessly.
         signInAnonymously(auth).then((result) => {
-          if (result.user) {
+          if (result?.user) {
             setIsAuthReady(true);
           }
         }).catch((err) => {
-          console.error("Failed to sign in anonymously (Silent Auth Fallback):", err);
+          // Anonymous authentication is restricted in this Firebase project (admin-restricted-operation)
+          console.log("[VBS Auth] Anonymous sign-in not available, operating in access-code mode:", err?.code || err?.message);
+          setIsAuthReady(true);
         });
       }
     });
@@ -659,7 +680,11 @@ export default function App() {
       const q = query(collection(db, 'history'), where('userId', '==', accessCode), orderBy('createdAt', 'desc'));
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as HistoryItem));
-        setHistory(items);
+        setHistory(prev => {
+          const remoteIds = new Set(items.map(i => i.id));
+          const localInFlight = prev.filter(i => (i.status === 'queued' || i.status === 'processing') && !remoteIds.has(i.id));
+          return [...localInFlight, ...items];
+        });
         setIsHistoryLoading(false);
       }, (err) => {
         console.error('Failed to load history (Silent Fallback):', err);
@@ -857,14 +882,33 @@ export default function App() {
     setActiveTab('generate');
   };
 
+  const batchStats = useMemo(() => {
+    const queued = history.filter(i => i.status === 'queued').length;
+    const processing = history.filter(i => i.status === 'processing').length;
+    const failed = history.filter(i => i.status === 'failed').length;
+    const completed = history.filter(i => i.status === 'completed' || !i.status).length;
+    const total = history.length;
+    const hasActiveQueue = queued > 0 || processing > 0;
+    return { queued, processing, failed, completed, total, hasActiveQueue };
+  }, [history]);
+
   const filteredHistory = useMemo(() => {
-    if (!historySearch.trim()) return history;
+    let list = history;
+    if (historyStatusFilter !== 'all') {
+      if (historyStatusFilter === 'completed') {
+        list = list.filter(item => item.status === 'completed' || !item.status);
+      } else {
+        list = list.filter(item => item.status === historyStatusFilter);
+      }
+    }
+    if (!historySearch.trim()) return list;
     const search = historySearch.toLowerCase();
-    return history.filter(item => 
+    return list.filter(item => 
       item.text.toLowerCase().includes(search) || 
-      item.config.voiceId.toLowerCase().includes(search)
+      item.config?.voiceId?.toLowerCase().includes(search) ||
+      (item.config?.customFileName && item.config.customFileName.toLowerCase().includes(search))
     );
-  }, [history, historySearch]);
+  }, [history, historySearch, historyStatusFilter]);
 
   const handleGenerate = async () => {
     if (!text.trim()) {
@@ -1047,11 +1091,12 @@ export default function App() {
             error.message.includes('RESOURCES_EXHAUSTED')
           ));
 
-        const isTtsModel = config.selectedModel === 'gemini-3.1-flash-tts' || 
-                           config.selectedModel === 'gemini-3.1-flash-tts-preview';
+        const isTtsModel = config.selectedModel === 'gemini-3.8-flash-tts' || 
+                           config.selectedModel === 'gemini-3.8-flash-lite-tts' ||
+                           config.selectedModel === 'gemini-3.1-flash-lite';
 
         if (isQuotaExceeded && isTtsModel) {
-          const quotaMsg = "ယခုဆာဗာ Quota ပြည့်သွားပါသဖြင့် 'Gemini 3.1 Flash Lite' သို့ ပြောင်းလဲအသုံးပြုပေးပါ။";
+          const quotaMsg = "ယခုဆာဗာ Quota ပြည့်သွားပါသဖြင့် 'Gemini 3.8 Flash Lite TTS' သို့မဟုတ် 'Gemini 3.1 Flash Lite' သို့ ပြောင်းလဲအသုံးပြုပေးပါ။";
           setError(quotaMsg);
           setToast({ message: quotaMsg, type: 'error' });
           setTimeout(() => setToast(null), 8000);
@@ -1138,8 +1183,350 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  const updateHistoryItem = useCallback((id: string, updates: Partial<HistoryItem>) => {
+    setHistory(prev => prev.map(item => {
+      if (item.id === id) {
+        return { ...item, ...updates };
+      }
+      return item;
+    }));
+
+    if (isAccessGranted && isAuthReady && auth.currentUser && !auth.currentUser.isAnonymous) {
+      try {
+        const cleanUpdates: Record<string, unknown> = {};
+        if (updates.status !== undefined) cleanUpdates.status = updates.status;
+        if (updates.error !== undefined) cleanUpdates.error = updates.error;
+        if (updates.duration !== undefined) cleanUpdates.duration = updates.duration;
+        if (updates.audioStorageUrl !== undefined) cleanUpdates.audioStorageUrl = updates.audioStorageUrl;
+        if (updates.srtStorageUrl !== undefined) cleanUpdates.srtStorageUrl = updates.srtStorageUrl;
+        if (updates.srtContent !== undefined) cleanUpdates.srtContent = updates.srtContent;
+
+        if (Object.keys(cleanUpdates).length > 0) {
+          updateDoc(doc(db, 'history', id), cleanUpdates).catch((err) => {
+            console.warn("Firestore history status update skipped:", err);
+          });
+        }
+      } catch (err) {
+        console.warn("Firestore history update error:", err);
+      }
+    }
+  }, [isAccessGranted, isAuthReady]);
+
+  const executeSingleTTSItem = useCallback(async (item: HistoryItem, effectiveKey: string) => {
+    const ttsService = new GeminiTTSService(effectiveKey, isAdminUser);
+
+    // Apply rules
+    let processedText = item.text;
+    DEFAULT_RULES.forEach(rule => {
+      const regex = new RegExp(rule.original, 'gi');
+      processedText = processedText.replace(regex, rule.replacement);
+    });
+    globalRules.forEach(rule => {
+      const regex = new RegExp(rule.original, 'gi');
+      processedText = processedText.replace(regex, rule.replacement);
+    });
+    customRules.split('\n').forEach((line) => {
+      const parts = line.split('->').map(p => p.trim());
+      if (parts.length === 2) {
+        const regex = new RegExp(parts[0], 'gi');
+        processedText = processedText.replace(regex, parts[1]);
+      }
+    });
+
+    const itemConfig = item.config || config;
+    const audioResult = await ttsService.generateTTS(
+      processedText,
+      itemConfig,
+      undefined,
+      undefined
+    );
+
+    const isDefaultConfig = (itemConfig.speed ?? 1.0) === 1.0 && (itemConfig.pitch ?? 0) === 0 && (itemConfig.volume ?? 0) === 0;
+    let finalBlob: Blob;
+    let finalDuration: number;
+
+    if (isDefaultConfig) {
+      const currentMimeType = audioResult.mimeType || 'audio/wav';
+      finalBlob = new Blob([audioResult.rawAudio || audioResult.baseAudio!], { type: currentMimeType });
+      finalDuration = audioResult.baseDuration;
+    } else {
+      const currentMimeType = audioResult.mimeType || 'audio/wav';
+      const sourceBlob = new Blob([audioResult.baseAudio || audioResult.rawAudio!], { type: currentMimeType });
+      const processed = await renderProcessedAudio(sourceBlob, {
+        speed: itemConfig.speed,
+        pitch: itemConfig.pitch,
+        volume: itemConfig.volume
+      });
+      finalBlob = processed.blob;
+      finalDuration = processed.duration;
+    }
+
+    const reader = new FileReader();
+    const base64Promise = new Promise<string>((resolve) => {
+      reader.onloadend = () => {
+        const base64data = reader.result as string;
+        resolve(base64data.split(',')[1]);
+      };
+    });
+    reader.readAsDataURL(finalBlob);
+    const finalBase64 = await base64Promise;
+
+    const subtitles = generateOptimizedSubtitles(item.text, finalDuration);
+    const srtContent = subtitles.map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join('');
+
+    let audioStorageUrl: string | undefined = undefined;
+    let srtStorageUrl: string | undefined = undefined;
+
+    if (accessCode && isAuthReady && auth.currentUser && !auth.currentUser.isAnonymous) {
+      try {
+        const ext = finalBlob.type === 'audio/wav' ? 'wav' : 'mp3';
+        const baseFileName = itemConfig.customFileName?.trim() 
+          ? itemConfig.customFileName.trim().replace(/\.(mp3|wav)$/i, '')
+          : `batch_${Date.now()}`;
+        
+        const audioFileName = `audio/${accessCode}/${baseFileName}.${ext}`;
+        const audioRef = ref(storage, audioFileName);
+        await uploadString(audioRef, finalBase64, 'base64');
+        audioStorageUrl = await getDownloadURL(audioRef);
+
+        const srtFileName = `srt/${accessCode}/${baseFileName}.srt`;
+        const srtRef = ref(storage, srtFileName);
+        await uploadString(srtRef, srtContent);
+        srtStorageUrl = await getDownloadURL(srtRef);
+      } catch (storageErr) {
+        console.warn("Storage upload failed (continuing with local audio):", storageErr);
+      }
+    }
+
+    const localAudioUrl = URL.createObjectURL(finalBlob);
+
+    return {
+      audioBlob: finalBlob,
+      localAudioUrl,
+      localAudioData: finalBase64,
+      audioStorageUrl,
+      srtStorageUrl,
+      srtContent,
+      duration: finalDuration,
+    };
+  }, [accessCode, isAuthReady, isAdminUser, config, globalRules, customRules]);
+
+  const startBatchQueue = useCallback(async () => {
+    if (isBatchProcessingRef.current) return;
+    isBatchProcessingRef.current = true;
+    setIsBatchProcessing(true);
+
+    try {
+      while (true) {
+        if (isBatchPausedRef.current || isBatchCancelledRef.current) {
+          break;
+        }
+
+        const nextItem = historyRef.current.find(i => i.status === 'queued');
+        if (!nextItem) {
+          break;
+        }
+
+        updateHistoryItem(nextItem.id, { status: 'processing', error: undefined });
+
+        const effectiveKey = getEffectiveApiKey();
+        if (!effectiveKey) {
+          updateHistoryItem(nextItem.id, { 
+            status: 'failed', 
+            error: 'No active Google AI Studio API Key found.' 
+          });
+          continue;
+        }
+
+        try {
+          const res = await executeSingleTTSItem(nextItem, effectiveKey);
+          updateHistoryItem(nextItem.id, {
+            status: 'completed',
+            duration: res.duration,
+            baseDuration: res.duration,
+            audioStorageUrl: res.audioStorageUrl,
+            srtStorageUrl: res.srtStorageUrl,
+            srtContent: res.srtContent,
+            localAudioUrl: res.localAudioUrl,
+            localAudioData: res.localAudioData,
+            error: undefined
+          });
+
+          if (accessCode) {
+            logActivity(accessCode, 'tts', `[Batch] Generated: ${nextItem.text.substring(0, 40)}`).catch(() => {});
+          }
+
+          if (isAccessGranted && isAuthReady && auth.currentUser && !auth.currentUser.isAnonymous) {
+            updateDoc(doc(db, 'settings', 'global'), {
+              total_generations: (globalSettings.total_generations || 0) + 1
+            }).catch(() => {});
+          }
+        } catch (itemErr: unknown) {
+          const errObj = itemErr as { message?: string };
+          console.error(`Batch item ${nextItem.id} failed:`, itemErr);
+          updateHistoryItem(nextItem.id, {
+            status: 'failed',
+            error: errObj.message || 'TTS generation failed'
+          });
+        }
+
+        // Small delay to prevent burst rate limits
+        await new Promise(r => setTimeout(r, 600));
+      }
+    } finally {
+      isBatchProcessingRef.current = false;
+      setIsBatchProcessing(false);
+    }
+  }, [getEffectiveApiKey, updateHistoryItem, executeSingleTTSItem, accessCode, isAccessGranted, isAuthReady, globalSettings.total_generations]);
+
+  const handleQueueBatch = useCallback(async (itemsText: string[], batchConfig: TTSConfig) => {
+    const currentBatchId = `batch_${Date.now()}`;
+    const newItems: HistoryItem[] = [];
+
+    for (let i = 0; i < itemsText.length; i++) {
+      const rawText = itemsText[i].trim();
+      if (!rawText) continue;
+
+      const baseName = batchConfig.customFileName?.trim() 
+        ? `${batchConfig.customFileName.trim()}_${i + 1}`
+        : `batch_${i + 1}`;
+
+      const tempId = `batch_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 6)}`;
+      const historyItem: HistoryItem = {
+        id: tempId,
+        userId: accessCode || 'guest',
+        text: rawText,
+        createdAt: new Date().toISOString(),
+        config: { ...batchConfig, customFileName: baseName },
+        baseDuration: 0,
+        oneXDuration: 0,
+        status: 'queued',
+        batchId: currentBatchId,
+      };
+
+      newItems.push(historyItem);
+    }
+
+    if (newItems.length === 0) return;
+
+    setHistory(prev => [...newItems, ...prev]);
+
+    if (isAccessGranted && isAuthReady && auth.currentUser && !auth.currentUser.isAnonymous && accessCode) {
+      for (const item of newItems) {
+        try {
+          const docRef = await addDoc(collection(db, 'history'), {
+            userId: accessCode,
+            text: item.text.length > 5000 ? item.text.substring(0, 5000) + '...' : item.text,
+            config: { ...item.config },
+            status: 'queued',
+            batchId: currentBatchId,
+            createdAt: serverTimestamp(),
+          });
+          setHistory(prev => prev.map(h => h.id === item.id ? { ...h, id: docRef.id } : h));
+        } catch (err) {
+          console.warn("Failed to create queued doc in firestore:", err);
+        }
+      }
+    }
+
+    showToast(`Added ${newItems.length} items to batch queue!`, 'success');
+    setActiveTab('history');
+
+    isBatchCancelledRef.current = false;
+    isBatchPausedRef.current = false;
+    setIsBatchPaused(false);
+    setTimeout(() => {
+      startBatchQueue();
+    }, 150);
+  }, [accessCode, isAccessGranted, isAuthReady, showToast, startBatchQueue]);
+
+  const handleRetryItem = useCallback((id: string) => {
+    updateHistoryItem(id, { status: 'queued', error: undefined });
+    isBatchPausedRef.current = false;
+    setIsBatchPaused(false);
+    setTimeout(() => {
+      startBatchQueue();
+    }, 100);
+  }, [updateHistoryItem, startBatchQueue]);
+
+  const handleCancelQueuedItem = useCallback((id: string) => {
+    setHistory(prev => prev.filter(i => i.id !== id));
+    if (isAccessGranted && isAuthReady && auth.currentUser && !auth.currentUser.isAnonymous) {
+      deleteDoc(doc(db, 'history', id)).catch(() => {});
+    }
+    showToast('Removed item from queue', 'info');
+  }, [isAccessGranted, isAuthReady, showToast]);
+
+  const handlePauseResumeQueue = useCallback(() => {
+    if (isBatchPaused) {
+      isBatchPausedRef.current = false;
+      setIsBatchPaused(false);
+      showToast('Resuming batch queue...', 'info');
+      startBatchQueue();
+    } else {
+      isBatchPausedRef.current = true;
+      setIsBatchPaused(true);
+      showToast('Paused batch queue', 'info');
+    }
+  }, [isBatchPaused, showToast, startBatchQueue]);
+
+  const handleCancelAllQueued = useCallback(() => {
+    isBatchCancelledRef.current = true;
+    setHistory(prev => prev.filter(i => i.status !== 'queued'));
+    showToast('Cancelled remaining queued items', 'info');
+  }, [showToast]);
+
+  const handleRetryAllFailed = useCallback(() => {
+    setHistory(prev => prev.map(i => i.status === 'failed' ? { ...i, status: 'queued', error: undefined } : i));
+    isBatchPausedRef.current = false;
+    setIsBatchPaused(false);
+    showToast('Re-queued failed items', 'info');
+    setTimeout(() => {
+      startBatchQueue();
+    }, 100);
+  }, [showToast, startBatchQueue]);
+
   const playFromHistory = async (item: HistoryItem) => {
     try {
+      if (item.status === 'queued' || item.status === 'processing') {
+        showToast('Item is currently in queue. Please wait for generation to complete.', 'info');
+        return;
+      }
+      if (item.status === 'failed') {
+        showToast('Item failed to generate. Please click Retry.', 'error');
+        return;
+      }
+
+      if (item.localAudioData || item.localAudioUrl) {
+        const audioData = item.localAudioData || '';
+        const url = item.localAudioUrl || (audioData ? `data:audio/wav;base64,${audioData}` : '');
+        let rawAudio: ArrayBuffer | undefined;
+        if (audioData) {
+          try {
+            const binary = window.atob(audioData);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            rawAudio = bytes.buffer;
+          } catch {
+            // ignore
+          }
+        }
+        setResult({
+          audioUrl: url,
+          audioData: audioData,
+          rawAudio: rawAudio,
+          srtContent: item.srtContent || '',
+          subtitles: GeminiTTSService.parseSRT(item.srtContent || ''),
+          baseDuration: item.duration || item.baseDuration || 0,
+          oneXDuration: item.oneXDuration || item.duration || item.baseDuration || 0,
+          speed: item.config?.speed || 1.0,
+          duration: item.duration || item.baseDuration || 0
+        });
+        setActiveTab('generate');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+
       let audioData = '';
       let srtContent = item.srtContent || '';
 
@@ -1665,6 +2052,36 @@ export default function App() {
                         </button>
                       </div>
 
+                      {/* Batch Queue Trigger Button */}
+                      <button
+                        type="button"
+                        onClick={() => setIsBatchModalOpen(true)}
+                        className="w-full p-4 rounded-2xl bg-brand-purple/10 border border-brand-purple/25 hover:border-brand-purple/50 hover:bg-brand-purple/15 transition-all flex items-center justify-between group shadow-sm text-left"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="p-2.5 bg-brand-purple/20 text-brand-purple rounded-xl group-hover:scale-110 transition-transform">
+                            <Layers size={18} />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-bold text-slate-900 dark:text-white">
+                                {t('history.batchQueue')}
+                              </span>
+                              <span className="text-[9px] px-2 py-0.5 rounded-full bg-brand-purple text-white font-bold tracking-wider uppercase">
+                                Multi-Input
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                              Upload .txt/.csv/.json or paste multiple text inputs
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 text-xs font-bold text-brand-purple group-hover:translate-x-1 transition-transform">
+                          <span>Open</span>
+                          <ArrowRight size={14} />
+                        </div>
+                      </button>
+
                       {config.speed > 1.5 && (
                           <motion.div 
                             initial={{ opacity: 0, y: 10 }}
@@ -1876,7 +2293,7 @@ export default function App() {
                   className="max-w-6xl mx-auto space-y-8"
                 >
                   <div className="glass-card rounded-[32px] p-8 sm:p-10 shadow-2xl transition-all duration-300">
-                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-8 mb-10">
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 mb-8">
                       <div>
                         <h2 className="text-3xl font-bold flex items-center gap-4 text-slate-900 dark:text-white tracking-tight">
                           <div className="p-2.5 bg-brand-purple/10 rounded-xl text-brand-purple">
@@ -1887,19 +2304,155 @@ export default function App() {
                         <p className="text-slate-500 dark:text-slate-400 text-sm mt-2 font-medium">{t('history.subtitle')}</p>
                       </div>
                       
-                      <div className="relative flex-1 max-w-lg">
-                        <input
-                          type="text"
-                          placeholder={t('history.search')}
-                          value={historySearch}
-                          onChange={(e) => setHistorySearch(e.target.value)}
-                          className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-[20px] px-6 py-4 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all pr-14 placeholder:text-slate-400 font-medium shadow-sm"
-                        />
-                        <div className="absolute right-4 top-1/2 -translate-y-1/2 p-2 bg-brand-purple/10 rounded-xl text-brand-purple">
-                          <Search size={18} />
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-1 max-w-xl">
+                        <div className="relative flex-1">
+                          <input
+                            type="text"
+                            placeholder={t('history.search')}
+                            value={historySearch}
+                            onChange={(e) => setHistorySearch(e.target.value)}
+                            className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-[20px] px-6 py-3.5 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all pr-12 placeholder:text-slate-400 font-medium shadow-sm"
+                          />
+                          <div className="absolute right-4 top-1/2 -translate-y-1/2 p-1.5 bg-brand-purple/10 rounded-xl text-brand-purple">
+                            <Search size={16} />
+                          </div>
                         </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setIsBatchModalOpen(true)}
+                          className="flex items-center justify-center gap-2 px-5 py-3.5 rounded-[20px] bg-brand-purple hover:bg-brand-purple/90 text-white font-bold text-xs shadow-lg shadow-brand-purple/25 transition-all shrink-0 active:scale-95"
+                        >
+                          <Layers size={16} />
+                          {t('history.batchUploadBtn')}
+                        </button>
                       </div>
                     </div>
+
+                    {/* Filter Status Pills */}
+                    <div className="flex flex-wrap items-center gap-2 mb-8 pb-4 border-b border-slate-200/50 dark:border-slate-800/50">
+                      <button
+                        type="button"
+                        onClick={() => setHistoryStatusFilter('all')}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                          historyStatusFilter === 'all'
+                            ? 'bg-brand-purple text-white shadow-md shadow-brand-purple/20'
+                            : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10'
+                        }`}
+                      >
+                        {t('history.filterAll')} ({batchStats.total})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHistoryStatusFilter('completed')}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                          historyStatusFilter === 'completed'
+                            ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
+                            : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10'
+                        }`}
+                      >
+                        <CheckCircle2 size={13} className="text-emerald-400" />
+                        {t('history.filterCompleted')} ({batchStats.completed})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHistoryStatusFilter('queued')}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                          historyStatusFilter === 'queued'
+                            ? 'bg-amber-600 text-white shadow-md shadow-amber-600/20'
+                            : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10'
+                        }`}
+                      >
+                        <Clock size={13} className="text-amber-400" />
+                        {t('history.filterQueued')} ({batchStats.queued + batchStats.processing})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHistoryStatusFilter('failed')}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                          historyStatusFilter === 'failed'
+                            ? 'bg-rose-600 text-white shadow-md shadow-rose-600/20'
+                            : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10'
+                        }`}
+                      >
+                        <AlertCircle size={13} className="text-rose-400" />
+                        {t('history.filterFailed')} ({batchStats.failed})
+                      </button>
+                    </div>
+
+                    {/* Batch Queue Status Banner (Shown when queue has active items or failures) */}
+                    {(batchStats.hasActiveQueue || batchStats.failed > 0 || isBatchProcessing) && (
+                      <div className="mb-8 p-5 sm:p-6 rounded-2xl bg-gradient-to-r from-brand-purple/15 via-slate-900/40 to-brand-purple/10 border border-brand-purple/30 shadow-xl space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                          <div className="flex items-center gap-3">
+                            <div className="relative">
+                              <div className={`w-3.5 h-3.5 rounded-full ${isBatchProcessing ? 'bg-amber-400 animate-ping' : isBatchPaused ? 'bg-amber-500' : 'bg-brand-purple'}`} />
+                              <div className={`absolute top-0 left-0 w-3.5 h-3.5 rounded-full ${isBatchProcessing ? 'bg-amber-400' : isBatchPaused ? 'bg-amber-500' : 'bg-brand-purple'}`} />
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                                {isBatchProcessing 
+                                  ? (isBatchPaused ? 'Batch Queue: Paused' : 'Batch Queue: Processing...') 
+                                  : 'Batch Queue Idle'}
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-slate-300 font-mono">
+                                  {batchStats.completed}/{batchStats.total} Completed
+                                </span>
+                              </h4>
+                              <p className="text-xs text-slate-400 mt-0.5">
+                                {batchStats.processing > 0 && <span className="text-purple-300 font-semibold">{batchStats.processing} generating • </span>}
+                                <span className="text-amber-300 font-semibold">{batchStats.queued} queued</span>
+                                {batchStats.failed > 0 && <span className="text-rose-400 font-semibold"> • {batchStats.failed} failed</span>}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {batchStats.hasActiveQueue && (
+                              <button
+                                type="button"
+                                onClick={handlePauseResumeQueue}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-bold transition-all border border-white/10"
+                              >
+                                {isBatchPaused ? <Play size={13} fill="currentColor" /> : <Pause size={13} />}
+                                {isBatchPaused ? t('history.resume') : t('history.pause')}
+                              </button>
+                            )}
+
+                            {batchStats.queued > 0 && (
+                              <button
+                                type="button"
+                                onClick={handleCancelAllQueued}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-xs font-bold transition-all border border-rose-500/20"
+                              >
+                                <X size={13} />
+                                {t('history.cancelAll')}
+                              </button>
+                            )}
+
+                            {batchStats.failed > 0 && (
+                              <button
+                                type="button"
+                                onClick={handleRetryAllFailed}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-brand-purple text-white text-xs font-bold transition-all shadow-md shadow-brand-purple/20"
+                              >
+                                <RotateCcw size={13} />
+                                {t('history.retryAll')}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Progress Bar */}
+                        <div className="w-full h-2 bg-slate-950/80 rounded-full overflow-hidden border border-white/5">
+                          <div 
+                            className="h-full bg-gradient-to-r from-brand-purple to-emerald-400 transition-all duration-500 rounded-full"
+                            style={{ 
+                              width: `${batchStats.total > 0 ? Math.min(100, Math.round((batchStats.completed / batchStats.total) * 100)) : 0}%` 
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
 
                     {isHistoryLoading ? (
                       <div className="flex flex-col items-center justify-center py-24 gap-6">
@@ -1910,93 +2463,194 @@ export default function App() {
                         <p className="text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest text-xs">{t('history.loading')}</p>
                       </div>
                     ) : filteredHistory.length === 0 ? (
-                      <div className="text-center py-32 bg-slate-50/50 dark:bg-slate-950/50 rounded-[32px] border border-dashed border-slate-200 dark:border-slate-800">
-                        <div className="w-20 h-20 bg-white dark:bg-white/5 rounded-full flex items-center justify-center mx-auto mb-6 text-slate-400 dark:text-slate-600 shadow-inner">
+                      <div className="text-center py-24 bg-slate-50/50 dark:bg-slate-950/50 rounded-[32px] border border-dashed border-slate-200 dark:border-slate-800 space-y-4">
+                        <div className="w-20 h-20 bg-white dark:bg-white/5 rounded-full flex items-center justify-center mx-auto text-slate-400 dark:text-slate-600 shadow-inner">
                           <History size={40} />
                         </div>
                         <h3 className="text-xl font-bold text-slate-900 dark:text-slate-300">{t('history.noResults')}</h3>
-                        <p className="text-slate-500 dark:text-slate-500 text-sm mt-2 max-w-xs mx-auto leading-relaxed">{t('history.adjustSearch')}</p>
+                        <p className="text-slate-500 dark:text-slate-500 text-sm max-w-xs mx-auto leading-relaxed">{t('history.adjustSearch')}</p>
+                        <button
+                          type="button"
+                          onClick={() => setIsBatchModalOpen(true)}
+                          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand-purple text-white text-xs font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20"
+                        >
+                          <Layers size={15} />
+                          {t('history.batchUploadBtn')}
+                        </button>
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 gap-6">
-                        {filteredHistory.map((item) => (
-                          <div key={item.id} className="group bg-white/40 dark:bg-slate-900/40 border border-slate-200/50 dark:border-slate-800/50 rounded-[24px] p-6 sm:p-8 transition-all hover:bg-white/60 dark:hover:bg-slate-900/60 hover:border-brand-purple/40 hover:shadow-xl hover:-translate-y-1">
-                            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-8">
-                              <div className="flex-1 min-w-0 space-y-4">
-                                <div className="flex items-center gap-4">
-                                  <span className="px-3 py-1 bg-brand-purple/10 text-brand-purple rounded-full text-[10px] font-bold uppercase tracking-[0.15em] border border-brand-purple/20">
-                                    {item.config.voiceId}
-                                  </span>
-                                  <div className="flex items-center gap-2 text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest">
-                                    <Clock size={12} />
-                                    {formatDate(item.createdAt)}
+                        {filteredHistory.map((item) => {
+                          const itemStatus = item.status || 'completed';
+                          const isProcessingItem = itemStatus === 'processing';
+                          const isQueuedItem = itemStatus === 'queued';
+                          const isFailedItem = itemStatus === 'failed';
+                          const isCompletedItem = itemStatus === 'completed';
+
+                          return (
+                            <div 
+                              key={item.id} 
+                              className={`group bg-white/40 dark:bg-slate-900/40 border rounded-[24px] p-6 sm:p-8 transition-all hover:shadow-xl hover:-translate-y-1 ${
+                                isProcessingItem 
+                                  ? 'border-brand-purple shadow-lg shadow-brand-purple/10 bg-brand-purple/5'
+                                  : isFailedItem
+                                  ? 'border-rose-500/40 bg-rose-500/5'
+                                  : isQueuedItem
+                                  ? 'border-amber-500/30 bg-amber-500/5'
+                                  : 'border-slate-200/50 dark:border-slate-800/50 hover:bg-white/60 dark:hover:bg-slate-900/60 hover:border-brand-purple/40'
+                              }`}
+                            >
+                              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+                                <div className="flex-1 min-w-0 space-y-4">
+                                  <div className="flex flex-wrap items-center gap-3">
+                                    {/* Status Badge */}
+                                    {isProcessingItem && (
+                                      <span className="flex items-center gap-1.5 px-3 py-1 bg-brand-purple/20 text-brand-purple border border-brand-purple/40 rounded-full text-[10px] font-bold uppercase tracking-wider animate-pulse">
+                                        <RefreshCw size={11} className="animate-spin" />
+                                        {t('history.statusProcessing')}
+                                      </span>
+                                    )}
+                                    {isQueuedItem && (
+                                      <span className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-full text-[10px] font-bold uppercase tracking-wider">
+                                        <Clock size={11} />
+                                        {t('history.statusQueued')}
+                                      </span>
+                                    )}
+                                    {isFailedItem && (
+                                      <span className="flex items-center gap-1.5 px-3 py-1 bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-full text-[10px] font-bold uppercase tracking-wider">
+                                        <AlertCircle size={11} />
+                                        {t('history.statusFailed')}
+                                      </span>
+                                    )}
+                                    {isCompletedItem && (
+                                      <span className="flex items-center gap-1.5 px-2.5 py-0.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-bold uppercase tracking-wider">
+                                        <CheckCircle2 size={11} />
+                                        {t('history.statusCompleted')}
+                                      </span>
+                                    )}
+
+                                    <span className="px-3 py-1 bg-brand-purple/10 text-brand-purple rounded-full text-[10px] font-bold uppercase tracking-[0.15em] border border-brand-purple/20">
+                                      {item.config?.voiceId || 'voice'}
+                                    </span>
+                                    <div className="flex items-center gap-2 text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest">
+                                      <Clock size={12} />
+                                      {formatDate(item.createdAt)}
+                                    </div>
+                                    {(item.duration || item.baseDuration) > 0 && (
+                                      <div className="flex items-center gap-2 text-[10px] text-brand-purple font-bold uppercase tracking-widest bg-brand-purple/5 px-2 py-0.5 rounded-full border border-brand-purple/10">
+                                        <Play size={10} fill="currentColor" />
+                                        {formatMyanmarDuration(item.duration || item.baseDuration || 0)}
+                                      </div>
+                                    )}
+                                    {item.config?.customFileName && (
+                                      <span className="text-[10px] text-slate-400 bg-white/5 px-2.5 py-0.5 rounded-full font-mono">
+                                        {item.config.customFileName}
+                                      </span>
+                                    )}
                                   </div>
-                                  {(item.duration || item.baseDuration) > 0 && (
-                                    <div className="flex items-center gap-2 text-[10px] text-brand-purple font-bold uppercase tracking-widest bg-brand-purple/5 px-2 py-0.5 rounded-full border border-brand-purple/10">
-                                      <Play size={10} fill="currentColor" />
-                                      {formatMyanmarDuration(item.duration || item.baseDuration || 0)}
+
+                                  <p className="text-base font-medium text-slate-900 dark:text-slate-200 line-clamp-2 leading-relaxed">
+                                    {item.text}
+                                  </p>
+
+                                  {/* Error message for failed items */}
+                                  {isFailedItem && item.error && (
+                                    <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-400 flex items-center gap-2">
+                                      <AlertCircle size={14} className="shrink-0" />
+                                      <span className="font-mono">{item.error}</span>
                                     </div>
                                   )}
                                 </div>
-                                <p className="text-base font-medium text-slate-900 dark:text-slate-200 line-clamp-2 leading-relaxed">
-                                  {item.text}
-                                </p>
-                              </div>
-                              
-                              <div className="flex items-center gap-3 shrink-0">
-                                <button 
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(item.text);
-                                    showToast(t('generate.copySuccess'), 'success');
-                                  }}
-                                  className="p-3 bg-slate-100 dark:bg-white/5 text-slate-500 rounded-[14px] hover:bg-brand-purple hover:text-white transition-all border border-slate-200 dark:border-white/10 shadow-sm"
-                                  title={t('history.copyText')}
-                                >
-                                  <Clipboard size={18} />
-                                </button>
-                                <button 
-                                  onClick={() => playFromHistory(item)}
-                                  className="flex items-center gap-3 px-6 py-3 bg-brand-purple text-white rounded-[16px] text-sm font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/30 active:scale-95"
-                                >
-                                  <Play size={16} fill="currentColor" /> {t('history.play')}
-                                </button>
-                                <div className="h-10 w-[1px] bg-slate-200 dark:bg-slate-800 mx-1" />
-                                <button 
-                                  onClick={() => {
-                                    const baseName = item.config?.customFileName?.trim() 
-                                      ? item.config.customFileName.trim().replace(/\.(mp3|wav)$/i, '')
-                                      : `narration-${item.id}`;
-                                    const ext = item.audioStorageUrl?.split('?')[0].endsWith('.wav') ? 'wav' : 'mp3';
-                                    handleDownloadAudio(item.audioStorageUrl || '', `${baseName}.${ext}`);
-                                  }}
-                                  className="p-3 bg-blue-500/10 text-blue-500 rounded-[14px] hover:bg-blue-500 hover:text-white transition-all border border-blue-500/20 shadow-sm"
-                                  title={t('output.downloadMp3')}
-                                >
-                                  <Music size={18} />
-                                </button>
-                                <button 
-                                  onClick={() => {
-                                    const baseName = item.config?.customFileName?.trim() 
-                                      ? item.config.customFileName.trim().replace(/\.(mp3|wav|srt)$/i, '')
-                                      : `subtitles-${item.id}`;
-                                    handleDownloadSRT(item.srtStorageUrl || item.srtContent || '', `${baseName}.srt`);
-                                  }}
-                                  className="p-3 bg-brand-purple/10 text-brand-purple rounded-[14px] hover:bg-brand-purple hover:text-white transition-all border border-brand-purple/20 shadow-sm"
-                                  title={t('output.downloadSrt')}
-                                >
-                                  <FileText size={18} />
-                                </button>
-                                <button 
-                                  onClick={() => handleDeleteHistory(item.id)}
-                                  className="p-3 bg-rose-500/10 text-rose-500 rounded-[14px] hover:bg-rose-500 hover:text-white transition-all border border-rose-500/20 shadow-sm"
-                                  title={t('history.delete')}
-                                >
-                                  <Trash2 size={18} />
-                                </button>
+                                
+                                <div className="flex items-center gap-2.5 shrink-0">
+                                  {isCompletedItem && (
+                                    <>
+                                      <button 
+                                        onClick={() => {
+                                          navigator.clipboard.writeText(item.text);
+                                          showToast(t('generate.copySuccess'), 'success');
+                                        }}
+                                        className="p-3 bg-slate-100 dark:bg-white/5 text-slate-500 rounded-[14px] hover:bg-brand-purple hover:text-white transition-all border border-slate-200 dark:border-white/10 shadow-sm"
+                                        title={t('history.copyText')}
+                                      >
+                                        <Clipboard size={18} />
+                                      </button>
+                                      <button 
+                                        onClick={() => playFromHistory(item)}
+                                        className="flex items-center gap-2.5 px-5 py-3 bg-brand-purple text-white rounded-[16px] text-sm font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/30 active:scale-95"
+                                      >
+                                        <Play size={16} fill="currentColor" /> {t('history.play')}
+                                      </button>
+                                      <div className="h-9 w-[1px] bg-slate-200 dark:bg-slate-800 mx-1" />
+                                      <button 
+                                        onClick={() => {
+                                          const baseName = item.config?.customFileName?.trim() 
+                                            ? item.config.customFileName.trim().replace(/\.(mp3|wav)$/i, '')
+                                            : `narration-${item.id}`;
+                                          const ext = (item.audioStorageUrl || item.localAudioUrl)?.split('?')[0].endsWith('.wav') ? 'wav' : 'mp3';
+                                          handleDownloadAudio(item.audioStorageUrl || item.localAudioUrl || item.localAudioData || '', `${baseName}.${ext}`);
+                                        }}
+                                        className="p-3 bg-blue-500/10 text-blue-500 rounded-[14px] hover:bg-blue-500 hover:text-white transition-all border border-blue-500/20 shadow-sm"
+                                        title={t('output.downloadMp3')}
+                                      >
+                                        <Music size={18} />
+                                      </button>
+                                      <button 
+                                        onClick={() => {
+                                          const baseName = item.config?.customFileName?.trim() 
+                                            ? item.config.customFileName.trim().replace(/\.(mp3|wav|srt)$/i, '')
+                                            : `subtitles-${item.id}`;
+                                          handleDownloadSRT(item.srtStorageUrl || item.srtContent || '', `${baseName}.srt`);
+                                        }}
+                                        className="p-3 bg-brand-purple/10 text-brand-purple rounded-[14px] hover:bg-brand-purple hover:text-white transition-all border border-brand-purple/20 shadow-sm"
+                                        title={t('output.downloadSrt')}
+                                      >
+                                        <FileText size={18} />
+                                      </button>
+                                    </>
+                                  )}
+
+                                  {isQueuedItem && (
+                                    <button 
+                                      onClick={() => handleCancelQueuedItem(item.id)}
+                                      className="flex items-center gap-2 px-4 py-2.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 rounded-[14px] text-xs font-bold border border-amber-500/20 transition-all"
+                                      title="Cancel from queue"
+                                    >
+                                      <X size={14} />
+                                      {t('history.cancel')}
+                                    </button>
+                                  )}
+
+                                  {isFailedItem && (
+                                    <button 
+                                      onClick={() => handleRetryItem(item.id)}
+                                      className="flex items-center gap-2 px-5 py-2.5 bg-brand-purple text-white rounded-[14px] text-xs font-bold hover:bg-brand-purple/90 transition-all shadow-md shadow-brand-purple/20 active:scale-95"
+                                      title="Retry this item"
+                                    >
+                                      <RotateCcw size={14} />
+                                      {t('history.retry')}
+                                    </button>
+                                  )}
+
+                                  {isProcessingItem && (
+                                    <div className="flex items-center gap-1.5 px-4 py-2 bg-brand-purple/15 text-brand-purple rounded-xl border border-brand-purple/30">
+                                      <RefreshCw size={14} className="animate-spin" />
+                                      <span className="text-xs font-bold">Rendering...</span>
+                                    </div>
+                                  )}
+
+                                  <button 
+                                    onClick={() => handleDeleteHistory(item.id)}
+                                    className="p-3 bg-rose-500/10 text-rose-500 rounded-[14px] hover:bg-rose-500 hover:text-white transition-all border border-rose-500/20 shadow-sm"
+                                    title={t('history.delete')}
+                                  >
+                                    <Trash2 size={18} />
+                                  </button>
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -2244,6 +2898,13 @@ export default function App() {
         membershipStatus={userControl?.membershipStatus}
         vbsId={profile?.vbsId || userControl?.vbsId || vbsId}
         allowAdminKeys={globalSettings.allow_admin_keys}
+      />
+      <BatchQueueModal 
+        isOpen={isBatchModalOpen}
+        onClose={() => setIsBatchModalOpen(false)}
+        onQueueItems={handleQueueBatch}
+        currentConfig={config}
+        isProcessing={isBatchProcessing}
       />
       <AnimatePresence>
         {toast && (

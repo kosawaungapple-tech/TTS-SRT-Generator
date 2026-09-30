@@ -126,19 +126,22 @@ export function parseSRTTime(timeStr: string): number {
 }
 
 /**
- * Applies speed, pitch, and volume adjustments using OfflineAudioContext.
+ * Applies speed, pitch, and gain control adjustments using OfflineAudioContext.
  * Uses native preservesPitch for high-quality time-stretching.
  * 
  * @param audioBlob The source audio blob (MP3 or WAV)
- * @param config Processing options: speed (0.5x-2x), pitch (-10 to +10 semitones), volume (0dB to +20dB)
+ * @param config Processing options: speed (0.5x-2x), pitch (-10 to +10 semitones), volume/gain boost (0dB to +10dB)
  */
 export async function renderProcessedAudio(
   audioBlob: Blob, 
-  config: { speed: number; pitch: number; volume: number }
+  config: { speed?: number; pitch?: number; volume?: number; gainBoost?: number }
 ): Promise<{ blob: Blob; duration: number }> {
-  const { speed = 1.0, pitch = 0, volume = 0 } = config;
+  const { speed = 1.0, pitch = 0 } = config;
+  const rawVolume = config.volume ?? config.gainBoost ?? 0;
+  // Implement gain control node boosting output volume by up to 10dB (clamped between 0dB and 10dB)
+  const volumeDb = Math.max(0, Math.min(10, Number(rawVolume) || 0));
   
-  console.log(`audioUtils: Rendering processed audio (Speed: ${speed}x, Pitch: ${pitch}, Volume: ${volume}dB)`);
+  console.log(`audioUtils: Rendering processed audio (Speed: ${speed}x, Pitch: ${pitch}, Gain Boost: +${volumeDb}dB)`);
   
   const arrayBuffer = await audioBlob.arrayBuffer();
   const AudioContextClass = (window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext) as typeof AudioContext;
@@ -198,20 +201,21 @@ export async function renderProcessedAudio(
     source.detune.setValueAtTime(pitch * 100, offlineCtx.currentTime);
   }
   
-  // 3. Apply Volume Booster (Gain)
-  // gain = 10^(dB/20)
+  // 3. Apply Gain Control Node (Boosts output volume by up to 10dB)
+  // Linear gain formula from decibels: gain = 10^(dB / 20)
+  // At 0dB, gain = 1.0 (unity). At +10dB, gain ≈ 3.162 (+10dB boost).
   const gainNode = offlineCtx.createGain();
-  const gainValue = Math.pow(10, volume / 20);
+  const gainValue = Math.pow(10, volumeDb / 20);
   gainNode.gain.setValueAtTime(gainValue, offlineCtx.currentTime);
   
-  // Chain: Source -> Gain -> Destination
+  // Connect processing graph: Source -> Gain Node -> Destination
   source.connect(gainNode);
   gainNode.connect(offlineCtx.destination);
   
   source.start(0);
   
   const renderedBuffer = await offlineCtx.startRendering();
-  console.log(`audioUtils: Rendered duration: ${renderedBuffer.duration}s`);
+  console.log(`audioUtils: Rendered duration: ${renderedBuffer.duration}s with Gain Boost: +${volumeDb}dB (x${gainValue.toFixed(2)})`);
   
   // Convert back to WAV (no more MP3)
   const finalBlob = audioBufferToWav(renderedBuffer);
@@ -267,4 +271,112 @@ export async function applyAudioEffects(bytes: Uint8Array, effects: Record<strin
   // Stub for audio effects mapping
   console.log("Applying mock effects to audio data...", effects);
   return bytes;
+}
+
+/**
+ * Detects silence duration at the start and end of an AudioBuffer.
+ * @param buffer The AudioBuffer to scan
+ * @param threshold Amplitude threshold for silence (default 0.012 ≈ -38dB)
+ * @param safetyPadding Seconds of headroom to keep around speech (default 0.03s = 30ms)
+ */
+export function detectSilence(
+  buffer: AudioBuffer, 
+  threshold: number = 0.012,
+  safetyPadding: number = 0.03
+): { startSilence: number; endSilence: number } {
+  const sampleRate = buffer.sampleRate;
+  const numChannels = buffer.numberOfChannels;
+  const length = buffer.length;
+
+  if (length === 0) return { startSilence: 0, endSilence: 0 };
+
+  let startSample = 0;
+  outerStart: for (let i = 0; i < length; i++) {
+    for (let c = 0; c < numChannels; c++) {
+      if (Math.abs(buffer.getChannelData(c)[i]) > threshold) {
+        startSample = i;
+        break outerStart;
+      }
+    }
+  }
+
+  let endSample = length - 1;
+  outerEnd: for (let i = length - 1; i >= 0; i--) {
+    for (let c = 0; c < numChannels; c++) {
+      if (Math.abs(buffer.getChannelData(c)[i]) > threshold) {
+        endSample = i;
+        break outerEnd;
+      }
+    }
+  }
+
+  if (startSample >= endSample) {
+    return { startSilence: 0, endSilence: 0 };
+  }
+
+  const rawStart = startSample / sampleRate;
+  const rawEnd = (length - 1 - endSample) / sampleRate;
+
+  // Apply safety padding so speech onset and offset are preserved naturally
+  const startSilence = Math.max(0, Math.floor(Math.max(0, rawStart - safetyPadding) * 100) / 100);
+  const endSilence = Math.max(0, Math.floor(Math.max(0, rawEnd - safetyPadding) * 100) / 100);
+
+  return { startSilence, endSilence };
+}
+
+/**
+ * Trims audio start and end silence, returning a new AudioBuffer.
+ * @param buffer Source AudioBuffer
+ * @param trimStart Seconds to trim from the beginning
+ * @param trimEnd Seconds to trim from the end
+ */
+export function trimAudioBuffer(
+  buffer: AudioBuffer, 
+  trimStart: number, 
+  trimEnd: number
+): AudioBuffer {
+  const sampleRate = buffer.sampleRate;
+  const numChannels = buffer.numberOfChannels;
+
+  const safeTrimStart = Math.max(0, Math.min(buffer.duration - 0.05, trimStart));
+  const safeTrimEnd = Math.max(0, Math.min(buffer.duration - safeTrimStart - 0.05, trimEnd));
+
+  const startSample = Math.max(0, Math.min(buffer.length - 1, Math.floor(safeTrimStart * sampleRate)));
+  const endSample = Math.max(startSample + 1, Math.min(buffer.length, Math.floor((buffer.duration - safeTrimEnd) * sampleRate)));
+
+  const trimmedLength = Math.max(1, endSample - startSample);
+
+  const offlineCtx = new OfflineAudioContext(numChannels, trimmedLength, sampleRate);
+  const trimmed = offlineCtx.createBuffer(numChannels, trimmedLength, sampleRate);
+
+  for (let c = 0; c < numChannels; c++) {
+    const src = buffer.getChannelData(c);
+    const slice = src.subarray(startSample, endSample);
+    trimmed.copyToChannel(slice, c, 0);
+  }
+
+  return trimmed;
+}
+
+/**
+ * Converts a WAV Blob into an MP3 Blob using the server-side FFmpeg encoder.
+ * Falls back to the original blob if server is unreachable.
+ */
+export async function convertWavToMp3(wavBlob: Blob): Promise<Blob> {
+  try {
+    const formData = new FormData();
+    formData.append('audio', wavBlob, 'audio.wav');
+    const response = await fetch('/api/audio/convert-to-mp3', {
+      method: 'POST',
+      body: formData,
+    });
+    if (!response.ok) {
+      throw new Error(`MP3 conversion failed: ${response.statusText}`);
+    }
+    const mp3Blob = await response.blob();
+    return new Blob([mp3Blob], { type: 'audio/mpeg' });
+  } catch (err) {
+    console.warn("audioUtils: MP3 conversion failed, fallback to WAV blob:", err);
+    return wavBlob;
+  }
 }

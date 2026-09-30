@@ -258,3 +258,44 @@ function parseTimestampToSeconds(timestamp: string): number {
   const [h, m, s] = hms.split(':').map(Number);
   return h * 3600 + m * 60 + s + (Number(ms) / 1000);
 }
+
+/**
+ * Shifts subtitle timestamps by offsetSeconds when audio is trimmed,
+ * and discards subtitles that fall beyond maxDuration.
+ */
+export function shiftSubtitles(
+  subtitles: SRTSubtitle[], 
+  offsetSeconds: number, 
+  maxDuration?: number
+): SRTSubtitle[] {
+  if (offsetSeconds <= 0 && !maxDuration) return subtitles;
+  
+  let validIndex = 1;
+  const result: SRTSubtitle[] = [];
+
+  for (const sub of subtitles) {
+    const origStart = parseTimestampToSeconds(sub.startTime);
+    const origEnd = parseTimestampToSeconds(sub.endTime);
+
+    // If subtitle ended before trim point, skip
+    if (origEnd <= offsetSeconds) continue;
+
+    const shiftedStart = Math.max(0, origStart - offsetSeconds);
+    const shiftedEnd = Math.max(0, origEnd - offsetSeconds);
+
+    if (maxDuration !== undefined && shiftedStart >= maxDuration) continue;
+
+    const finalEnd = maxDuration !== undefined ? Math.min(maxDuration, shiftedEnd) : shiftedEnd;
+
+    if (finalEnd > shiftedStart) {
+      result.push({
+        index: validIndex++,
+        startTime: formatTime(shiftedStart),
+        endTime: formatTime(finalEnd),
+        text: sub.text
+      });
+    }
+  }
+
+  return result;
+}

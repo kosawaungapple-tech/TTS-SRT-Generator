@@ -73,7 +73,12 @@ export const translations = {
     voice: { en: "Voice Persona", mm: "အသံရွေးချယ်ရန်" },
     speed: { en: "Speaking Speed", mm: "အသံအနှေးအမြန်" },
     pitch: { en: "Voice Pitch", mm: "အသံအနိမ့်အမြင့်" },
-    volume: { en: "Volume", mm: "အသံပမာဏ" },
+    volume: { en: "Volume Gain Boost", mm: "အသံအားမြှင့်တင်ခြင်း (Gain Boost)" },
+    exportFormat: { en: "Audio Export Format", mm: "အသံဖိုင် ဖော်မတ်ရွေးချယ်ရန်" },
+    formatWav: { en: "WAV", mm: "WAV" },
+    formatMp3: { en: "MP3", mm: "MP3" },
+    formatWavSubtitle: { en: "Lossless / Studio Quality", mm: "အရည်အသွေးမြင့် PCM" },
+    formatMp3Subtitle: { en: "Compact / Web Friendly", mm: "ဖိုင်အရွယ်အစားသေး" },
     style: { en: "Narration Style Instructions", mm: "အသံနေအထား ညွှန်ကြားချက်" },
     stylePlaceholder: { en: "e.g. Angry, Excited, Professional...", mm: "ဥပမာ - Angry, Excited, Professional..." },
     changesApplyNext: { en: "Changes will apply to the next generation.", mm: "ပြုပြင်ပြောင်းလဲမှုများသည် နောက်တစ်ကြိမ် ထုတ်ယူမှသာ သက်ရောက်မည်ဖြစ်သည်။" },
@@ -106,7 +111,20 @@ export const translations = {
       calm: { en: "Calm", mm: "တည်ငြိမ်သော" }
     },
     creativityLow: { en: "Precise & Factual", mm: "တိကျပြီး အချက်အလက်ကျသော" },
-    creativityHigh: { en: "Dramatic Storytelling", mm: "ဇာတ်လမ်းဆန်သော ပြောဟန်" }
+    creativityHigh: { en: "Dramatic Storytelling", mm: "ဇာတ်လမ်းဆန်သော ပြောဟန်" },
+    voiceProfile: {
+      title: { en: "Custom Voice Profile", mm: "အသံတုပြုလုပ်ရန်" },
+      cloning: { en: "Voice Style Cloning", mm: "အသံတုပြုလုပ်ရန်" },
+      record: { en: "Record (15-30s)", mm: "အသံသွင်းမည် (၁၅-၃၀စက္ကန့်)" },
+      upload: { en: "Upload Audio", mm: "အသံဖိုင်တင်မည်" },
+      ready: { en: "Voice Profile Ready", mm: "အသံတုအဆင်သင့်ဖြစ်ပါပြီ" },
+      usingCloning: { en: "Using custom voice cloning", mm: "ကိုယ်ပိုင်အသံတုကို အသုံးပြုနေသည်" },
+      bestResult: { en: "* For best results, record clearly for 15-30 seconds.", mm: "* အကောင်းဆုံးရလဒ်ရရန် မိမိအသံကို ၁၅ စက္ကန့်မှ ၃၀ စက္ကန့်အတွင်း ကြည်လင်ပြတ်သားစွာ အသံသွင်းပေးပါ။" },
+      tooShort: { en: "Recording too short. Please record for at least 15 seconds.", mm: "အသံသွင်းချိန် တိုလွန်းနေပါသည်။ အနည်းဆုံး ၁၅ စက္ကန့်ခန့် သွင်းပေးပါ။" },
+      fileLarge: { en: "File too large. Max 10MB.", mm: "ဖိုင်အရွယ်အစား ကြီးမားလွန်းနေပါသည်။ အများဆုံး 10MB အထိသာ ခွင့်ပြုပါသည်။" },
+      accessDenied: { en: "Microphone access denied or error occurred.", mm: "မိုက်ခရိုဖုန်း အသုံးပြုခွင့် မရရှိပါ သို့မဟုတ် အမှားတစ်ခု ဖြစ်ပေါ်နေပါသည်။" },
+      stop: { en: "Stop", mm: "ရပ်မည်" }
+    }
   },
 
   // Translator
@@ -155,7 +173,23 @@ export const translations = {
     emptySubtitle: { en: "Generated audio and subtitles will appear here after you click generate.", mm: "အသံနှင့် စာတန်းထိုးများကို ထုတ်ယူပြီးပါက ဤနေရာတွင် မြင်တွေ့ရမည်ဖြစ်သည်။" },
     srtPreview: { en: "Subtitle Preview (SRT)", mm: "စာတန်းထိုး နမူနာ (SRT)" },
     downloadWav: { en: "Download WAV", mm: "WAV ရယူမည်" },
-    downloadSrt: { en: "Download SRT", mm: "SRT ရယူမည်" }
+    downloadMp3: { en: "Download MP3", mm: "MP3 ရယူမည်" },
+    downloadSrt: { en: "Download SRT", mm: "SRT ရယူမည်" },
+    audioTrimming: { en: "Audio Trimming & Silence Removal", mm: "အသံအစ/အဆုံး ဖြတ်ညှိခြင်း (Trim Silence)" },
+    trimStart: { en: "Trim Start Silence", mm: "အစပိုင်း အသံတိတ်ဖြတ်ရန်" },
+    trimEnd: { en: "Trim End Silence", mm: "အဆုံးပိုင်း အသံတိတ်ဖြတ်ရန်" },
+    autoDetectSilence: { en: "Auto-Detect Silence", mm: "အလိုအလျောက် အသံတိတ်ရှာမည်" },
+    resetTrim: { en: "Reset Trim", mm: "မူလအတိုင်းထားမည်" },
+    trimmedDuration: { en: "Trimmed Duration", mm: "ဖြတ်ညှိပြီး ကြာချိန်" },
+    downloadTrimmedWav: { en: "Download Trimmed WAV", mm: "ဖြတ်ညှိပြီး WAV ရယူမည်" },
+    downloadTrimmedMp3: { en: "Download Trimmed MP3", mm: "ဖြတ်ညှိပြီး MP3 ရယူမည်" },
+    previewTrimmed: { en: "Preview Trimmed", mm: "ဖြတ်ထားသောအသံ နားဆင်မည်" },
+    downloadOriginal: { en: "Download Original", mm: "မူရင်းအသံဖိုင် ရယူမည်" },
+    trimActive: { en: "Trim Active", mm: "ဖြတ်ညှိထားသည်" },
+    untrimmed: { en: "Untrimmed", mm: "မူရင်းအတိုင်း" },
+    silenceDetectedToast: { en: "Detected silence trimmed", mm: "အသံတိတ်အပိုင်းများကို ရှာဖွေဖြတ်ညှိပြီးပါပြီ" },
+    noSilenceDetected: { en: "No silence detected at start or end", mm: "ဖြတ်စရာ အသံတိတ် မတွေ့ပါ" },
+    trimHint: { en: "Remove silent pauses at start and end for tight cinematic narration.", mm: "စကားပြောအစနှင့် အဆုံးရှိ အသံတိတ်အပိုင်းများကို ဖယ်ရှားပြီး သဘာဝကျကျ အသံထွက်စေပါသည်။" }
   },
 
   history: {
@@ -169,7 +203,23 @@ export const translations = {
     loading: { en: "Loading your history...", mm: "မှတ်တမ်းများကို ရယူနေပါသည်..." },
     copyText: { en: "Copy Text", mm: "စာသားကူးယူရန်" },
     play: { en: "Load to Player", mm: "Player သို့ ပို့မည်" },
-    clearScript: { en: "Clear Script", mm: "စာသားများဖျက်မည်" }
+    clearScript: { en: "Clear Script", mm: "စာသားများဖျက်မည်" },
+    batchQueue: { en: "Batch Queue", mm: "အသုတ်လိုက် ထုတ်ယူရန်" },
+    batchUploadBtn: { en: "Upload Batch", mm: "စာရင်းအသစ်တင်ရန်" },
+    filterAll: { en: "All", mm: "အားလုံး" },
+    filterCompleted: { en: "Completed", mm: "ပြီးစီးပါပြီ" },
+    filterQueued: { en: "Queued", mm: "တန်းစီထားသည်" },
+    filterFailed: { en: "Failed", mm: "မအောင်မြင်ပါ" },
+    statusQueued: { en: "Queued", mm: "တန်းစီထားသည်" },
+    statusProcessing: { en: "Generating...", mm: "ဖန်တီးနေသည်..." },
+    statusCompleted: { en: "Completed", mm: "ပြီးစီးပါပြီ" },
+    statusFailed: { en: "Failed", mm: "မအောင်မြင်ပါ" },
+    retry: { en: "Retry", mm: "ပြန်စမည်" },
+    cancel: { en: "Cancel", mm: "ပယ်ဖျက်မည်" },
+    pause: { en: "Pause Queue", mm: "ခေတ္တရပ်မည်" },
+    resume: { en: "Resume Queue", mm: "ဆက်လုပ်မည်" },
+    cancelAll: { en: "Cancel Remaining", mm: "ကျန်ရှိမှု ပယ်ဖျက်မည်" },
+    retryAll: { en: "Retry Failed", mm: "မအောင်မြင်သည်များ ပြန်ကြိုးစားမည်" }
   },
 
   // Common / UI

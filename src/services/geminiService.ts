@@ -3,7 +3,7 @@ import { generateOptimizedSubtitles, generateSubtitlesFromTimestamps, generateSR
 import { apiChannelManager } from "./apiChannelManager";
 import { getIdToken } from "../firebase";
 import { ttsCache } from "./ttsCache";
-import { TTSConfig, AudioResult, SRTSubtitle, GeminiContent } from "../types";
+import { TTSConfig, AudioResult, SRTSubtitle } from "../types";
 import { GEMINI_MODELS, VOICE_OPTIONS } from "../constants";
 
 interface GeminiResponse {
@@ -62,13 +62,7 @@ export class GeminiTTSService {
             body: JSON.stringify({
               model: modelName,
               selectedModel: body.selectedModel || modelName,
-              contents: (body.contents as GeminiContent[]).map((c) => ({
-                role: c.role || 'user',
-                parts: c.parts.map((p) => {
-                  if (typeof p === 'string') return { text: p };
-                  return p;
-                })
-              })),
+              contents: body.contents,
               config: body.generationConfig,
               apiKey: key,
               isTts: body.isTts || false
@@ -87,7 +81,7 @@ export class GeminiTTSService {
         }
 
         const contentType = response.headers.get("content-type");
-        let data: GeminiResponse & { error?: string; message?: string; details?: unknown; rawError?: string };
+        let data: GeminiResponse & { error?: string; message?: string };
 
         if (contentType && contentType.includes("application/json")) {
           data = await response.json();
@@ -369,26 +363,56 @@ export class GeminiTTSService {
     const hasTimestamps = /\[\d{1,2}:\d{1,2}\.\d{3}\]/.test(text);
     const audioText = hasTimestamps ? text.replace(/\[\d{1,2}:\d{1,2}\.\d{3}\]/g, "").trim() : text;
 
-    const textWithInstruction = combinedInstruction
+    let textWithInstruction = combinedInstruction
       ? `[${combinedInstruction}]\n\n${audioText}`
       : audioText;
 
-    const selectedModel = config.selectedModel || GEMINI_MODELS.TTS;
+    let selectedModel = config.selectedModel || GEMINI_MODELS.TTS;
+    const hasAudioInput = !!config.voiceProfile;
 
-    console.log(`Gemini TTS: Using model ${selectedModel} for text "${textWithInstruction.substring(0, 50)}..."`);
+    if (hasAudioInput) {
+      textWithInstruction = `Task: Perform Text-to-Speech synthesis. Read the following text aloud using the voice tone/style from the attached audio reference. Output format MUST BE AUDIO.
 
-    const body = {
-      contents: [{ role: 'user', parts: [{ text: textWithInstruction }] }],
-      generationConfig: {
-        responseModalities: ["AUDIO"],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: {
-              voiceName: voice.voiceName || "Leda"
-            }
+        Text to speak:
+        "${audioText}"`;
+    }
+
+    // Dynamically switch to multimodal model if audio input is present
+    if (hasAudioInput && selectedModel.includes('tts')) {
+      selectedModel = 'gemini-2.5-flash';
+    }
+
+    const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [{ text: textWithInstruction }];
+    
+    // Only add audio input if the model is NOT a dedicated TTS-only model
+    if (hasAudioInput && !selectedModel.includes('tts')) {
+      parts.unshift({
+        inlineData: {
+          mimeType: "audio/webm",
+          data: config.voiceProfile!
+        }
+      });
+    }
+
+    const generationConfig: Record<string, unknown> = {
+      responseModalities: ["AUDIO"],
+    };
+
+    if (hasAudioInput && !selectedModel.includes('tts')) {
+      generationConfig.systemInstruction = "Analyze ONLY the vocal characteristics, pitch, accent, and speed from the provided audio sample. DO NOT transcribe the audio. Generate the spoken output for the target text matching this voice persona style as closely as possible.";
+    } else {
+      generationConfig.speechConfig = {
+        voiceConfig: {
+          prebuiltVoiceConfig: {
+            voiceName: voice.voiceName || "Leda"
           }
         }
-      },
+      };
+    }
+
+    const body = {
+      contents: [{ role: 'user', parts }],
+      generationConfig,
       selectedModel: selectedModel,
       isTts: true
     };
@@ -396,9 +420,9 @@ export class GeminiTTSService {
     const data = await this.geminiRequest(selectedModel, body, 0, onRetry);
     
     // Search all parts in the candidate content to find inlineData
-    const parts = data.candidates?.[0]?.content?.parts || [];
+    const responseParts = data.candidates?.[0]?.content?.parts || [];
     let audioPart = null;
-    for (const part of parts) {
+    for (const part of responseParts) {
       if (part.inlineData) {
         audioPart = part.inlineData;
         break;
@@ -660,11 +684,8 @@ export class GeminiTTSService {
     };
 
     const prompt = `${stylePrompts[style]}\n\nOriginal Text:\n${text}\n\nOutput only the rewritten Myanmar text.`;
-    
-    console.log(`Gemini Rewrite: Requesting style ${style}`);
-    
     const data = await this.geminiRequest(GEMINI_MODELS.REWRITE, {
-      contents: [{ role: 'user', parts: [{ text: prompt }] }]
+      contents: [{ parts: [{ text: prompt }] }]
     }, 0, onRetry);
     const textResult = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!textResult) throw new Error('No text generated by Gemini');

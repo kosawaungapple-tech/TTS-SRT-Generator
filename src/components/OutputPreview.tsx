@@ -1,10 +1,25 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { motion } from 'motion/react';
-import { Headphones, Play, Pause, FileText, Music, RefreshCw, Sparkles, Clipboard, Check, AlertCircle } from 'lucide-react';
+import { 
+  Headphones, 
+  Play, 
+  Pause, 
+  FileText, 
+  Music, 
+  RefreshCw, 
+  Sparkles, 
+  Clipboard, 
+  Check, 
+  AlertCircle,
+  Scissors,
+  RotateCcw,
+  Download,
+  CheckCircle2
+} from 'lucide-react';
 import { AudioResult } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
-import { formatTime, formatMyanmarDuration, pcmToWav } from '../utils/audioUtils';
-import { generateSRT, generateASS, generateLRC } from '../utils/subtitleUtils';
+import { formatTime, formatMyanmarDuration, pcmToWav, detectSilence, trimAudioBuffer, audioBufferToWav, convertWavToMp3 } from '../utils/audioUtils';
+import { generateSRT, generateASS, generateLRC, shiftSubtitles } from '../utils/subtitleUtils';
 
 interface OutputPreviewProps {
   result: AudioResult | null;
@@ -13,7 +28,7 @@ interface OutputPreviewProps {
   retryCountdown?: number;
   error?: string | null;
   onRetry?: () => void;
-  showToast: (message: string, type: 'success' | 'error') => void;
+  showToast: (message: string, type: 'success' | 'error' | 'info') => void;
   config?: import('../types').TTSConfig;
 }
 
@@ -64,6 +79,12 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   const [playerVolume] = useState(1.0);
   const [currentSrt, setCurrentSrt] = useState('');
   const [isSrtCopied, setIsSrtCopied] = useState(false);
+
+  // Audio Trimming State
+  const [trimStart, setTrimStart] = useState<number>(0);
+  const [trimEnd, setTrimEnd] = useState<number>(0);
+  const [audioBufferState, setAudioBufferState] = useState<AudioBuffer | null>(null);
+  const [isPreviewTrimmed, setIsPreviewTrimmed] = useState<boolean>(false);
   
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
@@ -77,17 +98,29 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   const gainNodeRef = useRef<GainNode | null>(null);
   const [isFallback, setIsFallback] = useState(false);
 
-  // Note: playerVolume is now independent of globalVolume (dB boost)
-  // because the dB boost is already baked into the audio file.
-  // We default player volume to 100% (1.0).
+  const isTrimActive = trimStart > 0 || trimEnd > 0;
+  const trimmedDuration = Math.max(0.1, duration - trimStart - trimEnd);
+
+  // Synchronized subtitles adjusted for start trim and duration
+  const activeSubtitles = useMemo(() => {
+    if (!result?.subtitles || result.subtitles.length === 0) return [];
+    if (isTrimActive && trimStart > 0) {
+      return shiftSubtitles(result.subtitles, trimStart, trimmedDuration);
+    }
+    return result.subtitles;
+  }, [result?.subtitles, isTrimActive, trimStart, trimmedDuration]);
 
   // Set duration and current SRT from result
   useEffect(() => {
     if (result) {
-      setCurrentSrt(result.srtContent || '');
+      if (isTrimActive && activeSubtitles.length > 0) {
+        setCurrentSrt(generateSRT(activeSubtitles));
+      } else {
+        setCurrentSrt(result.srtContent || '');
+      }
       setDuration(result.baseDuration);
     }
-  }, [result]);
+  }, [result, isTrimActive, activeSubtitles]);
 
   // Handle Playback Speed change
   // Note: We ignore playbackSpeed for the audio node because the speed is already baked into the file
@@ -104,6 +137,10 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
       setCurrentTime(0);
       pausedTimeRef.current = 0;
       audioBufferRef.current = null;
+      setAudioBufferState(null);
+      setTrimStart(0);
+      setTrimEnd(0);
+      setIsPreviewTrimmed(false);
       
       // Decode audio data early
       const decode = async () => {
@@ -130,6 +167,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
             // slice(0) to avoid detached buffer issues if decoded multiple times
             const buffer = await audioContextRef.current.decodeAudioData(bufferToDecode.slice(0));
             audioBufferRef.current = buffer;
+            setAudioBufferState(buffer);
             setDuration(buffer.duration);
             setIsFallback(false);
           } catch {
@@ -141,6 +179,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
               const wavBuffer = await wavBlob.arrayBuffer();
               const buffer = await audioContextRef.current.decodeAudioData(wavBuffer);
               audioBufferRef.current = buffer;
+              setAudioBufferState(buffer);
               setDuration(buffer.duration);
               setIsFallback(false);
               console.log("audioUtils: Successfully decoded audio in Preview after wrapping raw PCM as WAV.");
@@ -332,16 +371,22 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
       interval = window.setInterval(() => {
         if (audioContextRef.current) {
           const elapsed = (audioContextRef.current.currentTime - startTimeRef.current);
-          const newTime = Math.min(elapsed, duration);
+          const maxPlayTime = isPreviewTrimmed ? (duration - trimEnd) : duration;
+          const newTime = Math.min(elapsed, maxPlayTime);
           setCurrentTime(newTime);
-          if (newTime >= duration) {
+          if (newTime >= maxPlayTime) {
             setIsPlaying(false);
+            if (isPreviewTrimmed) {
+              setIsPreviewTrimmed(false);
+              setCurrentTime(trimStart);
+              pausedTimeRef.current = trimStart;
+            }
           }
         }
       }, 50);
     }
     return () => clearInterval(interval);
-  }, [isPlaying, duration]);
+  }, [isPlaying, duration, isPreviewTrimmed, trimEnd, trimStart]);
 
   const togglePlay = async () => {
     try {
@@ -351,6 +396,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
         if (isPlaying) {
           fallbackAudioRef.current.pause();
           setIsPlaying(false);
+          setIsPreviewTrimmed(false);
         } else {
           fallbackAudioRef.current.currentTime = currentTime;
           console.log(`[DEBUG] Fallback Play triggered at ${currentTime}s`);
@@ -365,6 +411,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
       if (isPlaying) {
         pausedTimeRef.current = currentTime;
         stopAudio();
+        setIsPreviewTrimmed(false);
       } else {
         initAudioContext();
         if (audioContextRef.current.state === 'suspended') {
@@ -376,17 +423,20 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
         source.playbackRate.value = 1.0; 
         source.connect(gainNodeRef.current!);
         
-        source.start(0, currentTime);
+        const startSeek = currentTime >= duration - 0.1 ? 0 : currentTime;
+        source.start(0, startSeek);
         sourceNodeRef.current = source;
-        startTimeRef.current = audioContextRef.current.currentTime - currentTime;
+        startTimeRef.current = audioContextRef.current.currentTime - startSeek;
         
-        console.log(`[DEBUG] AudioContext Play triggered at ${currentTime}s`);
+        console.log(`[DEBUG] AudioContext Play triggered at ${startSeek}s`);
         setIsPlaying(true);
+        setIsPreviewTrimmed(false);
 
         source.onended = () => {
           // Only reset if it ended naturally
           if (sourceNodeRef.current === source) {
             setIsPlaying(false);
+            setIsPreviewTrimmed(false);
             if (currentTime >= duration - 0.1) {
               setCurrentTime(0);
               pausedTimeRef.current = 0;
@@ -398,6 +448,113 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
       console.error("[DEBUG] togglePlay error:", err);
       showToast("Playback failed", "error");
     }
+  };
+
+  const handlePreviewTrimmed = async () => {
+    if (isPlaying && isPreviewTrimmed) {
+      stopAudio();
+      setIsPreviewTrimmed(false);
+      setCurrentTime(trimStart);
+      pausedTimeRef.current = trimStart;
+      return;
+    }
+
+    if (isPlaying) {
+      stopAudio();
+    }
+
+    if (isFallback) {
+      if (!fallbackAudioRef.current) return;
+      fallbackAudioRef.current.currentTime = trimStart;
+      await fallbackAudioRef.current.play();
+      setIsPlaying(true);
+      setIsPreviewTrimmed(true);
+      return;
+    }
+
+    const buffer = audioBufferRef.current || audioBufferState;
+    if (!buffer || !audioContextRef.current) {
+      showToast("Audio buffer not ready for preview", "error");
+      return;
+    }
+
+    try {
+      initAudioContext();
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
+
+      const source = audioContextRef.current.createBufferSource();
+      source.buffer = buffer;
+      source.playbackRate.value = 1.0; 
+      source.connect(gainNodeRef.current!);
+
+      const startPos = trimStart;
+      const endPos = Math.max(startPos + 0.1, duration - trimEnd);
+      const playDuration = endPos - startPos;
+
+      source.start(0, startPos, playDuration);
+      sourceNodeRef.current = source;
+      startTimeRef.current = audioContextRef.current.currentTime - startPos;
+      
+      setCurrentTime(startPos);
+      setIsPlaying(true);
+      setIsPreviewTrimmed(true);
+
+      source.onended = () => {
+        if (sourceNodeRef.current === source) {
+          setIsPlaying(false);
+          setIsPreviewTrimmed(false);
+          setCurrentTime(startPos);
+          pausedTimeRef.current = startPos;
+        }
+      };
+    } catch (err) {
+      console.error("[DEBUG] handlePreviewTrimmed error:", err);
+      showToast("Playback failed", "error");
+    }
+  };
+
+  const handleAutoDetectSilence = () => {
+    const buffer = audioBufferRef.current || audioBufferState;
+    if (!buffer) {
+      showToast("Audio is still decoding. Please wait a moment...", "error");
+      return;
+    }
+
+    try {
+      const { startSilence, endSilence } = detectSilence(buffer, 0.012, 0.03);
+      if (startSilence > 0 || endSilence > 0) {
+        const maxStart = Math.max(0, buffer.duration - 0.2);
+        const safeStart = Math.min(maxStart, startSilence);
+        const maxEnd = Math.max(0, buffer.duration - safeStart - 0.2);
+        const safeEnd = Math.min(maxEnd, endSilence);
+
+        setTrimStart(safeStart);
+        setTrimEnd(safeEnd);
+        showToast(
+          `Auto-detected silence: -${safeStart.toFixed(2)}s start, -${safeEnd.toFixed(2)}s end`,
+          'success'
+        );
+      } else {
+        showToast(t('output.noSilenceDetected'), 'info');
+      }
+    } catch (err) {
+      console.error("Auto detect silence error:", err);
+      showToast("Could not detect silence", "error");
+    }
+  };
+
+  const handleResetTrim = () => {
+    setTrimStart(0);
+    setTrimEnd(0);
+    if (isPreviewTrimmed) {
+      stopAudio();
+      setIsPreviewTrimmed(false);
+      setCurrentTime(0);
+      pausedTimeRef.current = 0;
+    }
+    showToast(t('output.resetTrim'), 'success');
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -415,44 +572,92 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
     }
   };
 
-  const handleDownloadAudio = async () => {
+  const handleDownloadAudio = async (forceOriginal: boolean = false) => {
     if (!result) return;
     
     try {
-      console.log(`[DEBUG] handleDownloadAudio triggered`);
+      console.log(`[DEBUG] handleDownloadAudio triggered (forceOriginal: ${forceOriginal})`);
       showToast(t('output.tuning'), 'success');
       
+      const shouldTrim = !forceOriginal && (trimStart > 0 || trimEnd > 0);
       let finalBlob: Blob;
-      
-      if (result.rawAudio) {
-        // Use raw binary if available (most reliable)
-        const bytes = new Uint8Array(result.rawAudio);
-        let type = 'audio/mpeg';
-        if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
-          type = 'audio/wav';
+      const targetFormat = config?.exportFormat || 'wav';
+      let ext = targetFormat;
+
+      if (shouldTrim) {
+        let bufferToTrim = audioBufferRef.current || audioBufferState;
+        if (!bufferToTrim) {
+          // Decode buffer if not cached yet
+          let bufferToDecode: ArrayBuffer;
+          if (result.rawAudio) {
+            bufferToDecode = result.rawAudio;
+          } else {
+            const binaryStr = window.atob(result.audioData);
+            const bytes = new Uint8Array(binaryStr.length);
+            for (let i = 0; i < binaryStr.length; i++) {
+              bytes[i] = binaryStr.charCodeAt(i);
+            }
+            bufferToDecode = bytes.buffer;
+          }
+          if (!audioContextRef.current) {
+            const AudioContextClass = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext) as typeof AudioContext;
+            audioContextRef.current = new AudioContextClass();
+          }
+          bufferToTrim = await audioContextRef.current.decodeAudioData(bufferToDecode.slice(0));
+          audioBufferRef.current = bufferToTrim;
+          setAudioBufferState(bufferToTrim);
         }
-        finalBlob = new Blob([result.rawAudio], { type });
-        console.log(`[DEBUG] Download: Using result.rawAudio, type: ${finalBlob.type}, size: ${finalBlob.size}`);
-      } else if (result.audioData) {
-        // Fallback to base64
-        const binaryStr = window.atob(result.audioData);
-        const bytes = new Uint8Array(binaryStr.length);
-        for (let i = 0; i < binaryStr.length; i++) {
-          bytes[i] = binaryStr.charCodeAt(i);
-        }
+
+        const trimmed = trimAudioBuffer(bufferToTrim, trimStart, trimEnd);
+        const wavBlob = audioBufferToWav(trimmed);
         
-        let type = 'audio/mpeg';
-        if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
-          type = 'audio/wav';
+        if (targetFormat === 'mp3') {
+          finalBlob = await convertWavToMp3(wavBlob);
+          ext = 'mp3';
+        } else {
+          finalBlob = wavBlob;
+          ext = 'wav';
         }
-        finalBlob = new Blob([bytes], { type });
-        console.log(`[DEBUG] Download: Using result.audioData base64, type: ${finalBlob.type}, size: ${finalBlob.size}`);
       } else {
-        throw new Error("No audio data available for download");
+        if (result.rawAudio) {
+          // Use raw binary if available (most reliable)
+          const bytes = new Uint8Array(result.rawAudio);
+          let type = 'audio/mpeg';
+          if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
+            type = 'audio/wav';
+          }
+          finalBlob = new Blob([result.rawAudio], { type });
+          console.log(`[DEBUG] Download: Using result.rawAudio, type: ${finalBlob.type}, size: ${finalBlob.size}`);
+        } else if (result.audioData) {
+          // Fallback to base64
+          const binaryStr = window.atob(result.audioData);
+          const bytes = new Uint8Array(binaryStr.length);
+          for (let i = 0; i < binaryStr.length; i++) {
+            bytes[i] = binaryStr.charCodeAt(i);
+          }
+          
+          let type = 'audio/mpeg';
+          if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
+            type = 'audio/wav';
+          }
+          finalBlob = new Blob([bytes], { type });
+          console.log(`[DEBUG] Download: Using result.audioData base64, type: ${finalBlob.type}, size: ${finalBlob.size}`);
+        } else if (audioBufferRef.current) {
+          finalBlob = audioBufferToWav(audioBufferRef.current);
+        } else {
+          throw new Error("No audio data available for download");
+        }
+
+        if (targetFormat === 'mp3' && finalBlob.type !== 'audio/mpeg') {
+          finalBlob = await convertWavToMp3(finalBlob);
+          ext = 'mp3';
+        } else if (targetFormat === 'wav' && finalBlob.type === 'audio/wav') {
+          ext = 'wav';
+        } else {
+          ext = targetFormat;
+        }
       }
 
-      const ext = finalBlob.type === 'audio/wav' ? 'wav' : 'mp3';
-      
       let baseName = '';
       if (config?.customFileName?.trim()) {
         baseName = config.customFileName.trim();
@@ -461,9 +666,9 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
       } else {
         baseName = `vbs_tts_${Date.now()}`;
       }
-      const filename = `${baseName}.${ext}`;
+      const filename = shouldTrim ? `${baseName}_trimmed.${ext}` : `${baseName}.${ext}`;
       
-      console.log(`[DEBUG] Creating ObjectURL for download...`);
+      console.log(`[DEBUG] Creating ObjectURL for download ${filename}...`);
       const url = URL.createObjectURL(finalBlob);
       
       const a = document.createElement('a');
@@ -483,10 +688,34 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
         URL.revokeObjectURL(url);
         console.log(`[DEBUG] Download cleanup completed for ${filename}`);
       }, 200);
+
+      showToast(`Downloaded ${filename}`, 'success');
       
     } catch (err) {
       console.error("[DEBUG] handleDownloadAudio Error:", err);
       showToast("Download failed", "error");
+    }
+  };
+
+  const handleDownloadSubtitles = (format: 'srt' | 'txt' | 'ass' | 'lrc') => {
+    if (!result) return;
+    const subs = activeSubtitles.length > 0 ? activeSubtitles : (result.subtitles || []);
+    const ts = new Date().getTime();
+    let baseName = config?.customFileName?.trim() 
+      ? config.customFileName.trim().replace(/\.(mp3|wav|srt|txt|ass|lrc)$/i, '')
+      : `vbs-saw-subtitles-${ts}`;
+    if (isTrimActive) {
+      baseName += '_trimmed';
+    }
+
+    if (format === 'srt') {
+      downloadFile(generateSRT(subs), `${baseName}.srt`);
+    } else if (format === 'txt') {
+      downloadFile(generateSRT(subs), `${baseName}.txt`);
+    } else if (format === 'ass') {
+      downloadFile(generateASS(subs), `${baseName}.ass`);
+    } else if (format === 'lrc') {
+      downloadFile(generateLRC(subs), `${baseName}.lrc`);
     }
   };
 
@@ -689,6 +918,27 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
             {/* Timeline Bar (Scrubber) */}
             <div className="w-full space-y-4">
               <div className="relative flex items-center w-full px-2">
+                {/* Visual Trim Regions Overlay */}
+                {duration > 0 && isTrimActive && (
+                  <div className="absolute inset-x-2 h-2 rounded-full overflow-hidden pointer-events-none flex z-0">
+                    {trimStart > 0 && (
+                      <div 
+                        style={{ width: `${Math.min(100, (trimStart / duration) * 100)}%` }} 
+                        className="bg-rose-500/40 h-full border-r border-rose-500/80 backdrop-blur-xs"
+                      />
+                    )}
+                    <div 
+                      style={{ width: `${Math.max(0, (trimmedDuration / duration) * 100)}%` }} 
+                      className="h-full"
+                    />
+                    {trimEnd > 0 && (
+                      <div 
+                        style={{ width: `${Math.min(100, (trimEnd / duration) * 100)}%` }} 
+                        className="bg-indigo-500/40 h-full border-l border-indigo-500/80 backdrop-blur-xs ml-auto"
+                      />
+                    )}
+                  </div>
+                )}
                 <input
                   type="range"
                   min={0}
@@ -696,7 +946,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
                   step={0.01}
                   value={currentTime}
                   onChange={handleSeek}
-                  className="w-full h-2 bg-white/5 rounded-full appearance-none cursor-pointer accent-amber-400 hover:h-2.5 transition-all shadow-inner"
+                  className="w-full h-2 bg-white/5 rounded-full appearance-none cursor-pointer accent-amber-400 hover:h-2.5 transition-all shadow-inner relative z-10"
                   style={{
                     background: `linear-gradient(to right, #EAB308 0%, #EAB308 ${(currentTime / (duration || 1)) * 100}%, rgba(255, 255, 255, 0.05) ${(currentTime / (duration || 1)) * 100}%, rgba(255, 255, 255, 0.05) 100%)`
                   }}
@@ -707,11 +957,222 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
                 <span className="text-[10px] font-black font-mono text-slate-500 uppercase tracking-widest">
                   {formatTime(currentTime).split(',')[0]}
                 </span>
-                <span className="text-[10px] font-black font-mono text-slate-500 uppercase tracking-widest">
-                  {formatTime(duration).split(',')[0]}
+                {isTrimActive ? (
+                  <span className="text-[10px] font-black font-mono text-amber-400/90 uppercase tracking-widest flex items-center gap-1.5">
+                    <Scissors size={10} />
+                    {formatTime(trimmedDuration).split(',')[0]} / {formatTime(duration).split(',')[0]}
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-black font-mono text-slate-500 uppercase tracking-widest">
+                    {formatTime(duration).split(',')[0]}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Audio Trimming Card */}
+        <div className="bg-black/40 backdrop-blur-2xl rounded-[36px] p-6 sm:p-8 border border-white/5 shadow-2xl relative overflow-hidden space-y-6">
+          <div className="absolute top-0 right-0 w-48 h-48 bg-amber-400/5 blur-[80px] -z-10 pointer-events-none" />
+          
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-1">
+            <div className="flex items-center gap-3.5">
+              <div className="p-3 bg-amber-400/10 rounded-2xl text-amber-400 border border-amber-400/20 shadow-lg shadow-amber-400/5">
+                <Scissors size={20} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2.5">
+                  <h3 className="text-base font-black text-white uppercase tracking-wider">
+                    {t('output.audioTrimming')}
+                  </h3>
+                  {isTrimActive ? (
+                    <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest bg-amber-400/20 text-amber-400 border border-amber-400/30 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                      {t('output.trimActive')} (-{(trimStart + trimEnd).toFixed(2)}s)
+                    </span>
+                  ) : (
+                    <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest bg-white/5 text-slate-500 border border-white/10">
+                      {t('output.untrimmed')}
+                    </span>
+                  )}
+                </div>
+                <p className="text-slate-400 text-xs font-medium mt-0.5">
+                  {t('output.trimHint')}
+                </p>
+              </div>
+            </div>
+
+            {/* Trimming Quick Action Buttons */}
+            <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={handleAutoDetectSilence}
+                className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-black rounded-xl text-xs font-black uppercase tracking-wider shadow-lg shadow-amber-400/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                title="Automatically analyze audio and detect start/end silence"
+              >
+                <Sparkles size={14} />
+                {t('output.autoDetectSilence')}
+              </button>
+
+              <button
+                type="button"
+                onClick={handlePreviewTrimmed}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all border shadow-lg ${
+                  isPlaying && isPreviewTrimmed
+                    ? 'bg-amber-400 text-black border-amber-400 shadow-amber-400/20 scale-[1.02]'
+                    : 'bg-white/5 text-slate-200 border-white/10 hover:bg-white/10 hover:border-white/20'
+                }`}
+                title="Preview only the trimmed audio segment"
+              >
+                {isPlaying && isPreviewTrimmed ? <Pause size={14} /> : <Play size={14} />}
+                {t('output.previewTrimmed')}
+              </button>
+
+              {isTrimActive && (
+                <button
+                  type="button"
+                  onClick={handleResetTrim}
+                  className="flex items-center gap-1.5 px-3 py-2.5 bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white rounded-xl text-xs font-bold transition-all border border-white/5"
+                  title="Reset trim values back to 0"
+                >
+                  <RotateCcw size={13} />
+                  {t('output.resetTrim')}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Sliders Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-1">
+            {/* Start Silence Trim */}
+            <div className="bg-white/[0.03] border border-white/5 rounded-2xl p-4 space-y-3 relative group/start">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-black text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.5)]" />
+                  {t('output.trimStart')}
+                </label>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono font-black text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded-lg border border-rose-500/20">
+                    -{trimStart.toFixed(2)}s
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(0, Number((duration - trimEnd - 0.2).toFixed(2)))}
+                  step={0.01}
+                  value={trimStart}
+                  onChange={(e) => setTrimStart(Math.max(0, parseFloat(e.target.value) || 0))}
+                  className="w-full h-2 bg-white/10 rounded-full appearance-none cursor-pointer accent-rose-400 hover:h-2.5 transition-all"
+                />
+              </div>
+
+              <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono">
+                <span>0.00s</span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setTrimStart(prev => Math.max(0, Number((prev - 0.05).toFixed(2))))}
+                    className="px-2 py-0.5 bg-white/5 hover:bg-white/10 rounded text-slate-400 hover:text-white transition-colors border border-white/5 font-mono"
+                  >
+                    -0.05s
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTrimStart(prev => Math.min(Math.max(0, duration - trimEnd - 0.2), Number((prev + 0.05).toFixed(2))))}
+                    className="px-2 py-0.5 bg-white/5 hover:bg-white/10 rounded text-slate-400 hover:text-white transition-colors border border-white/5 font-mono"
+                  >
+                    +0.05s
+                  </button>
+                </div>
+                <span>{Math.max(0, duration - trimEnd - 0.2).toFixed(2)}s</span>
+              </div>
+            </div>
+
+            {/* End Silence Trim */}
+            <div className="bg-white/[0.03] border border-white/5 rounded-2xl p-4 space-y-3 relative group/end">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-black text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
+                  {t('output.trimEnd')}
+                </label>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono font-black text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-lg border border-indigo-500/20">
+                    -{trimEnd.toFixed(2)}s
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(0, Number((duration - trimStart - 0.2).toFixed(2)))}
+                  step={0.01}
+                  value={trimEnd}
+                  onChange={(e) => setTrimEnd(Math.max(0, parseFloat(e.target.value) || 0))}
+                  className="w-full h-2 bg-white/10 rounded-full appearance-none cursor-pointer accent-indigo-400 hover:h-2.5 transition-all"
+                />
+              </div>
+
+              <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono">
+                <span>0.00s</span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setTrimEnd(prev => Math.max(0, Number((prev - 0.05).toFixed(2))))}
+                    className="px-2 py-0.5 bg-white/5 hover:bg-white/10 rounded text-slate-400 hover:text-white transition-colors border border-white/5 font-mono"
+                  >
+                    -0.05s
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTrimEnd(prev => Math.min(Math.max(0, duration - trimStart - 0.2), Number((prev + 0.05).toFixed(2))))}
+                    className="px-2 py-0.5 bg-white/5 hover:bg-white/10 rounded text-slate-400 hover:text-white transition-colors border border-white/5 font-mono"
+                  >
+                    +0.05s
+                  </button>
+                </div>
+                <span>{Math.max(0, duration - trimStart - 0.2).toFixed(2)}s</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Duration Summary Bar */}
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-white/[0.02] border border-white/5 rounded-2xl text-xs">
+            <div className="flex flex-wrap items-center gap-4 text-slate-400">
+              <div>
+                <span className="text-slate-500 text-[10px] uppercase block font-bold tracking-wider">Original</span>
+                <span className="font-mono font-bold text-white text-xs">{duration.toFixed(2)}s</span>
+              </div>
+              {isTrimActive && (
+                <>
+                  <span className="text-slate-600 font-bold">➔</span>
+                  <div>
+                    <span className="text-rose-400/90 text-[10px] uppercase block font-bold tracking-wider">Silence Removed</span>
+                    <span className="font-mono font-bold text-rose-400 text-xs">-{(trimStart + trimEnd).toFixed(2)}s</span>
+                  </div>
+                  <span className="text-slate-600 font-bold">➔</span>
+                </>
+              )}
+              <div>
+                <span className="text-amber-400 text-[10px] uppercase block font-bold tracking-wider">{t('output.trimmedDuration')}</span>
+                <span className="font-mono font-black text-amber-400 text-xs">
+                  {trimmedDuration.toFixed(2)}s ({formatMyanmarDuration(trimmedDuration)})
                 </span>
               </div>
             </div>
+
+            {isTrimActive && (
+              <div className="text-[11px] text-emerald-400 bg-emerald-400/10 px-3 py-1.5 rounded-full border border-emerald-400/20 font-bold flex items-center gap-1.5">
+                <CheckCircle2 size={13} />
+                Subtitles & Downloads Synchronized
+              </div>
+            )}
           </div>
         </div>
 
@@ -723,6 +1184,12 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
                 <FileText size={16} className="text-amber-400/50" /> {t('output.srtPreview')}
               </h3>
               <div className="flex items-center gap-2">
+                {isTrimActive && trimStart > 0 && (
+                  <span className="text-[9px] font-bold text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded border border-amber-400/20 flex items-center gap-1 font-mono">
+                    <Scissors size={10} />
+                    Synced (-{trimStart.toFixed(2)}s)
+                  </span>
+                )}
                 <button
                   onClick={() => handleCopy(currentSrt, 'srt')}
                   className="p-2.5 bg-white/5 rounded-xl text-slate-500 hover:text-amber-400 transition-all border border-white/5"
@@ -745,7 +1212,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
               <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] px-2">Export Studio Assets</p>
               <div className="grid grid-cols-1 gap-4">
                 <button
-                  onClick={handleDownloadAudio}
+                  onClick={() => handleDownloadAudio(false)}
                   disabled={!result || (!result.audioData && !result.rawAudio)}
                   className={`flex items-center justify-center gap-4 py-6 rounded-[24px] font-black uppercase tracking-widest transition-all shadow-xl group ${
                     !result || (!result.audioData && !result.rawAudio)
@@ -754,70 +1221,56 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
                   }`}
                 >
                   <Music size={24} />
-                  {t('output.downloadWav')}
+                  {(config?.exportFormat === 'mp3')
+                    ? (isTrimActive ? t('output.downloadTrimmedMp3') : t('output.downloadMp3'))
+                    : (isTrimActive ? t('output.downloadTrimmedWav') : t('output.downloadWav'))}
+                  <span className="px-2.5 py-0.5 bg-black/20 text-black rounded-full text-[10px] font-mono font-black uppercase">
+                    {isTrimActive ? `${trimmedDuration.toFixed(2)}s • ${(config?.exportFormat || 'wav').toUpperCase()}` : (config?.exportFormat || 'wav').toUpperCase()}
+                  </span>
                 </button>
+
+                {isTrimActive && (
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadAudio(true)}
+                    className="flex items-center justify-center gap-2 py-3 bg-white/5 text-slate-400 hover:text-white rounded-[20px] font-black uppercase tracking-widest border border-white/10 hover:bg-white/10 transition-all text-[10px]"
+                    title="Download the unedited original audio"
+                  >
+                    <Download size={14} />
+                    {t('output.downloadOriginal')} ({duration.toFixed(2)}s • {(config?.exportFormat || 'wav').toUpperCase()})
+                  </button>
+                )}
+
                 <div className="grid grid-cols-3 gap-3">
                   <button
-                    onClick={() => {
-                      if (result) {
-                        const srt = generateSRT(result.subtitles);
-                        const ts = new Date().getTime();
-                        const baseName = config?.customFileName?.trim() 
-                          ? config.customFileName.trim().replace(/\.(mp3|wav|srt|txt|ass)$/i, '')
-                          : `vbs-saw-subtitles-${ts}`;
-                        downloadFile(srt, `${baseName}.srt`);
-                      }
-                    }}
+                    onClick={() => handleDownloadSubtitles('srt')}
                     className="flex flex-col items-center justify-center gap-2 py-4 bg-amber-400 text-black rounded-[24px] font-black uppercase tracking-widest hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-amber-400/10 text-[9px]"
                   >
                     <FileText size={16} />
-                    SRT
+                    SRT {isTrimActive ? '✂' : ''}
                   </button>
                   <button
-                    onClick={() => {
-                      if (result) {
-                        const srt = generateSRT(result.subtitles);
-                        const ts = new Date().getTime();
-                        const baseName = config?.customFileName?.trim() 
-                          ? config.customFileName.trim().replace(/\.(mp3|wav|srt|txt|ass)$/i, '')
-                          : `vbs-saw-subtitles-${ts}`;
-                        downloadFile(srt, `${baseName}.txt`);
-                      }
-                    }}
+                    onClick={() => handleDownloadSubtitles('txt')}
                     className="flex flex-col items-center justify-center gap-2 py-4 bg-white/5 text-white rounded-[24px] font-black uppercase tracking-widest border border-white/10 hover:bg-white/10 transition-all text-[9px]"
                   >
                     <FileText size={16} />
-                    TXT
+                    TXT {isTrimActive ? '✂' : ''}
                   </button>
                   <button
-                    onClick={() => {
-                      if (result) {
-                        const ass = generateASS(result.subtitles);
-                        const ts = new Date().getTime();
-                        const baseName = config?.customFileName?.trim() 
-                          ? config.customFileName.trim().replace(/\.(mp3|wav|srt|txt|ass)$/i, '')
-                          : `vbs-saw-subtitles-${ts}`;
-                        downloadFile(ass, `${baseName}.ass`);
-                      }
-                    }}
+                    onClick={() => handleDownloadSubtitles('ass')}
                     className="flex flex-col items-center justify-center gap-2 py-4 bg-white/5 text-slate-300 rounded-[24px] font-black uppercase tracking-widest border border-white/10 hover:bg-white/10 transition-all text-[9px]"
                   >
                     <FileText size={16} />
-                    ASS
+                    ASS {isTrimActive ? '✂' : ''}
                   </button>
                 </div>
                 
                 <div className="grid grid-cols-1">
                   <button
-                    onClick={() => {
-                      if (result) {
-                        const lrc = generateLRC(result.subtitles);
-                        downloadFile(lrc, `audio-lyrics.lrc`);
-                      }
-                    }}
+                    onClick={() => handleDownloadSubtitles('lrc')}
                     className="flex items-center justify-center gap-3 py-3 bg-white/5 text-slate-500 rounded-[20px] font-black uppercase tracking-widest border border-white/5 hover:bg-white/10 transition-all text-[10px]"
                   >
-                    LRC Lyrics
+                    LRC Lyrics {isTrimActive ? '✂' : ''}
                   </button>
                 </div>
               </div>

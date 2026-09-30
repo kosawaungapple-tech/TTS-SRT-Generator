@@ -1,8 +1,9 @@
 import React, { useMemo, useEffect, useState } from 'react';
-import { ChevronDown, Volume2, Wand2, Server, FileText, Plus, Minus } from 'lucide-react';
+import { ChevronDown, Volume2, Wand2, Server, FileText, Plus, Minus, UserCheck, Music } from 'lucide-react';
 import { TTSConfig } from '../types';
 import { VOICE_OPTIONS } from '../constants';
 import { useLanguage } from '../contexts/LanguageContext';
+import { CustomVoiceProfile } from './CustomVoiceProfile';
 
 interface VoiceConfigProps {
   config: TTSConfig;
@@ -59,7 +60,14 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
     return currentStyles.includes(style);
   };
 
-  const handleChange = (key: keyof TTSConfig, value: string | number) => {
+  const handleChange = (key: keyof TTSConfig, value: string | number | undefined) => {
+    if (key === 'voiceProfile') {
+      if (value) {
+        localStorage.setItem('vbs_custom_voice_profile', value as string);
+      } else {
+        localStorage.removeItem('vbs_custom_voice_profile');
+      }
+    }
     setConfig({ ...config, [key]: value });
   };
 
@@ -89,18 +97,18 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
           </label>
           <div className="relative">
             <select
-              value={config.selectedModel || 'gemini-3.1-flash-lite'}
+              value={config.selectedModel || 'gemini-3.8-flash-lite-tts'}
               onChange={(e) => handleChange('selectedModel', e.target.value)}
               className="w-full bg-black/40 border border-white/5 rounded-xl px-4 sm:px-5 py-3.5 sm:py-4 text-sm sm:text-base text-white appearance-none focus:outline-none focus:ring-1 focus:ring-amber-400/30 focus:border-amber-400/50 transition-all cursor-pointer font-medium"
             >
+              <option value="gemini-3.8-flash-lite-tts" className="bg-black text-white">
+                Gemini 3.8 Flash Lite TTS (Recommended / Fresh Quota / မြန်ဆန်)
+              </option>
+              <option value="gemini-3.8-flash-tts" className="bg-black text-white">
+                Gemini 3.8 Flash TTS (Cinematic Studio Persona / အရည်အသွေးမြင့်)
+              </option>
               <option value="gemini-3.1-flash-lite" className="bg-black text-white">
-                Gemini 3.1 Flash Lite (High Limit / ညွှန်းဆိုချက်)
-              </option>
-              <option value="gemini-3.1-flash-tts" className="bg-black text-white">
-                Gemini 3.1 Flash TTS (Standard Preview)
-              </option>
-              <option value="gemini-2.5-flash" className="bg-black text-white">
-                Gemini 2.5 Flash (Legacy Text + OpenAI TTS Fallback)
+                Gemini 3.1 Flash Lite (High Quota Two-Step / အကန့်အသတ်မရှိသလောက်သုံးရန်)
               </option>
             </select>
             <div className="absolute right-8 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500 group-hover/item:text-amber-500 transition-colors">
@@ -135,6 +143,22 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
           </div>
         </div>
 
+        {/* Custom Voice Profile Section */}
+        <div className="group/item">
+          <label className="flex items-center gap-3 text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 sm:mb-4 group-hover/item:text-amber-500 transition-colors">
+            <div className="p-1.5 sm:p-2 bg-amber-400/10 rounded-lg text-amber-500">
+              <UserCheck size={14} className="sm:w-4 sm:h-4" />
+            </div>
+            Custom Voice Cloning / အသံတုပြုလုပ်ရန်
+          </label>
+          <div className="bg-black/20 rounded-2xl p-4 sm:p-6 border border-white/5">
+            <CustomVoiceProfile 
+              initialProfile={config.voiceProfile}
+              onProfileChange={(base64) => handleChange('voiceProfile', base64 || undefined)}
+            />
+          </div>
+        </div>
+
         {/* Custom File Name */}
         <div className="group/item">
           <label className="flex items-center gap-3 text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 sm:mb-4 group-hover/item:text-amber-500 transition-colors">
@@ -151,6 +175,89 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
               placeholder="ဥပမာ - vlogs_by_saw_audio"
               className="w-full bg-black/40 border border-white/5 rounded-xl px-4 sm:px-5 py-3.5 sm:py-4 text-sm sm:text-base text-white focus:outline-none focus:ring-1 focus:ring-amber-400/30 focus:border-amber-400/50 transition-all font-medium placeholder:text-slate-600"
             />
+          </div>
+        </div>
+
+        {/* Audio Export Format Toggle (WAV vs MP3) */}
+        <div className="group/item">
+          <div className="flex items-center justify-between mb-3 sm:mb-4">
+            <label className="flex items-center gap-3 text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest group-hover/item:text-amber-500 transition-colors">
+              <div className="p-1.5 sm:p-2 bg-amber-400/10 rounded-lg text-amber-500">
+                <Music size={14} className="sm:w-4 sm:h-4" />
+              </div>
+              {t('voiceConfig.exportFormat')}
+            </label>
+            <span className="text-[9px] font-mono uppercase tracking-widest text-slate-500 font-bold">
+              Format: {(config.exportFormat || 'wav').toUpperCase()}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => handleChange('exportFormat', 'wav')}
+              className={`p-3.5 sm:p-4 rounded-xl border text-left transition-all relative overflow-hidden group/btn ${
+                (config.exportFormat || 'wav') === 'wav'
+                  ? 'bg-amber-400 text-black border-amber-400 shadow-xl shadow-amber-400/20 scale-[1.01]'
+                  : 'bg-black/40 text-slate-400 border-white/5 hover:border-amber-400/30 hover:text-white'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs sm:text-sm font-black uppercase tracking-wider flex items-center gap-1.5">
+                  WAV
+                  <span className={`text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded font-black tracking-normal uppercase ${
+                    (config.exportFormat || 'wav') === 'wav'
+                      ? 'bg-black/20 text-black'
+                      : 'bg-white/10 text-amber-400'
+                  }`}>
+                    Lossless
+                  </span>
+                </span>
+                <span className={`w-2 h-2 rounded-full ${
+                  (config.exportFormat || 'wav') === 'wav'
+                    ? 'bg-black shadow-[0_0_6px_currentColor]'
+                    : 'bg-slate-700'
+                }`} />
+              </div>
+              <p className={`text-[10px] sm:text-[11px] leading-tight font-medium ${
+                (config.exportFormat || 'wav') === 'wav' ? 'text-black/80' : 'text-slate-500'
+              }`}>
+                {t('voiceConfig.formatWavSubtitle')} • PCM 24kHz
+              </p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleChange('exportFormat', 'mp3')}
+              className={`p-3.5 sm:p-4 rounded-xl border text-left transition-all relative overflow-hidden group/btn ${
+                config.exportFormat === 'mp3'
+                  ? 'bg-amber-400 text-black border-amber-400 shadow-xl shadow-amber-400/20 scale-[1.01]'
+                  : 'bg-black/40 text-slate-400 border-white/5 hover:border-amber-400/30 hover:text-white'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs sm:text-sm font-black uppercase tracking-wider flex items-center gap-1.5">
+                  MP3
+                  <span className={`text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded font-black tracking-normal uppercase ${
+                    config.exportFormat === 'mp3'
+                      ? 'bg-black/20 text-black'
+                      : 'bg-white/10 text-amber-400'
+                  }`}>
+                    Compact
+                  </span>
+                </span>
+                <span className={`w-2 h-2 rounded-full ${
+                  config.exportFormat === 'mp3'
+                    ? 'bg-black shadow-[0_0_6px_currentColor]'
+                    : 'bg-slate-700'
+                }`} />
+              </div>
+              <p className={`text-[10px] sm:text-[11px] leading-tight font-medium ${
+                config.exportFormat === 'mp3' ? 'text-black/80' : 'text-slate-500'
+              }`}>
+                {t('voiceConfig.formatMp3Subtitle')} • 192 kbps
+              </p>
+            </button>
           </div>
         </div>
 
@@ -217,15 +324,21 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
             suffix=""
             onChange={(v) => handleChange('pitch', v)}
           />
-          <Slider
-            label={t('voiceConfig.volume')}
-            value={config.volume}
-            min={0}
-            max={20}
-            step={1}
-            suffix=" dB"
-            onChange={(v) => handleChange('volume', v)}
-          />
+          <div className="space-y-1">
+            <Slider
+              label={t('voiceConfig.volume')}
+              value={config.volume ?? 0}
+              min={0}
+              max={10}
+              step={1}
+              suffix=" dB"
+              onChange={(v) => handleChange('volume', v)}
+            />
+            <div className="flex justify-between items-center px-1 text-[9px] sm:text-[10px] text-slate-500 font-medium">
+              <span>0 dB (Unity Gain)</span>
+              <span>+10 dB (Max Gain Boost)</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -313,7 +426,7 @@ const Slider: React.FC<SliderProps> = ({ label, value, min, max, step, suffix, o
 
           <div className="w-14 sm:w-16 px-1 sm:px-2 py-0.5 bg-amber-400/10 rounded-lg text-center shrink-0 border border-amber-400/10">
             <span className="text-[10px] sm:text-[11px] font-bold text-amber-500">
-              {localValue > 0 && (label === 'Pitch' || label === 'အသံအနိမ့်အမြင့်') ? `+${localValue}` : localValue}
+              {localValue > 0 && (label.toLowerCase().includes('pitch') || label.includes('အသံအနိမ့်အမြင့်') || suffix?.includes('dB')) ? `+${localValue}` : localValue}
               {suffix}
             </span>
           </div>

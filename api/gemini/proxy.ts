@@ -1,5 +1,4 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { GoogleGenAI, Modality } from "@google/genai";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Add CORS headers for production
@@ -24,16 +23,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     let targetModel = selectedModel || model;
 
-    console.log(`[Proxy Vercel] Request received for model: ${targetModel}, isTts: ${isTts}`);
-
     if (!targetModel) {
       return res.status(400).json({ error: 'Model name is required' });
     }
 
     // Map friendly value to actual preview modelName only for TTS requests
     if (isTts) {
-      if (targetModel === 'gemini-3.1-flash-tts' || targetModel === 'gemini-3.1-flash-tts-preview' || targetModel === 'TTS') {
-        targetModel = 'gemini-3.1-flash-tts-preview';
+      if (targetModel === 'gemini-3.1-flash-tts' || targetModel === 'gemini-3.1-flash-tts-preview') {
+        targetModel = 'gemini-3.8-flash-lite-tts';
       }
     }
 
@@ -46,46 +43,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'No API Key available.' });
     }
 
-    // Initialize SDK
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build'
-        }
-      }
-    });
-
     if (isTwoStepTts) {
       let firstStepModel = targetModel;
-      if (firstStepModel === 'gemini-3.1-flash-lite-8b') {
+      if (firstStepModel === 'gemini-3.1-flash-lite-8b' || firstStepModel === 'gemini-2.5-flash') {
         firstStepModel = 'gemini-3.1-flash-lite';
       }
 
-      // Step 1: Generate text
-      const textOnlyConfig = config ? JSON.parse(JSON.stringify(config)) : {};
+      // Step 1: Clean/Strip audio args to prevent 400 Bad Request
+      const textOnlyConfig: Record<string, unknown> = config ? { ...config } : {};
       delete textOnlyConfig.responseModalities;
       delete textOnlyConfig.speechConfig;
       delete textOnlyConfig.responseMimeType;
 
-      console.log(`[Proxy Vercel] Two-step TTS Step 1: Generating text with: ${firstStepModel}`);
-      
-      const textResult = await ai.models.generateContent({
-        model: firstStepModel,
-        contents,
-        config: Object.keys(textOnlyConfig).length > 0 ? textOnlyConfig : undefined
-      });
+      console.log(`[Proxy Vercel] Two-step TTS Step 1: Generating text with standard model: ${firstStepModel}`);
+      const textResponse = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${firstStepModel}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents, generationConfig: textOnlyConfig })
+        }
+      );
 
-      const generatedText = textResult.text;
+      const textData = await textResponse.json();
+      if (!textResponse.ok) {
+        console.error(`[Proxy Vercel] Gemini Step 1 Error (${textResponse.status}):`, textData);
+        return res.status(textResponse.status).json(textData);
+      }
+
+      const generatedText = textData.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!generatedText) {
         return res.status(400).json({ error: "No text generated from standard Gemini model in Step 1 of TTS pipeline" });
       }
 
-      // Grab style instruction
+      console.log(`[Proxy Vercel] Two-step TTS Step 1 text output received: "${generatedText.substring(0, 50)}..."`);
+
+      // Grab style instruction if present
       let styleMatch = "";
-      const firstPart = contents?.[0]?.parts?.[0];
-      const originalText = typeof firstPart === 'string' ? firstPart : firstPart?.text || "";
-      
+      const originalText = contents?.[0]?.parts?.[0]?.text || "";
       if (typeof originalText === "string" && originalText.startsWith("[")) {
         const closingBracketIndex = originalText.indexOf("]");
         if (closingBracketIndex !== -1) {
@@ -94,51 +89,79 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       const ttsText = styleMatch ? `${styleMatch}\n\n${generatedText}` : generatedText;
-      const ttsContents = [{ role: 'user', parts: [{ text: ttsText }] }];
-      const ttsConfig = config ? JSON.parse(JSON.stringify(config)) : {};
-      ttsConfig.responseModalities = [Modality.AUDIO];
+      const ttsContents = [{ parts: [{ text: ttsText }] }];
 
-      console.log(`[Proxy Vercel] Two-step TTS Step 2: Audio pipeline gemini-3.1-flash-tts-preview`);
-      const ttsResult = await ai.models.generateContent({
-        model: 'gemini-3.1-flash-tts-preview',
-        contents: ttsContents,
-        config: ttsConfig
-      });
+      const ttsConfig: Record<string, unknown> = config ? { ...config } : {};
+      ttsConfig.responseModalities = ["AUDIO"];
 
-      return res.status(200).json(ttsResult);
-    } else {
-      const updatedConfig = config ? JSON.parse(JSON.stringify(config)) : {};
-      if (isTts) {
-        updatedConfig.responseModalities = [Modality.AUDIO];
+      console.log(`[Proxy Vercel] Two-step TTS Step 2: Pitching to dedicated audio pipeline gemini-3.8-flash-lite-tts`);
+      const ttsResponse = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite-tts:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: ttsContents, generationConfig: ttsConfig })
+        }
+      );
+
+      const ttsData = await ttsResponse.json();
+      if (!ttsResponse.ok) {
+        console.error(`[Proxy Vercel] Gemini Step 2 Error (${ttsResponse.status}):`, ttsData);
+        return res.status(ttsResponse.status).json(ttsData);
       }
 
-      console.log(`[Proxy Vercel] Requesting model via SDK: ${targetModel}`);
+      return res.status(200).json(ttsData);
+    } else {
+      const updatedConfig: Record<string, unknown> = config ? { ...config } : {};
+      if (isTts) {
+        updatedConfig.responseModalities = ["AUDIO"];
+      }
+
+      console.log(`[Proxy Vercel] Requesting model: ${targetModel}`);
+
+      let response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json' 
+          },
+          body: JSON.stringify({ 
+            contents, 
+            generationConfig: updatedConfig 
+          })
+        }
+      );
+
+      let data = await response.json();
       
-      const requestParams = {
-        model: targetModel,
-        contents,
-        config: Object.keys(updatedConfig).length > 0 ? updatedConfig : undefined
-      };
+      // Fallback on quota error for gemini-3.8-flash
+      if (!response.ok && response.status === 429 && !isTts && targetModel !== 'gemini-3.1-flash-lite') {
+        console.warn(`[Proxy Vercel] 429 quota on ${targetModel}, falling back to gemini-3.1-flash-lite`);
+        response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents, generationConfig: updatedConfig })
+          }
+        );
+        data = await response.json();
+      }
 
-      const result = await ai.models.generateContent(requestParams);
-      return res.status(200).json(result);
+      if (!response.ok) {
+        console.error(`[Proxy Vercel] Gemini API Error (${response.status}):`, data);
+        return res.status(response.status).json(data);
+      }
+
+      return res.status(200).json(data);
     }
-  } catch (err: unknown) {
-    const error = err as { status?: number; message?: string };
-    console.error('[Proxy Vercel] SDK Error:', error);
-    
-    // Extract details from SDK error
-    const status = error.status || 500;
-    const message = error.message || 'Internal Server Error';
-    
-    // Attempt to stringify the error object more thoroughly for the client
-    const errorString = JSON.stringify(err, Object.getOwnPropertyNames(err as object));
-    const errorObj = JSON.parse(errorString);
-
-    return res.status(status).json({ 
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Internal Server Error';
+    console.error('[Proxy Vercel] Serverless Error:', error);
+    return res.status(500).json({ 
       error: message,
-      details: errorObj,
-      rawError: String(err)
+      details: error
     });
   }
 }

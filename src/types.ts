@@ -97,11 +97,17 @@ export interface HistoryItem {
   audioStorageUrl?: string;
   srtStorageUrl?: string;
   srtContent?: string;
-  createdAt: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  createdAt: any;
   config: TTSConfig;
   baseDuration: number;
   oneXDuration: number;
   duration?: number;
+  status?: 'queued' | 'processing' | 'completed' | 'failed';
+  error?: string;
+  batchId?: string;
+  localAudioUrl?: string;
+  localAudioData?: string;
 }
 
 export interface VoiceOption {
@@ -139,6 +145,8 @@ export interface TTSConfig {
   effects?: Record<string, boolean | number | string>;
   selectedModel?: string;
   customFileName?: string;
+  voiceProfile?: string; // Base64 audio sample for voice style cloning
+  exportFormat?: 'wav' | 'mp3'; // Audio export format
 }
 
 export interface AudioResult {
@@ -158,19 +166,6 @@ export interface AudioResult {
   isLoadingPartial?: boolean; // Flag to indicate more chunks are coming
   isFallback?: boolean; // Flag to indicate fallback logic was used
   mimeType?: string; // Original MIME type of the audio
-}
-
-export interface GeminiPart {
-  text?: string;
-  inlineData?: {
-    mimeType: string;
-    data: string;
-  };
-}
-
-export interface GeminiContent {
-  role?: string;
-  parts: (GeminiPart | string)[];
 }
 
 export interface ActivityLog {
