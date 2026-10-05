@@ -352,10 +352,14 @@ class AssemblyAIService {
   /**
    * Fetch ready-to-use SRT subtitles from AssemblyAI
    */
-  async getSrtContent(id: string, apiKey: string): Promise<string> {
+  /**
+   * Fetch ready-to-use SRT subtitles from AssemblyAI (with custom chars_per_caption)
+   */
+  async getSrtContent(id: string, apiKey: string, charsPerCaption = 36): Promise<string> {
+    const query = charsPerCaption ? `?chars_per_caption=${charsPerCaption}` : '';
     // Try proxy
     try {
-      const resp = await fetch(`/api/assemblyai/transcript/${id}/srt`, {
+      const resp = await fetch(`/api/assemblyai/transcript/${id}/srt${query}`, {
         headers: { 'x-assemblyai-key': apiKey.trim() }
       });
       if (resp.ok) {
@@ -367,7 +371,7 @@ class AssemblyAIService {
     }
 
     // Direct
-    const directResp = await fetch(`https://api.assemblyai.com/v2/transcript/${id}/srt`, {
+    const directResp = await fetch(`https://api.assemblyai.com/v2/transcript/${id}/srt${query}`, {
       headers: { 'Authorization': apiKey.trim() }
     });
 
@@ -393,9 +397,10 @@ class AssemblyAIService {
   }
 
   /**
-   * Generate SRT manually from word-level timestamps if needed
+   * Generate SRT manually from word-level timestamps with silence/pause detection
+   * Ensures captions match spoken words in video frame-by-frame without staying open during silences.
    */
-  generateSrtFromWords(words: AssemblyAIWord[], maxCharsPerLine = 48, maxDurationMs = 3500): string {
+  generateSrtFromWords(words: AssemblyAIWord[], maxCharsPerLine = 38, maxDurationMs = 3600): string {
     if (!words || words.length === 0) return '';
 
     const lines: Array<{ start: number; end: number; text: string; speaker?: string | null }> = [];
@@ -404,19 +409,38 @@ class AssemblyAIService {
 
     for (let i = 0; i < words.length; i++) {
       const w = words[i];
-      const wordText = w.text || '';
+      const wordText = (w.text || '').trim();
+      if (!wordText) continue;
+
       currentWords.push(w);
       currentLength += wordText.length + 1;
 
       const firstWord = currentWords[0];
       const duration = w.end - firstWord.start;
-      const isPunctuationEnd = /[.!?။]$/.test(wordText);
-      const isNextDifferentSpeaker = i + 1 < words.length && words[i + 1].speaker !== w.speaker;
 
-      if (currentLength >= maxCharsPerLine || duration >= maxDurationMs || isPunctuationEnd || isNextDifferentSpeaker || i === words.length - 1) {
+      const nextWord = i + 1 < words.length ? words[i + 1] : null;
+      const isNextDifferentSpeaker = nextWord ? nextWord.speaker !== w.speaker : false;
+      const pauseAfterWord = nextWord ? (nextWord.start - w.end) : 0;
+      const isPunctuationEnd = /[.!?။]$/.test(wordText);
+
+      // Natural subtitle break conditions:
+      // 1. Pause between words (>600ms) - speaker paused/stopped speaking
+      // 2. Sentence end punctuation with pause (>300ms)
+      // 3. Speaker change
+      // 4. Max characters reached or duration exceeded
+      // 5. Last word in transcript
+      const shouldBreak =
+        !nextWord ||
+        isNextDifferentSpeaker ||
+        (pauseAfterWord > 600 && currentWords.length >= 1) ||
+        (isPunctuationEnd && pauseAfterWord > 300) ||
+        currentLength >= maxCharsPerLine ||
+        duration >= maxDurationMs;
+
+      if (shouldBreak) {
         lines.push({
           start: firstWord.start,
-          end: w.end,
+          end: Math.max(w.end, firstWord.start + 500),
           text: currentWords.map(item => item.text).join(' '),
           speaker: firstWord.speaker
         });
@@ -449,20 +473,20 @@ class AssemblyAIService {
 
     // Step 1: Upload media if file provided, or extract from YouTube/TikTok if URL provided
     if (file) {
-      onProgress?.('ဖိုင်ကို AssemblyAI စနစ်သို့ တင်နေပါသည်... (Uploading Media)', 15);
+      onProgress?.('ဖိုင်ကို စနစ်ထဲသို့ တင်သွင်းနေပါသည်...', 15);
       targetAudioUrl = await this.uploadMedia(file, apiKey, (p) => {
-        onProgress?.(`ဖိုင်ကို AssemblyAI စနစ်သို့ တင်နေပါသည်... (${p}%)`, Math.round(p * 0.3));
+        onProgress?.(`ဖိုင်ကို တင်သွင်းနေပါသည်... (${p}%)`, Math.round(p * 0.3));
       });
     } else if (targetAudioUrl) {
       const urlType = this.detectUrlType(targetAudioUrl);
       if (urlType === 'youtube' || urlType === 'tiktok') {
         const platformName = urlType === 'youtube' ? 'YouTube' : 'TikTok';
-        onProgress?.(`${platformName} မှ အသံဖိုင်ကို ဒေါင်းလုဒ်ဆွဲနေပါသည်... (Downloading audio)`, 10);
+        onProgress?.(`${platformName} မှ အသံဖိုင်ကို ရယူနေပါသည်...`, 10);
         
         try {
           const resolved = await this.resolveMediaUrl(targetAudioUrl, apiKey, options.youtubeCookies);
           targetAudioUrl = resolved.upload_url;
-          onProgress?.(`အသံဖိုင်ကို AssemblyAI သို့ ပို့ဆောင်ပြီးပါပြီ!`, 30);
+          onProgress?.(`အသံဖိုင်ကို စနစ်ထဲသို့ ထည့်သွင်းပြီးပါပြီ`, 30);
         } catch (resolveErr: unknown) {
           console.error(`[AssemblyAI] ${platformName} resolution failed:`, resolveErr);
           throw resolveErr;
@@ -475,14 +499,14 @@ class AssemblyAIService {
     }
 
     // Step 2: Submit transcription request
-    onProgress?.('အသံဖိုင် စာတန်းထိုး ခွဲခြမ်းစိတ်ဖြာမှုကို စတင်နေပါသည်... (Submitting Job)', 35);
+    onProgress?.('အသံဖိုင်အား စာတန်းထိုး စတင်ခွဲခြမ်းစိတ်ဖြာနေပါသည်...', 35);
     const transcriptId = await this.submitTranscription({
       ...options,
       audioUrl: targetAudioUrl
     });
 
     // Step 3: Polling
-    onProgress?.('AI စာသားနှင့် အချိန်ကိုက် ချိန်ညှိနေပါသည်... (Processing with Neural STT)', 50);
+    onProgress?.('အသံနှင့် စာသား အချိန်ကိုက် ချိန်ညှိနေပါသည်...', 50);
 
     let attempts = 0;
     const maxAttempts = 180; // ~6 minutes max with 2s interval
@@ -500,34 +524,35 @@ class AssemblyAIService {
       }
 
       if (status.status === 'error') {
-        throw new Error(status.error || 'AssemblyAI transcription process encountered an error');
+        throw new Error(status.error || 'စာတန်းထိုး ထုတ်ယူမှုတွင် အမှားတစ်ခု ဖြစ်ပေါ်ခဲ့ပါသည်');
       }
 
       const progressPercent = Math.min(92, 50 + Math.round((attempts / 40) * 40));
-      onProgress?.(`အသံဖိုင် စာတန်းထိုး ထုတ်လုပ်နေပါသည်... (${status.status})`, progressPercent);
+      onProgress?.('အသံဖိုင် စာတန်းထိုး တိကျစွာ ထုတ်လုပ်နေပါသည်...', progressPercent);
     }
 
     if (!transcriptResult) {
-      throw new Error('Transcription time out. ကျေးဇူးပြု၍ နောက်မှ ပြန်လည်စစ်ဆေးပါ။');
+      throw new Error('အချိန်ကြာမြင့်နေသဖြင့် ခေတ္တစောင့်ဆိုင်းပြီး ပြန်လည်စစ်ဆေးပေးပါ။');
     }
 
-    // Step 4: Fetch SRT Subtitle File
-    onProgress?.('SRT စာတန်းထိုးဖိုင်ကို ရယူနေပါသည်... (Generating SRT)', 96);
+    // Step 4: Generate time-synchronized SRT Subtitle File
+    onProgress?.('SRT စာတန်းထိုးဖိုင်ကို အချိန်ကိုက် စီစဉ်ပြင်ဆင်နေပါသည်...', 96);
     let srtText = '';
-    try {
-      srtText = await this.getSrtContent(transcriptId, apiKey);
-    } catch (e) {
-      console.warn('[AssemblyAI] SRT endpoint failed, generating from words fallback:', e);
-      if (transcriptResult.words && transcriptResult.words.length > 0) {
-        srtText = this.generateSrtFromWords(transcriptResult.words);
+
+    // Prefer high-precision word-level timestamps with silence pause detection
+    if (transcriptResult.words && transcriptResult.words.length > 0) {
+      srtText = this.generateSrtFromWords(transcriptResult.words, 36, 3500);
+    }
+
+    if (!srtText || srtText.trim().length === 0) {
+      try {
+        srtText = await this.getSrtContent(transcriptId, apiKey, 36);
+      } catch (e) {
+        console.warn('SRT endpoint fallback failed:', e);
       }
     }
 
-    if (!srtText && transcriptResult.words && transcriptResult.words.length > 0) {
-      srtText = this.generateSrtFromWords(transcriptResult.words);
-    }
-
-    onProgress?.('စာတန်းထိုးဖိုင် ထုတ်ယူမှု အောင်မြင်ပါသည်! (Completed)', 100);
+    onProgress?.('စာတန်းထိုး ထုတ်ယူမှု အောင်မြင်စွာ ပြီးစီးပါပြီ!', 100);
 
     return {
       transcript: transcriptResult,

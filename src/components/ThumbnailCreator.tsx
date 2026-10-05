@@ -10,6 +10,7 @@ interface ThumbnailTabProps {
   isPremium: boolean;
   userControl?: VBSUserControl | null;
   onNavigateToSettings?: () => void;
+  onProcessingStateChange?: (isProcessing: boolean) => void;
 }
 
 export const ThumbnailCreator: React.FC<ThumbnailTabProps> = (props) => {

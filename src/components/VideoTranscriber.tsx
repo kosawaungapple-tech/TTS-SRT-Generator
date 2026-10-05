@@ -21,12 +21,17 @@ import {
   Sliders,
   Settings,
   Languages,
-  ArrowRight
+  ArrowRight,
+  Play,
+  RotateCcw,
+  Volume2
 } from 'lucide-react';
 import { GeminiTTSService } from '../services/geminiService';
 import { assemblyAiService, AssemblyAITranscriptResponse } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
 import { logActivity } from '../services/activityService';
+import { parseTimestampToSeconds, shiftSrtContent } from '../utils/subtitleUtils';
+import { formatTime } from '../utils/audioUtils';
 import { VBSUserControl, ModalConfig } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 
@@ -38,6 +43,7 @@ interface VideoTranscriberProps {
   isAdmin: boolean;
   userControl: VBSUserControl | null;
   onNavigateToSettings?: () => void;
+  onProcessingStateChange?: (isProcessing: boolean) => void;
 }
 
 interface SrtCue {
@@ -100,7 +106,8 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
   openModal,
   isAdmin,
   userControl,
-  onNavigateToSettings
+  onNavigateToSettings,
+  onProcessingStateChange
 }) => {
   const { language, t } = useLanguage();
   const isMm = language === 'mm';
@@ -135,6 +142,56 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
   const [copiedCueIndex, setCopiedCueIndex] = useState<number | null>(null);
 
   // ==========================================
+  // Media Player & Real-time Subtitle Sync State
+  // ==========================================
+  const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
+  const [playbackTime, setPlaybackTime] = useState<number>(0);
+  const [mediaDuration, setMediaDuration] = useState<number>(0);
+  const [timingOffset, setTimingOffset] = useState<number>(0); // in seconds (+ or -)
+  const [mediaFileUrl, setMediaFileUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (assemblyMediaFile) {
+      const url = URL.createObjectURL(assemblyMediaFile);
+      setMediaFileUrl(url);
+      setPlaybackTime(0);
+      return () => {
+        URL.revokeObjectURL(url);
+      };
+    } else {
+      setMediaFileUrl(null);
+    }
+  }, [assemblyMediaFile]);
+
+  // Helper to apply timing offset to raw SRT content
+  const getEffectiveSrt = (rawSrt: string | null | undefined): string => {
+    if (!rawSrt) return '';
+    if (timingOffset === 0) return rawSrt;
+    return shiftSrtContent(rawSrt, timingOffset);
+  };
+
+  // Adjust timing offset (+/- seconds)
+  const handleAdjustTimingOffset = (delta: number) => {
+    const next = Math.round((timingOffset + delta) * 10) / 10;
+    setTimingOffset(next);
+    showToast(
+      isMm 
+        ? `စာတန်းထိုး အချိန်ကိုက် ချိန်ညှိမှု: ${next >= 0 ? '+' : ''}${next.toFixed(1)}s` 
+        : `Subtitle sync offset: ${next >= 0 ? '+' : ''}${next.toFixed(1)}s`, 
+      'success'
+    );
+  };
+
+  // Seek media player to specific cue timestamp
+  const handleSeekToCue = (timeStr: string) => {
+    const sec = parseTimestampToSeconds(timeStr);
+    if (mediaRef.current) {
+      mediaRef.current.currentTime = Math.max(0, sec);
+      mediaRef.current.play().catch(() => {});
+    }
+  };
+
+  // ==========================================
   // Burmese Pro Translation State (Google AI)
   // ==========================================
   const [isTranslatingSrt, setIsTranslatingSrt] = useState(false);
@@ -145,6 +202,12 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
   // Style selector - 'သူ့မူရင်းအတိုင်း' as first & prominent option per user request
   const [translationStyle, setTranslationStyle] = useState('သူ့မူရင်းအတိုင်း (Original Fidelity / Direct - မူရင်းစကားအတိုင်း တိကျစွာ)');
   const [activeSubtitleLang, setActiveSubtitleLang] = useState<'burmese' | 'original'>('burmese');
+
+  // Track any active background process and notify parent tab
+  const isAnyProcessing = isProcessingAssemblyAI || isTranslatingSrt || isGeneratingRecap;
+  useEffect(() => {
+    onProcessingStateChange?.(isAnyProcessing);
+  }, [isAnyProcessing, onProcessingStateChange]);
 
   const assemblyFileInputRef = useRef<HTMLInputElement>(null);
   const [assemblyDragActive, setAssemblyDragActive] = useState(false);
@@ -204,7 +267,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
     }
 
     setIsProcessingAssemblyAI(true);
-    setAssemblyProgress({ step: isMm ? 'အသံဖိုင် စတင်ပြင်ဆင်နေပါသည်...' : 'Preparing audio for AssemblyAI...', percent: 10 });
+    setAssemblyProgress({ step: isMm ? 'အသံဖိုင် စတင်ပြင်ဆင်နေပါသည်...' : 'Preparing audio...', percent: 10 });
     setAssemblyResult(null);
     setTranslatedBurmeseSrt(null);
     setTranslatedNarrativeScript(null);
@@ -271,7 +334,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
 
     setIsTranslatingSrt(true);
     setTranslationProgress({ 
-      step: isMm ? 'Google AI ဖြင့် စာတန်းထိုးများကို မြန်မာလို စတင်ပြန်ဆိုနေပါသည်...' : 'Translating subtitles to Burmese...', 
+      step: isMm ? 'စာတန်းထိုးများကို မြန်မာလို စတင်ပြန်ဆိုနေပါသည်...' : 'Translating subtitles to Burmese...', 
       percent: 10 
     });
 
@@ -347,11 +410,12 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
         ? assemblyMediaFile.name.replace(/\.[^/.]+$/, "")
         : 'subtitles';
       
-      const blob = new Blob([translatedBurmeseSrt], { type: 'text/plain;charset=utf-8' });
+      const effectiveContent = getEffectiveSrt(translatedBurmeseSrt);
+      const blob = new Blob([effectiveContent], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `${baseName}_Burmese.srt`;
+      link.download = `${baseName}_Burmese${timingOffset !== 0 ? `_offset_${timingOffset}s` : ''}.srt`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -368,13 +432,14 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
     try {
       const baseName = assemblyMediaFile?.name
         ? assemblyMediaFile.name.replace(/\.[^/.]+$/, "")
-        : 'assemblyai_subtitles';
+        : 'subtitles';
       
-      const blob = new Blob([assemblyResult.srt], { type: 'text/plain;charset=utf-8' });
+      const effectiveContent = getEffectiveSrt(assemblyResult.srt);
+      const blob = new Blob([effectiveContent], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `${baseName}_Original.srt`;
+      link.download = `${baseName}_Original${timingOffset !== 0 ? `_offset_${timingOffset}s` : ''}.srt`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -425,8 +490,8 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
     const targetSrt = activeResultTab === 'recap'
       ? recapScript
       : activeSubtitleLang === 'burmese' && translatedBurmeseSrt 
-        ? translatedBurmeseSrt 
-        : assemblyResult?.srt;
+        ? getEffectiveSrt(translatedBurmeseSrt)
+        : getEffectiveSrt(assemblyResult?.srt);
     if (!targetSrt) return;
     navigator.clipboard.writeText(targetSrt);
     setIsCopied(true);
@@ -454,14 +519,16 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
     showToast(isMm ? 'စာသားများကို Voiceover Studio သို့ ပို့ဆောင်ပြီးပါပြီ 🎙️' : 'Sent script to Voice Studio!', 'success');
   };
 
-  // Parse SRT cues for list view (Original vs Burmese)
+  // Parse SRT cues for list view (Original vs Burmese) with applied timing offset
   const originalCues = useMemo<SrtCue[]>(() => {
-    return parseSrtToCues(assemblyResult?.srt || '');
-  }, [assemblyResult?.srt]);
+    const srt = getEffectiveSrt(assemblyResult?.srt);
+    return parseSrtToCues(srt);
+  }, [assemblyResult?.srt, timingOffset]);
 
   const burmeseCues = useMemo<SrtCue[]>(() => {
-    return parseSrtToCues(translatedBurmeseSrt || '');
-  }, [translatedBurmeseSrt]);
+    const srt = getEffectiveSrt(translatedBurmeseSrt);
+    return parseSrtToCues(srt);
+  }, [translatedBurmeseSrt, timingOffset]);
 
   // Active cues according to language selection
   const currentDisplayedCues = useMemo<SrtCue[]>(() => {
@@ -481,6 +548,16 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
     );
   }, [currentDisplayedCues, srtSearchQuery]);
 
+  // Active Cue for live video/audio player overlay
+  const activeCue = useMemo<SrtCue | null>(() => {
+    if (!currentDisplayedCues || currentDisplayedCues.length === 0) return null;
+    return currentDisplayedCues.find(c => {
+      const startSec = parseTimestampToSeconds(c.start);
+      const endSec = parseTimestampToSeconds(c.end);
+      return playbackTime >= startSec && playbackTime <= endSec;
+    }) || null;
+  }, [currentDisplayedCues, playbackTime]);
+
   return (
     <div className="space-y-6">
       {/* Unified Status Bar */}
@@ -488,8 +565,8 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-2.5 px-4 sm:px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm text-amber-400 bg-amber-400/5 border border-amber-400/10">
             <Zap size={16} className="text-amber-400" />
-            <span>AssemblyAI Auto-SRT</span>
-            <span className="hidden xs:inline text-[9px] uppercase tracking-wider bg-amber-400/10 text-amber-400 px-2 py-0.5 rounded-md font-black">
+            <span>{isMm ? 'အချိန်ကိုက် SRT စာတန်းထိုး စနစ်' : 'Time-Synced SRT Subtitle Studio'}</span>
+            <span className="hidden sm:inline text-[9px] uppercase tracking-wider bg-amber-400/10 text-amber-400 px-2 py-0.5 rounded-md font-black">
               Time-Synced
             </span>
           </div>
@@ -500,14 +577,14 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
           {assemblyApiKey.trim() ? (
             <div className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-xl text-[11px] font-bold">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span>AssemblyAI Connected</span>
+              <span>{isMm ? 'စာတန်းထိုးစနစ် ချိတ်ဆက်ပြီး' : 'Subtitle Engine Ready'}</span>
             </div>
           ) : (
             <button
               type="button"
               onClick={onNavigateToSettings}
               className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-400/10 hover:bg-amber-400/20 text-amber-300 border border-amber-400/20 rounded-xl text-[11px] font-bold transition-colors"
-              title="Add AssemblyAI Key in Settings"
+              title="Add Key in Settings"
             >
               <Key size={12} className="text-amber-400" />
               <span>{isMm ? 'Settings တွင် Key ထည့်ပါ' : 'Key in Settings'}</span>
@@ -548,11 +625,11 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
               </div>
               <div>
                 <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight flex items-center gap-2">
-                  <span>{isMm ? 'AssemblyAI အော်တို SRT စာတန်းထိုး ထုတ်ယူခြင်း' : 'AssemblyAI Auto-SRT Generator'}</span>
+                  <span>{isMm ? 'အော်တို SRT စာတန်းထိုး ထုတ်ယူခြင်း' : 'Auto-SRT Subtitle Studio'}</span>
                 </h2>
                 <p className="text-xs sm:text-sm text-slate-400 mt-0.5">
                   {isMm 
-                    ? 'ဗီဒီယို (သို့) အသံဖိုင်မှ အချိန်ကိုက် SRT စာတန်းထိုး ထုတ်ပြီး Google AI ဖြင့် မြန်မာလို Pro ကျကျ ပြန်ဆိုနိုင်ပါသည်' 
+                    ? 'ဗီဒီယို (သို့) အသံဖိုင်မှ အချိန်ကိုက် SRT စာတန်းထိုး ထုတ်ယူပြီး မြန်မာလို Pro ကျကျ ပြန်ဆိုနိုင်ပါသည်' 
                     : 'Time-synced .SRT subtitles with 1-click Pro Burmese Translation'}
                 </p>
               </div>
@@ -673,15 +750,15 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
             <div>
               <label className="text-[11px] font-bold text-slate-400 flex items-center gap-1.5 mb-1.5">
                 <Sliders size={13} className="text-amber-400" />
-                <span>{isMm ? 'AI အင်ဂျင်မော်ဒယ်' : 'Speech Model'}</span>
+                <span>{isMm ? 'အရည်အသွေး ရွေးချယ်မှု' : 'Quality Preset'}</span>
               </label>
               <select
                 value={assemblySpeechModel}
                 onChange={(e) => setAssemblySpeechModel(e.target.value as 'best' | 'nano')}
                 className="w-full bg-black/80 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400/50"
               >
-                <option value="best">Universal-3.5-Pro (Best / တိကျမှု အမြင့်ဆုံး)</option>
-                <option value="nano">Nano (Fast / အမြန်ဆုံး)</option>
+                <option value="best">{isMm ? 'Pro Studio (တိကျမှု အမြင့်ဆုံး / အကောင်းဆုံး)' : 'Pro Studio (Best Quality & Accuracy)'}</option>
+                <option value="nano">{isMm ? 'Express (အမြန်ဆုံး / ပေါ့ပါးမှု ဦးစားပေး)' : 'Express (Fast Speed)'}</option>
               </select>
             </div>
           </div>
@@ -701,14 +778,14 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
               <>
                 <RefreshCw size={19} className="animate-spin text-amber-400" />
                 <span className="font-bold text-amber-300">
-                  {assemblyProgress.step || (isMm ? 'AssemblyAI ဖြင့် စာတန်းထိုး ထုတ်လုပ်နေပါသည်...' : 'Processing with AssemblyAI...')}
+                  {assemblyProgress.step || (isMm ? 'စာတန်းထိုး ထုတ်လုပ်နေပါသည်...' : 'Generating Subtitles...')}
                 </span>
               </>
             ) : (
               <>
                 <Zap size={20} className="fill-black" />
                 <span>
-                  {isMm ? 'AssemblyAI ဖြင့် အချိန်ကိုက် SRT စာတန်းထိုး ထုတ်ယူမည်' : 'Generate Time-Synced SRT Subtitles'}
+                  {isMm ? 'အချိန်ကိုက် SRT စာတန်းထိုး ထုတ်ယူမည်' : 'Generate Time-Synced SRT Subtitles'}
                 </span>
               </>
             )}
@@ -748,7 +825,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
                 <div className="space-y-1.5">
                   <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[11px] font-bold uppercase tracking-wider">
                     <Languages size={13} />
-                    <span>Google AI Pro Subtitle Translator</span>
+                    <span>{isMm ? 'မြန်မာဘာသာသို့ ပြန်ဆိုခြင်း' : 'Pro Subtitle Translator'}</span>
                   </div>
                   <h3 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2">
                     <span>🇲🇲</span>
@@ -928,6 +1005,193 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
                 </div>
               </div>
 
+              {/* Media Preview Player with Live Subtitle Overlay */}
+              {mediaFileUrl && (
+                <div className="bg-black/90 border border-white/10 rounded-2xl overflow-hidden relative shadow-2xl">
+                  {assemblyMediaFile?.type.startsWith('video/') ? (
+                    <div>
+                      <div className="relative aspect-video max-h-[380px] w-full bg-black flex items-center justify-center overflow-hidden">
+                        <video
+                          ref={mediaRef as React.RefObject<HTMLVideoElement>}
+                          src={mediaFileUrl}
+                          className="w-full h-full object-contain"
+                          controls
+                          playsInline
+                          onTimeUpdate={(e) => setPlaybackTime(e.currentTarget.currentTime)}
+                          onLoadedMetadata={(e) => setMediaDuration(e.currentTarget.duration)}
+                        />
+                        {/* Floating Subtitle Overlay on Video */}
+                        {activeCue && (
+                          <div className="absolute bottom-14 sm:bottom-12 inset-x-2 sm:inset-x-4 flex justify-center pointer-events-none z-20">
+                            <div className="bg-black/90 backdrop-blur-md text-white font-bold text-xs sm:text-base px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl border border-white/20 shadow-2xl text-center max-w-xl animate-fade-in break-words">
+                              {activeCue.speaker && (
+                                <span className="text-amber-400 text-[10px] sm:text-xs block mb-0.5 font-mono">
+                                  [Speaker {activeCue.speaker}]
+                                </span>
+                              )}
+                              <span className="leading-snug">{activeCue.text}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Active Subtitle Display beneath video for clear mobile reading */}
+                      <div className="p-3 sm:p-4 bg-black/60 border-t border-white/10 flex items-center justify-between gap-3">
+                        <div className="flex-1 overflow-hidden">
+                          {activeCue ? (
+                            <div className="text-left">
+                              {activeCue.speaker && (
+                                <span className="text-amber-400 text-[10px] font-bold inline-block mr-2 font-mono">
+                                  [Speaker {activeCue.speaker}]
+                                </span>
+                              )}
+                              <span className="text-xs sm:text-sm font-bold text-white leading-relaxed break-words">
+                                {activeCue.text}
+                              </span>
+                            </div>
+                          ) : (
+                            <p className="text-xs text-slate-500 text-left italic truncate">
+                              {isMm ? 'ဗီဒီယို ဖွင့်ထားချိန်တွင် အချိန်ကိုက် စာတန်းထိုးများကို ဤနေရာတွင် တိုက်ရိုက် ပြသပါမည်' : 'Subtitles will appear here in sync with video playback'}
+                            </p>
+                          )}
+                        </div>
+                        <span className="text-[11px] text-slate-400 font-mono shrink-0">
+                          {formatTime(playbackTime)} / {formatTime(mediaDuration || 0)}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-4 sm:p-5 flex flex-col gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-amber-400/10 text-amber-400 rounded-xl flex items-center justify-center shrink-0 border border-amber-400/20">
+                          <Volume2 size={20} />
+                        </div>
+                        <div className="flex-1 overflow-hidden">
+                          <h4 className="text-xs sm:text-sm font-bold text-white truncate">{assemblyMediaFile?.name}</h4>
+                          <span className="text-[11px] text-slate-400 font-mono">
+                            {formatTime(playbackTime)} / {formatTime(mediaDuration || 0)}
+                          </span>
+                        </div>
+                      </div>
+                      <audio
+                        ref={mediaRef as React.RefObject<HTMLAudioElement>}
+                        src={mediaFileUrl}
+                        className="w-full h-9 rounded-lg"
+                        controls
+                        onTimeUpdate={(e) => setPlaybackTime(e.currentTarget.currentTime)}
+                        onLoadedMetadata={(e) => setMediaDuration(e.currentTarget.duration)}
+                      />
+                      {/* Active Subtitle Display for Audio */}
+                      {activeCue ? (
+                        <div className="p-3 bg-amber-400/10 border border-amber-400/20 rounded-xl text-center">
+                          {activeCue.speaker && (
+                            <span className="text-amber-400 text-[10px] font-bold block mb-0.5 font-mono">
+                              [Speaker {activeCue.speaker}]
+                            </span>
+                          )}
+                          <p className="text-sm font-bold text-white leading-relaxed">{activeCue.text}</p>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-500 text-center italic">
+                          {isMm ? 'အချိန်ကိုက် စာတန်းထိုးများကို နားဆင်ရန် ဖွင့်ပါ' : 'Play audio to preview time-synced subtitles'}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Subtitle Timing Calibration & Fine-Tuner */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-black/60 border border-white/10 rounded-2xl">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 bg-amber-400/10 rounded-lg text-amber-400">
+                    <Sliders size={15} />
+                  </div>
+                  <div>
+                    <span className="text-xs font-bold text-white block">
+                      {isMm ? 'စက္ကန့်အလိုက် အချိန်ကိုက် ညှိရန် (Timing Calibration)' : 'Timing Calibration'}
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      {isMm ? 'ဗီဒီယိုနှင့် စာတန်းထိုး နှေး/မြန် လွဲနေပါက +/- ဖြင့် တိကျစွာ ညှိပါ' : 'Fine-tune subtitle alignment with video'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => handleAdjustTimingOffset(-0.5)}
+                    className="px-2.5 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-mono text-slate-300 hover:text-white transition-colors"
+                    title="Shift 0.5s earlier"
+                  >
+                    -0.5s
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAdjustTimingOffset(-0.2)}
+                    className="px-2.5 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-mono text-slate-300 hover:text-white transition-colors"
+                    title="Shift 0.2s earlier"
+                  >
+                    -0.2s
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAdjustTimingOffset(-0.1)}
+                    className="px-2.5 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-mono text-slate-300 hover:text-white transition-colors"
+                    title="Shift 0.1s earlier"
+                  >
+                    -0.1s
+                  </button>
+
+                  <div className={`px-3 py-1 rounded-lg border text-xs font-mono font-bold ${
+                    timingOffset !== 0 
+                      ? 'bg-amber-400/20 text-amber-300 border-amber-400/40' 
+                      : 'bg-black/60 text-slate-400 border-white/10'
+                  }`}>
+                    {timingOffset > 0 ? `+${timingOffset.toFixed(1)}s` : `${timingOffset.toFixed(1)}s`}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleAdjustTimingOffset(0.1)}
+                    className="px-2.5 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-mono text-slate-300 hover:text-white transition-colors"
+                    title="Shift 0.1s later"
+                  >
+                    +0.1s
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAdjustTimingOffset(0.2)}
+                    className="px-2.5 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-mono text-slate-300 hover:text-white transition-colors"
+                    title="Shift 0.2s later"
+                  >
+                    +0.2s
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAdjustTimingOffset(0.5)}
+                    className="px-2.5 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-mono text-slate-300 hover:text-white transition-colors"
+                    title="Shift 0.5s later"
+                  >
+                    +0.5s
+                  </button>
+
+                  {timingOffset !== 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTimingOffset(0);
+                        showToast(isMm ? 'အချိန်ကိုက် မူလအတိုင်း ပြန်သတ်မှတ်ပါသည်' : 'Reset timing offset', 'success');
+                      }}
+                      className="p-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 rounded-lg text-xs transition-colors"
+                      title="Reset Offset"
+                    >
+                      <RotateCcw size={13} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {/* Subtitle Language Switcher & View Tabs */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -1049,7 +1313,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
                     <div className="flex items-center justify-between mb-4 pb-3 border-b border-purple-500/10 relative z-10">
                       <h4 className="text-purple-300 font-black text-sm uppercase tracking-wider flex items-center gap-2">
                         <Sparkles size={16} className="text-purple-400" />
-                        <span>AI Movie Recap Script</span>
+                        <span>{isMm ? 'ရုပ်ရှင်ဇာတ်လမ်းပြန်ပြော ဇာတ်ညွှန်း' : 'Movie Recap Script'}</span>
                       </h4>
                       <div className="flex items-center gap-2">
                         <button
@@ -1086,39 +1350,55 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
                         const matchingOriginalCue = activeSubtitleLang === 'burmese' 
                           ? originalCues.find(c => c.index === cue.index) 
                           : null;
+                        const isCueActive = activeCue?.index === cue.index;
 
                         return (
                           <div
                             key={cue.index}
                             className={`p-3.5 sm:p-4 rounded-xl border transition-all ${
-                              activeSubtitleLang === 'burmese'
-                                ? 'bg-black/60 border-emerald-500/15 hover:border-emerald-500/30'
-                                : 'bg-black/60 border-white/5 hover:border-amber-400/25'
+                              isCueActive
+                                ? activeSubtitleLang === 'burmese'
+                                  ? 'bg-emerald-950/40 border-emerald-400 ring-2 ring-emerald-400/50 shadow-lg shadow-emerald-500/10'
+                                  : 'bg-amber-950/40 border-amber-400 ring-2 ring-amber-400/50 shadow-lg shadow-amber-500/10'
+                                : activeSubtitleLang === 'burmese'
+                                  ? 'bg-black/60 border-emerald-500/15 hover:border-emerald-500/30'
+                                  : 'bg-black/60 border-white/5 hover:border-amber-400/25'
                             }`}
                           >
-                            <div className="flex items-center justify-between gap-3 mb-1.5">
-                              <div className="flex items-center gap-2">
-                                <span className={`text-[11px] font-mono px-2 py-0.5 rounded font-bold ${
-                                  activeSubtitleLang === 'burmese'
-                                    ? 'bg-emerald-500/10 text-emerald-400'
-                                    : 'bg-amber-400/10 text-amber-400'
+                            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                              <div className="flex items-center gap-1.5 sm:gap-2">
+                                <span className={`text-[10px] sm:text-[11px] font-mono px-2 py-0.5 rounded font-bold ${
+                                  isCueActive
+                                    ? activeSubtitleLang === 'burmese' ? 'bg-emerald-400 text-black' : 'bg-amber-400 text-black'
+                                    : activeSubtitleLang === 'burmese'
+                                      ? 'bg-emerald-500/10 text-emerald-400'
+                                      : 'bg-amber-400/10 text-amber-400'
                                 }`}>
                                   #{cue.index}
                                 </span>
                                 {cue.speaker && (
-                                  <span className="text-[10px] font-bold uppercase bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded">
+                                  <span className="text-[9px] sm:text-[10px] font-bold uppercase bg-purple-500/20 text-purple-300 px-1.5 sm:px-2 py-0.5 rounded">
                                     Spk {cue.speaker}
                                   </span>
                                 )}
                               </div>
 
-                              <div className="flex items-center gap-3">
-                                <div className="text-[11px] font-mono text-slate-400 flex items-center gap-1.5">
-                                  <Clock size={11} className="text-slate-500" />
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <button
+                                  type="button"
+                                  onClick={() => handleSeekToCue(cue.start)}
+                                  className={`flex items-center gap-1 sm:gap-1.5 px-2 py-0.5 rounded-lg text-[10px] sm:text-[11px] font-mono transition-colors ${
+                                    isCueActive
+                                      ? 'bg-amber-400 text-black font-bold'
+                                      : 'text-slate-300 hover:text-white bg-white/5 hover:bg-white/10'
+                                  }`}
+                                  title={isMm ? 'ဤစက္ကန့်သို့ ဗီဒီယို ရွှေ့ဖွင့်မည်' : 'Seek video to this timestamp'}
+                                >
+                                  <Play size={10} className="fill-current shrink-0" />
                                   <span>{cue.start}</span>
                                   <span>➔</span>
                                   <span>{cue.end}</span>
-                                </div>
+                                </button>
                                 <button
                                   type="button"
                                   onClick={() => handleCopyCue(cue.text, cue.index)}
@@ -1134,13 +1414,13 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
                               </div>
                             </div>
 
-                            <p className="text-sm text-slate-100 leading-relaxed font-medium">
+                            <p className="text-xs sm:text-sm text-slate-100 leading-relaxed font-medium break-words">
                               {cue.text}
                             </p>
 
                             {/* Bilingual Comparison view */}
                             {matchingOriginalCue && (
-                              <p className="text-xs text-slate-400 mt-2 pt-1.5 border-t border-white/5 italic">
+                              <p className="text-[11px] sm:text-xs text-slate-400 mt-2 pt-1.5 border-t border-white/5 italic break-words">
                                 <span className="text-slate-500 font-semibold not-italic">မူရင်း: </span>
                                 {matchingOriginalCue.text}
                               </p>

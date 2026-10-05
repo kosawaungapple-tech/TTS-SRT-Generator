@@ -41,6 +41,7 @@ interface StoryAudiobookStudioProps {
   isPremium: boolean;
   userControl?: VBSUserControl | null;
   onNavigateToSettings?: () => void;
+  onProcessingStateChange?: (isProcessing: boolean) => void;
 }
 
 interface Chapter {
@@ -130,7 +131,8 @@ export const StoryAudiobookStudio: React.FC<StoryAudiobookStudioProps> = ({
   isAdmin,
   isPremium,
   userControl,
-  onNavigateToSettings
+  onNavigateToSettings,
+  onProcessingStateChange
 }) => {
   const { language, t } = useLanguage();
   const isMm = language === 'mm';
@@ -213,6 +215,12 @@ export const StoryAudiobookStudio: React.FC<StoryAudiobookStudioProps> = ({
   const [coverTitle, setCoverTitle] = useState(project.title);
   const [coverChapterText, setCoverChapterText] = useState(`အခန်း (${activeChapter.number})`);
   const [coverBadgeText, setCoverBadgeText] = useState('VlogsBySaw အသံစာအုပ်');
+
+  // Track any active processing and notify parent tab
+  const isAnyProcessing = isGeneratingAudio || isExportingMaster || isAiGenerating;
+  useEffect(() => {
+    onProcessingStateChange?.(isAnyProcessing);
+  }, [isAnyProcessing, onProcessingStateChange]);
   const [coverStylePreset, setCoverStylePreset] = useState<'fire' | 'neon' | 'diamond' | 'gold' | 'gothic'>('gold');
   const [coverVisualPrompt, setCoverVisualPrompt] = useState('');
   const [isGeneratingCover, setIsGeneratingCover] = useState(false);

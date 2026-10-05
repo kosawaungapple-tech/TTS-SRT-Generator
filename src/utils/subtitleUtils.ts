@@ -75,33 +75,27 @@ export function generateOptimizedSubtitles(text: string, totalDuration: number):
     }
   }
 
-  // 3. Calculate total characters for proportional timing
-  const totalChars = refinedBlocks.reduce((acc, lines) => acc + lines.join(" ").length, 0);
-  const timePerChar = totalDuration / Math.max(1, totalChars);
-  
-  // Calculate max chars allowed in 3.5s
-  const maxCharsIn3_5s = Math.floor(3.5 / timePerChar);
-
-  // 4. Final split of blocks that are too long for 3.5s
+  // 3. Split blocks so no block exceeds recommended reading speed or character limit (~55 chars)
+  const maxCharsPerBlock = 55;
   const finalBlocks: string[][] = [];
+
   for (const pair of refinedBlocks) {
-    const text = pair.join(" ");
-    if (text.length > maxCharsIn3_5s && maxCharsIn3_5s > 10) {
-      // Split this 2-line block into individual lines or smaller chunks
+    const combined = pair.join(" ");
+    if (combined.length > maxCharsPerBlock) {
+      // Split into single line blocks
       for (const line of pair) {
-        if (line.length > maxCharsIn3_5s) {
-           // Line itself is too long, split it
-           const words = line.split(" ");
-           let current = "";
-           for (const w of words) {
-             if ((current + " " + w).length > maxCharsIn3_5s) {
-               if (current) finalBlocks.push([current.trim()]);
-               current = w;
-             } else {
-               current += (current ? " " : "") + w;
-             }
-           }
-           if (current) finalBlocks.push([current.trim()]);
+        if (line.length > maxCharsPerBlock) {
+          const words = line.split(/\s+/);
+          let current = "";
+          for (const w of words) {
+            if ((current + " " + w).trim().length > 35) {
+              if (current) finalBlocks.push([current.trim()]);
+              current = w;
+            } else {
+              current += (current ? " " : "") + w;
+            }
+          }
+          if (current) finalBlocks.push([current.trim()]);
         } else {
           finalBlocks.push([line]);
         }
@@ -111,38 +105,40 @@ export function generateOptimizedSubtitles(text: string, totalDuration: number):
     }
   }
 
+  if (finalBlocks.length === 0) return [];
+
+  // 4. Calculate speech & pause weights for proportional, drift-free timing
+  // In Myanmar language:
+  // "။" indicates a sentence end pause (~0.4s - 0.5s)
+  // "၊" indicates a clause pause (~0.2s - 0.3s)
+  const weights: number[] = finalBlocks.map((lines) => {
+    const text = lines.join(" ");
+    let weight = Math.max(8, text.length);
+    if (text.includes("။")) weight += 10; // pause bonus
+    if (text.includes("၊")) weight += 5;
+    if (text.includes("...")) weight += 8;
+    return weight;
+  });
+
+  const totalWeight = weights.reduce((a, b) => a + b, 0);
   const subtitles: SRTSubtitle[] = [];
   let currentTime = 0;
 
   finalBlocks.forEach((lines, index) => {
     const blockText = lines.join("\r\n");
-    const blockCharCount = lines.join(" ").length;
-    let blockDuration = blockCharCount * timePerChar;
-    
-    // Safety caps
-    if (blockDuration > 3.5) blockDuration = 3.5;
-    if (blockDuration < 0.5) blockDuration = 0.5;
+    const blockDuration = totalDuration * (weights[index] / Math.max(1, totalWeight));
+    const isLast = index === finalBlocks.length - 1;
+    const nextTime = isLast ? totalDuration : currentTime + blockDuration;
 
     subtitles.push({
       index: index + 1,
       startTime: formatTime(currentTime),
-      endTime: formatTime(currentTime + blockDuration),
+      endTime: formatTime(nextTime),
       text: blockText
     });
-    
-    currentTime += blockDuration;
-  });
 
-  // 4. Final duration normalization 
-  // If we exceeded or fell short, we should stretch/compress, 
-  // but keep max duration in mind.
-  if (currentTime > totalDuration && subtitles.length > 0) {
-    // If we've drifted significantly, we just cap at totalDuration or adjust proportionally
-    // For simplicity and per-rule adherence, we ensure end timings make sense.
-    if (currentTime > totalDuration) {
-       // Just cap the last one or let it be if it's close.
-    }
-  }
+    currentTime = nextTime;
+  });
 
   return subtitles;
 }
@@ -253,10 +249,57 @@ export function generateLRC(subtitles: SRTSubtitle[]): string {
   }).join('\r\n');
 }
 
-function parseTimestampToSeconds(timestamp: string): number {
-  const [hms, ms] = timestamp.split(',');
-  const [h, m, s] = hms.split(':').map(Number);
-  return h * 3600 + m * 60 + s + (Number(ms) / 1000);
+export function parseTimestampToSeconds(timestamp: string): number {
+  if (!timestamp) return 0;
+  const clean = timestamp.trim().replace(/\./g, ',');
+  const [hms, ms = '0'] = clean.split(',');
+  const parts = hms.split(':').map(Number);
+  if (parts.length === 3) {
+    const [h, m, s] = parts;
+    return h * 3600 + m * 60 + s + (Number(ms) / 1000);
+  } else if (parts.length === 2) {
+    const [m, s] = parts;
+    return m * 60 + s + (Number(ms) / 1000);
+  }
+  return 0;
+}
+
+/**
+ * Shifts an entire SRT text content by offsetSeconds (+ or -),
+ * preserving exact block numbers and formatting.
+ */
+export function shiftSrtContent(srtText: string, offsetSeconds: number): string {
+  if (!srtText || offsetSeconds === 0) return srtText;
+  const raw = srtText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const blocks = raw.split(/\n\s*\n/).filter(b => b.trim().length > 0);
+
+  const shiftedBlocks: string[] = [];
+
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) continue;
+
+    let timeLineIdx = 1;
+    if (!lines[0].match(/^\d+$/)) {
+      timeLineIdx = 0;
+    }
+
+    const timeParts = lines[timeLineIdx].split('-->');
+    if (timeParts.length === 2) {
+      const origStart = parseTimestampToSeconds(timeParts[0]);
+      const origEnd = parseTimestampToSeconds(timeParts[1]);
+
+      const newStart = Math.max(0, origStart + offsetSeconds);
+      const newEnd = Math.max(newStart + 0.1, origEnd + offsetSeconds);
+
+      lines[timeLineIdx] = `${formatTime(newStart).replace(/\./g, ',')} --> ${formatTime(newEnd).replace(/\./g, ',')}`;
+      lines[0] = String(shiftedBlocks.length + 1);
+      shiftedBlocks.push(lines.join('\r\n'));
+    }
+  }
+
+  return shiftedBlocks.join('\r\n\r\n') + '\r\n';
 }
 
 /**

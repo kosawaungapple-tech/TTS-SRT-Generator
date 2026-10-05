@@ -795,8 +795,8 @@ export class GeminiTTSService {
 
   /**
    * Professional Myanmar Translation for SRT Subtitles
-   * Maintains accurate SRT index and timestamp lines while translating dialogues
-   * into modern, cinematic Burmese storyteller style.
+   * Guarantees 100% timestamp preservation: the exact milliseconds from the video
+   * are mathematically retained, while dialogues are localized into natural Burmese.
    */
   async translateSrtToMyanmar(
     srtContent: string,
@@ -809,40 +809,77 @@ export class GeminiTTSService {
       return { translatedSrt: '', narrativeScript: '' };
     }
 
-    // Split into SRT blocks
+    // Parse every original block into structured cue
     const rawBlocks = normalized.split(/\n\s*\n/).filter(b => b.trim().length > 0);
-    const CHUNK_SIZE = 35; // optimal for LLM context & translation fidelity
-    const totalChunks = Math.ceil(rawBlocks.length / CHUNK_SIZE);
-    let allTranslatedSrt = '';
+    interface SrtSourceCue {
+      id: number;
+      timeLine: string;
+      speaker?: string;
+      text: string;
+    }
+
+    const cues: SrtSourceCue[] = [];
+    for (let i = 0; i < rawBlocks.length; i++) {
+      const lines = rawBlocks[i].split('\n').map(l => l.trim()).filter(Boolean);
+      if (lines.length >= 2) {
+        let timeLine = lines[1];
+        let textLines = lines.slice(2);
+        if (!lines[0].match(/^\d+$/)) {
+          timeLine = lines[0];
+          textLines = lines.slice(1);
+        }
+        let fullText = textLines.join(' ');
+        let speaker: string | undefined;
+        const speakerMatch = fullText.match(/^\[(?:Speaker\s+)?([^\]]+)\]:\s*(.*)$/i);
+        if (speakerMatch) {
+          speaker = speakerMatch[1];
+          fullText = speakerMatch[2];
+        }
+        cues.push({
+          id: i + 1,
+          timeLine,
+          speaker,
+          text: fullText
+        });
+      }
+    }
+
+    if (cues.length === 0) {
+      return { translatedSrt: srtContent, narrativeScript: '' };
+    }
+
+    const CHUNK_SIZE = 30; // optimal chunk size for high-fidelity translation
+    const totalChunks = Math.ceil(cues.length / CHUNK_SIZE);
+    const translatedMap = new Map<number, string>();
+
+    const isDirectOriginal = style.includes('မူရင်းအတိုင်း') || style.toLowerCase().includes('direct') || style.toLowerCase().includes('original');
 
     for (let c = 0; c < totalChunks; c++) {
-      const chunkBlocks = rawBlocks.slice(c * CHUNK_SIZE, (c + 1) * CHUNK_SIZE);
-      const chunkText = chunkBlocks.join('\n\n');
+      const chunkCues = cues.slice(c * CHUNK_SIZE, (c + 1) * CHUNK_SIZE);
+      const linesToTranslate = chunkCues.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.text}`).join('\n');
       const progressPercent = Math.min(95, Math.round(((c + 1) / totalChunks) * 90));
 
       if (onProgress) {
-        onProgress(`မြန်မာဘာသာသို့ Pro ကျကျ ပြန်ဆိုနေပါသည်... (အပိုင်း ${c + 1}/${totalChunks})`, progressPercent);
+        onProgress(`မြန်မာဘာသာသို့ အချိန်ကိုက် ပြန်ဆိုနေပါသည်... (${c + 1}/${totalChunks})`, progressPercent);
       }
-
-      const isDirectOriginal = style.includes('မူရင်းအတိုင်း') || style.toLowerCase().includes('direct') || style.toLowerCase().includes('original');
 
       const prompt = `
 You are a master Burmese (Myanmar) subtitle translator and localization expert.
-Translate the following SRT subtitles into accurate, high-quality, and modern spoken Burmese.
+Translate each numbered dialogue/narration line into natural, high-quality spoken Burmese for video subtitles.
 
 TRANSLATION TONE & STYLE: ${style}
 ${isDirectOriginal 
-  ? '- STRICT ACCURACY (သူ့မူရင်းအတိုင်း): Translate faithfully with semantic precision to the original dialogue, preserving the exact original meaning and structure without extra storytelling embellishments.' 
+  ? '- STRICT ACCURACY (သူ့မူရင်းအတိုင်း): Translate faithfully with semantic precision to the original dialogue, preserving the exact original meaning without extra storytelling embellishments.' 
   : '- NATURAL CINEMATIC: Translate into expressive, vivid, and culturally natural Burmese storytelling style appropriate for film, video recaps, and podcasts.'}
 
 CRITICAL RULES:
-1. Maintain the EXACT SRT structure: keep every subtitle index number (1, 2, 3...) and exact timestamp line (00:00:01,234 --> 00:00:04,567) completely intact and unaltered.
-2. Translate ONLY the subtitle dialogue/narration lines into natural Burmese.
-3. If speaker labels exist like [Speaker A]: or [Alex]:, preserve them.
-4. Do NOT wrap output in markdown code blocks like \`\`\`srt. Return ONLY clean, valid SRT text.
+1. Output format MUST be strictly: "[ID] Burmese translation"
+2. Translate EVERY ID from ${chunkCues[0].id} to ${chunkCues[chunkCues.length - 1].id}. Do NOT combine, merge, or skip IDs.
+3. Keep speaker labels if present in parentheses like "(Speaker 1): ".
+4. Return ONLY the numbered Burmese translations without markdown blocks or preamble.
 
-SOURCE SRT CHUNK:
-${chunkText}
+INPUT LINES:
+${linesToTranslate}
 `;
 
       const data = await this.geminiRequest(
@@ -853,35 +890,61 @@ ${chunkText}
       );
 
       let chunkResult = (data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
-      // Remove any markdown codeblock backticks if returned
       chunkResult = chunkResult.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
 
-      allTranslatedSrt += (allTranslatedSrt ? '\n\n' : '') + chunkResult;
+      // Parse [ID] responses
+      const returnedLines = chunkResult.split('\n').map(l => l.trim()).filter(Boolean);
+      for (const line of returnedLines) {
+        const idMatch = line.match(/^\[(\d+)\]\s*(.*)$/);
+        if (idMatch) {
+          const id = parseInt(idMatch[1], 10);
+          const trans = idMatch[2].trim();
+          if (id && trans) {
+            translatedMap.set(id, trans);
+          }
+        }
+      }
+
+      // Fallback for any cue in this chunk that missed [ID] matching
+      chunkCues.forEach((cue, index) => {
+        if (!translatedMap.has(cue.id)) {
+          if (index < returnedLines.length) {
+            const cleanLine = returnedLines[index].replace(/^\[\d+\]\s*/, '').trim();
+            if (cleanLine) translatedMap.set(cue.id, cleanLine);
+          }
+        }
+      });
 
       if (c < totalChunks - 1) {
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 400));
       }
     }
 
-    // Generate companion narrative script (plain text without timestamps)
-    const scriptLines: string[] = [];
-    const translatedBlocks = allTranslatedSrt.split(/\n\s*\n/);
-    for (const block of translatedBlocks) {
-      const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
-      const textLines = lines.filter((line, idx) => {
-        if (idx === 0 && line.match(/^\d+$/)) return false;
-        if (line.includes('-->')) return false;
-        return true;
-      });
-      if (textLines.length > 0) {
-        scriptLines.push(textLines.join(' '));
+    // Reconstruct SRT with 100% EXACT ORIGINAL TIMESTAMPS from the video
+    const finalSrtBlocks: string[] = [];
+    const narrativeScriptPieces: string[] = [];
+
+    for (let i = 0; i < cues.length; i++) {
+      const cue = cues[i];
+      let translated = (translatedMap.get(cue.id) || cue.text).trim();
+      
+      // Clean any accidental speaker tag duplicates
+      if (cue.speaker && translated.startsWith(`(${cue.speaker})`)) {
+        translated = translated.replace(`(${cue.speaker})`, '').trim();
       }
+
+      const speakerPrefix = cue.speaker ? `[Speaker ${cue.speaker}]: ` : '';
+      const finalCueText = `${speakerPrefix}${translated}`;
+
+      finalSrtBlocks.push(`${i + 1}\r\n${cue.timeLine}\r\n${finalCueText}`);
+      narrativeScriptPieces.push(translated);
     }
 
-    const narrativeScript = scriptLines.join(' ');
+    const allTranslatedSrt = finalSrtBlocks.join('\r\n\r\n') + '\r\n';
+    const narrativeScript = narrativeScriptPieces.join(' ');
 
     if (onProgress) {
-      onProgress('မြန်မာဘာသာသို့ ပြန်ဆိုမှု ပြီးစီးပါပြီ ✨', 100);
+      onProgress('မြန်မာဘာသာသို့ အချိန်ကိုက် ပြန်ဆိုမှု ပြီးစီးပါပြီ ✨', 100);
     }
 
     return {

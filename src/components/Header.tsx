@@ -48,7 +48,7 @@ export const Header: React.FC<HeaderProps> = ({
                     apiKeyStatus.state !== 'none' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 
                     'bg-rose-500 animate-pulse shadow-[0_0_8px_rgba(244,63,94,0.5)]'
                   }`} />
-                  <span className={`text-[7px] sm:text-[8px] font-bold uppercase tracking-wider hidden xs:inline ${
+                  <span className={`text-[7px] sm:text-[8px] font-bold uppercase tracking-wider hidden sm:inline ${
                     apiKeyStatus.state !== 'none' ? 'text-emerald-500' : 
                     'text-rose-500'
                   }`}>
@@ -82,8 +82,8 @@ export const Header: React.FC<HeaderProps> = ({
             }`}
           >
             <Globe size={14} className="shrink-0" />
-            <span className="hidden xs:inline">{language === 'mm' ? 'Burmese' : 'English'}</span>
-            <span className="xs:hidden">{language === 'mm' ? 'MM' : 'EN'}</span>
+            <span className="hidden sm:inline">{language === 'mm' ? 'Burmese' : 'English'}</span>
+            <span className="sm:hidden">{language === 'mm' ? 'MM' : 'EN'}</span>
           </button>
 
           <button

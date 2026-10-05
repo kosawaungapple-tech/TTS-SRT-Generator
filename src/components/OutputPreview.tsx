@@ -72,7 +72,7 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
   showToast,
   config
 }) => {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -779,7 +779,9 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
         </div>
         <h3 className="text-3xl font-black mb-4 text-white tracking-tight uppercase">{t('common.error')}</h3>
         <p className="text-slate-500 text-base max-w-sm leading-relaxed mb-10 font-medium">
-          {error === 'SERVER_BUSY_RETRY' ? 'The AI engine is currently under heavy load. Please attempt your generation again.' : error}
+          {error === 'SERVER_BUSY_RETRY' 
+            ? (language === 'mm' ? 'ဆာဗာ အလုပ်များနေသဖြင့် ခေတ္တစောင့်ဆိုင်းပြီး ပြန်လည်ကြိုးစားပေးပါ။' : 'The server is currently busy. Please attempt your generation again.') 
+            : error}
         </p>
         <button
           onClick={onRetry}
@@ -878,9 +880,13 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
               <AlertCircle size={28} />
             </div>
             <div className="space-y-1">
-              <p className="font-black text-amber-400 uppercase tracking-widest text-xs">AI Fallback Active</p>
+              <p className="font-black text-amber-400 uppercase tracking-widest text-xs">
+                {language === 'mm' ? 'အရန် အသံစနစ် အသုံးပြုထားပါသည်' : 'Fallback Voice Active'}
+              </p>
               <p className="text-slate-400 text-[11px] leading-relaxed font-medium">
-                Gemini AI is currently unavailable or rate-limited. The system is using your device's native voice as a temporary backup (English only).
+                {language === 'mm'
+                  ? 'အဓိကဆာဗာ ခေတ္တအလုပ်များနေပါသဖြင့် စက်၏ အရန်အသံစနစ်ဖြင့် ထုတ်ယူပေးထားပါသည်။'
+                  : 'The primary audio server is currently busy. The system is using device audio as a temporary backup.'}
               </p>
             </div>
           </div>

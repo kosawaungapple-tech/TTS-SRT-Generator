@@ -63,7 +63,9 @@ export default function App() {
     api_keys: ['']
   });
 
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [isTranscriberProcessing, setIsTranscriberProcessing] = useState(false);
+  const [isAudiobookProcessing, setIsAudiobookProcessing] = useState(false);
   const [profile, setProfile] = useState<VBSUserControl | null>(null);
   const [vbsId, setVbsId] = useState<string | null>(localStorage.getItem('VBS_USER_ID'));
   const [userControl, setUserControl] = useState<VBSUserControl | null>(null);
@@ -231,9 +233,9 @@ export default function App() {
     }
   }, [config.speed, config.pitch, config.volume, result]);
 
-  const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
+  const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
     setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
+    setTimeout(() => setToast(null), 3500);
   }, []);
 
   const isUsingAdminKey = useMemo(() => {
@@ -337,6 +339,51 @@ export default function App() {
   useEffect(() => {
     historyRef.current = history;
   }, [history]);
+
+  // Check if any background process is currently active across all tabs
+  const isStudioProcessing = isLoading || isProcessingSpeed;
+  const isAnyProcessRunning = isStudioProcessing || isTranscriberProcessing || isAudiobookProcessing || isBatchProcessing;
+
+  // Protect ongoing background processes from accidental tab close or page reload
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isAnyProcessRunning) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isAnyProcessRunning]);
+
+  // Notify user when background Studio audio generation finishes while viewing another tab
+  const prevStudioLoading = useRef(isLoading);
+  useEffect(() => {
+    if (prevStudioLoading.current && !isLoading && result && activeTab !== 'generate') {
+      showToast(
+        language === 'mm' 
+          ? '🎙️ Studio အသံဖိုင် ထုတ်ယူမှု ပြီးဆုံးပါပြီ။ "Studio" tab တွင် နားဆင်/ဒေါင်းလုဒ် ပြုလုပ်နိုင်ပါပြီ!' 
+          : '🎙️ Voiceover audio generation completed! Return to Studio tab to play/download.',
+        'success'
+      );
+    }
+    prevStudioLoading.current = isLoading;
+  }, [isLoading, result, activeTab, language, showToast]);
+
+  // Notify user when background Video transcription finishes while viewing another tab
+  const prevTranscriberProcessing = useRef(isTranscriberProcessing);
+  useEffect(() => {
+    if (prevTranscriberProcessing.current && !isTranscriberProcessing && activeTab !== 'transcriber') {
+      showToast(
+        language === 'mm' 
+          ? '🎬 ဗီဒီယို စာတန်းထိုး/ဘာသာပြန် အောင်မြင်စွာ ပြီးဆုံးပါပြီ။ "Recap Video" tab တွင် ကြည့်ရှုနိုင်ပါပြီ!' 
+          : '🎬 Video transcription/translation completed! Return to Recap Video tab to view.',
+        'success'
+      );
+    }
+    prevTranscriberProcessing.current = isTranscriberProcessing;
+  }, [isTranscriberProcessing, activeTab, language, showToast]);
+
   // Auth & Access State (Custom)
   const [accessCodeInput, setAccessCodeInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
@@ -1671,7 +1718,28 @@ export default function App() {
     }
   }, [isLoading, result, activeTab]);
 
-  const NavTab = ({ icon, label, tooltip, onClick, active, locked = false, badge }: {
+  const handleTabSwitch = useCallback((targetTab: Tab) => {
+    if (targetTab === activeTab) return;
+
+    const currentTabHasProcess = 
+      (activeTab === 'generate' && isStudioProcessing) ||
+      (activeTab === 'transcriber' && isTranscriberProcessing) ||
+      (activeTab === 'thumbnail' && isAudiobookProcessing) ||
+      (activeTab === 'history' && isBatchProcessing);
+
+    if (currentTabHasProcess) {
+      showToast(
+        language === 'mm' 
+          ? 'လုပ်ဆောင်ဆဲ လုပ်ငန်းစဉ်ကို မပျက်စေဘဲ နောက်ကွယ်တွင် ဆက်လက်လုပ်ဆောင်နေပါသည် ✨' 
+          : 'Process continues running safely in background ✨',
+        'info'
+      );
+    }
+
+    setActiveTab(targetTab);
+  }, [activeTab, isStudioProcessing, isTranscriberProcessing, isAudiobookProcessing, isBatchProcessing, language, showToast]);
+
+  const NavTab = ({ icon, label, tooltip, onClick, active, locked = false, badge, isProcessing = false }: {
     id: Tab;
     icon: React.ReactNode;
     label: string;
@@ -1680,6 +1748,7 @@ export default function App() {
     active: boolean;
     locked?: boolean;
     badge?: string;
+    isProcessing?: boolean;
   }) => {
     const [isHovered, setIsHovered] = useState(false);
     
@@ -1689,23 +1758,38 @@ export default function App() {
           onClick={onClick}
           onMouseEnter={() => setIsHovered(true)}
           onMouseLeave={() => setIsHovered(false)}
-          className={`px-3 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-[10px] sm:text-sm font-bold transition-all flex items-center justify-center gap-2 relative group flex-1 sm:flex-initial ${
+          className={`px-3 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-1.5 sm:gap-2 relative group shrink-0 ${
             active 
               ? 'bg-amber-400 text-black shadow-lg shadow-amber-400/20 scale-[1.02] z-10' 
-              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              : isProcessing
+                ? 'text-amber-300 bg-amber-400/10 border border-amber-400/30'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
           }`}
         >
-          <div className={`${active ? 'scale-110' : 'group-hover:scale-110 transition-transform'}`}>
+          <div className={`relative ${active ? 'scale-110' : 'group-hover:scale-110 transition-transform'}`}>
             {locked && !active ? <Lock size={14} className="text-slate-600" /> : icon}
+            {isProcessing && !active && (
+              <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+              </span>
+            )}
           </div>
-          <span className="hidden md:inline tracking-tight whitespace-nowrap">
+          <span className="inline tracking-tight whitespace-nowrap text-[11px] sm:text-xs md:text-sm">
             {label}
           </span>
-          {badge && (
+          {isProcessing ? (
+            <span className={`text-[8px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-1 ${
+              active ? 'bg-black/20 text-black' : 'bg-amber-400/20 text-amber-300 border border-amber-400/30 animate-pulse'
+            }`}>
+              <RefreshCw size={8} className="animate-spin shrink-0" />
+              <span>{language === 'mm' ? 'လည်ပတ်ဆဲ' : 'Active'}</span>
+            </span>
+          ) : badge ? (
             <span className="absolute -top-1 -right-1 bg-brand-purple text-white text-[8px] px-1.5 py-0.5 rounded-full font-bold scale-90 sm:scale-100 shadow-md">
               {badge}
             </span>
-          )}
+          ) : null}
           
           {active && (
             <div className="absolute inset-0 bg-brand-purple/20 blur-lg rounded-xl -z-10" />
@@ -1721,8 +1805,13 @@ export default function App() {
               className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl border border-white/20 bg-white/10 backdrop-blur-md dark:bg-black/20 text-[10px] font-bold text-slate-800 dark:text-white whitespace-nowrap shadow-2xl z-50 pointer-events-none"
             >
               <div className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-brand-purple animate-pulse" />
+                <div className={`w-1.5 h-1.5 rounded-full ${isProcessing ? 'bg-amber-400 animate-ping' : 'bg-brand-purple animate-pulse'}`} />
                 {tooltip}
+                {isProcessing && (
+                  <span className="text-amber-400 ml-1">
+                    ({language === 'mm' ? 'နောက်ကွယ်တွင် ဆက်လက်လည်ပတ်နေဆဲ' : 'Running in background'})
+                  </span>
+                )}
               </div>
               <div className="absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent border-t-white/10" />
             </motion.div>
@@ -1953,10 +2042,11 @@ export default function App() {
               <NavTab
                 id="generate"
                 active={activeTab === 'generate'}
-                onClick={() => setActiveTab('generate')}
+                onClick={() => handleTabSwitch('generate')}
                 icon={<Mic2 size={18} />}
                 label={t('nav.studio')}
                 tooltip={t('tooltips.generate')}
+                isProcessing={isStudioProcessing}
               />
               <NavTab
                 id="transcriber"
@@ -1966,12 +2056,13 @@ export default function App() {
                     showToast(t('video.premiumRequired'), "error");
                     return;
                   }
-                  setActiveTab('transcriber');
+                  handleTabSwitch('transcriber');
                 }}
                 icon={<FileVideo size={18} />}
                 label={t('nav.transcriber')}
                 tooltip={isPremium ? t('tooltips.premiumActive') : t('tooltips.transcriber')}
                 locked={!isPremium}
+                isProcessing={isTranscriberProcessing}
               />
               <NavTab
                 id="thumbnail"
@@ -1981,40 +2072,43 @@ export default function App() {
                     showToast(isPremium ? t('thumbnailFeature.temporarilyDisabled') : t('thumbnailFeature.premiumRequired'), "error");
                     return;
                   }
-                  setActiveTab('thumbnail');
+                  handleTabSwitch('thumbnail');
                 }}
                 icon={<BookOpen size={18} />}
                 label={t('nav.thumbnail') || 'အသံစာအုပ်'}
                 tooltip={canUseThumbnail ? t('tooltips.thumbnail') : t('thumbnailFeature.locked')}
                 locked={!canUseThumbnail}
+                isProcessing={isAudiobookProcessing}
               />
               <NavTab
                 id="history"
                 active={activeTab === 'history'}
-                onClick={() => setActiveTab('history')}
+                onClick={() => handleTabSwitch('history')}
                 icon={<History size={18} />}
                 label={t('nav.history')}
                 tooltip={t('tooltips.history')}
+                isProcessing={isBatchProcessing}
               />
               <NavTab
                 id="tools"
                 active={activeTab === 'tools'}
-                onClick={() => setActiveTab('tools')}
+                onClick={() => handleTabSwitch('tools')}
                 icon={<Settings size={18} />}
                 label={t('nav.settings')}
                 tooltip={t('tooltips.settings')}
               />
             </div>
 
-            <AnimatePresence mode="wait">
-              {activeTab === 'generate' && (
-                <motion.div
-                  key="generate"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="grid grid-cols-1 lg:grid-cols-12 gap-8"
-                >
+            {/* Persistent Tab Panels Viewport: Never unmount tabs to ensure all background processes, inputs, and state are preserved */}
+            <div className="tab-panels-viewport relative">
+              {/* Tab 1: Studio / Generation */}
+              <div 
+                id="tab-panel-generate"
+                role="tabpanel"
+                aria-hidden={activeTab !== 'generate'}
+                className={activeTab === 'generate' ? 'block' : 'hidden'}
+              >
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                     {/* Left Column - Main Flow */}
                   <div className="lg:col-span-7 space-y-8">
                     <ContentInput 
@@ -2184,9 +2278,9 @@ export default function App() {
                         )}
                       </button>
                       <div className="flex flex-col items-center">
-                          <span className="flex items-baseline gap-3">
-                            {"အသံနှင့် စာတန်းထိုး ထုတ်ယူမည်"}
-                            <span className="text-sm font-medium opacity-60">
+                          <span className="flex items-baseline gap-3 text-slate-500 dark:text-slate-400 text-xs font-semibold">
+                            {language === 'mm' ? "အသံနှင့် စာတန်းထိုး ထုတ်ယူမည်" : "Generate Audio & Subtitles"}
+                            <span className="text-xs font-medium opacity-75">
                               ({Math.ceil(text.length / 3000) || 1} {Math.ceil(text.length / 3000) > 1 ? 'chunks' : 'chunk'})
                             </span>
                           </span>
@@ -2196,7 +2290,7 @@ export default function App() {
 
                   {/* Full Width Output Preview */}
                   <AnimatePresence>
-                    {(isLoading || error || (result && activeTab === 'generate')) && (
+                    {(isLoading || error || result) && (
                       <motion.div
                         initial={{ opacity: 0, y: 40, scale: 0.98 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -2204,7 +2298,7 @@ export default function App() {
                         transition={{ 
                           type: "spring", 
                           stiffness: 100, 
-                          damping: 20,
+                          damping: 20, 
                           duration: 0.6 
                         }}
                         id="output-preview-container"
@@ -2223,17 +2317,17 @@ export default function App() {
                       </motion.div>
                     )}
                   </AnimatePresence>
-                </motion.div>
-              )}
+                </div>
+              </div>
 
-              {activeTab === 'transcriber' && (
-                <motion.div
-                  key="transcriber"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="max-w-4xl mx-auto"
-                >
+              {/* Tab 2: Transcriber (Video / Audio SRT Studio) */}
+              <div
+                id="tab-panel-transcriber"
+                role="tabpanel"
+                aria-hidden={activeTab !== 'transcriber'}
+                className={activeTab === 'transcriber' ? 'block' : 'hidden'}
+              >
+                <div className="max-w-4xl mx-auto">
                   {!isPremium ? (
                     <div className="glass-card rounded-[32px] p-12 text-center space-y-6 max-w-2xl mx-auto border border-white/5">
                       <div className="w-20 h-20 bg-rose-500/10 text-rose-500 rounded-3xl flex items-center justify-center mx-auto mb-4 border border-rose-500/20">
@@ -2250,7 +2344,7 @@ export default function App() {
                         </p>
                       <div className="pt-4">
                         <button 
-                          onClick={() => setActiveTab('tools')}
+                          onClick={() => handleTabSwitch('tools')}
                           className="px-8 py-3 bg-brand-purple text-white rounded-xl font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20"
                         >
                           Admin ကို ဆက်သွယ်ရန်
@@ -2261,7 +2355,7 @@ export default function App() {
                     <VideoTranscriber 
                       onTranscriptionComplete={(transcribedText) => {
                         setText(transcribedText);
-                        setActiveTab('generate');
+                        handleTabSwitch('generate');
                         setTimeout(() => {
                           window.scrollTo({ top: 0, behavior: 'smooth' });
                         }, 100);
@@ -2271,39 +2365,40 @@ export default function App() {
                       openModal={openModal}
                       isAdmin={isVbsAdmin}
                       userControl={userControl}
-                      onNavigateToSettings={() => setActiveTab('tools')}
+                      onNavigateToSettings={() => handleTabSwitch('tools')}
+                      onProcessingStateChange={setIsTranscriberProcessing}
                     />
                   )}
-                </motion.div>
-              )}
+                </div>
+              </div>
 
-              {activeTab === 'thumbnail' && (
-                <motion.div
-                  key="thumbnail"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                >
-                   <ThumbnailCreator 
-                     showToast={showToast}
-                     openModal={openModal}
-                     getApiKey={getEffectiveApiKey}
-                     isAdmin={isVbsAdmin}
-                     isPremium={isPremium}
-                     userControl={userControl}
-                     onNavigateToSettings={() => setActiveTab('tools')}
-                   />
-                </motion.div>
-              )}
+              {/* Tab 3: Story Audiobook Studio / Thumbnail */}
+              <div
+                id="tab-panel-thumbnail"
+                role="tabpanel"
+                aria-hidden={activeTab !== 'thumbnail'}
+                className={activeTab === 'thumbnail' ? 'block' : 'hidden'}
+              >
+                 <ThumbnailCreator 
+                   showToast={showToast}
+                   openModal={openModal}
+                   getApiKey={getEffectiveApiKey}
+                   isAdmin={isVbsAdmin}
+                   isPremium={isPremium}
+                   userControl={userControl}
+                   onNavigateToSettings={() => handleTabSwitch('tools')}
+                   onProcessingStateChange={setIsAudiobookProcessing}
+                 />
+              </div>
 
-              {activeTab === 'history' && (
-                <motion.div
-                  key="history"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="max-w-6xl mx-auto space-y-8"
-                >
+              {/* Tab 4: History / Batch Queue */}
+              <div
+                id="tab-panel-history"
+                role="tabpanel"
+                aria-hidden={activeTab !== 'history'}
+                className={activeTab === 'history' ? 'block' : 'hidden'}
+              >
+                <div className="max-w-6xl mx-auto space-y-8">
                   <div className="glass-card rounded-[32px] p-8 sm:p-10 shadow-2xl transition-all duration-300">
                     <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 mb-8">
                       <div>
@@ -2666,17 +2761,17 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                </motion.div>
-              )}
+                </div>
+              </div>
 
-              {activeTab === 'tools' && (
-                <motion.div
-                  key="tools"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="max-w-5xl mx-auto space-y-8"
-                >
+              {/* Tab 5: Settings / Tools (Kept alive in background) */}
+              <div
+                id="tab-panel-tools"
+                role="tabpanel"
+                aria-hidden={activeTab !== 'tools'}
+                className={activeTab === 'tools' ? 'block' : 'hidden'}
+              >
+                <div className="max-w-5xl mx-auto space-y-8">
                   {/* Profile Card */}
                   <div className="glass-card rounded-[32px] p-8 sm:p-12 shadow-2xl transition-all duration-300 relative overflow-hidden">
                     <div className="absolute top-0 right-0 w-32 h-32 bg-brand-purple/5 blur-[50px] -z-10" />
@@ -2990,9 +3085,9 @@ export default function App() {
                       </a>
                     </div>
                   </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </main>
@@ -3024,10 +3119,12 @@ export default function App() {
             className={`fixed bottom-8 left-1/2 -translate-x-1/2 px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 z-50 border backdrop-blur-xl ${
               toast.type === 'success' 
                 ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400' 
+                : toast.type === 'info'
+                ? 'bg-amber-500/20 border-amber-500/30 text-amber-300'
                 : 'bg-red-500/20 border-red-500/30 text-red-400'
             }`}
           >
-            {toast.type === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
+            {toast.type === 'success' ? <CheckCircle2 size={18} /> : toast.type === 'info' ? <Info size={18} /> : <AlertCircle size={18} />}
             <span className="text-sm font-bold">{toast.message}</span>
           </motion.div>
         )}
