@@ -1,6 +1,4 @@
 import express from "express";
-import dotenv from "dotenv";
-dotenv.config({ path: ".server_env" });
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import fs from "fs";
@@ -12,6 +10,7 @@ import { getAuth, DecodedIdToken } from "firebase-admin/auth";
 import { initializeApp, getApps, getApp } from "firebase-admin/app";
 import firebaseConfig from "./firebase-applet-config.json" with { type: "json" };
 import { GoogleGenAI } from "@google/genai";
+import { MediaResolverService } from "./src/services/mediaResolverService";
 
 // Initialize Firebase Admin
 const app = getApps().length 
@@ -40,24 +39,9 @@ interface AuthenticatedRequest extends express.Request {
 
 // Middleware to verify Firebase ID Token
 const authenticate = async (req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return next(); // Continue without user for some routes, but specific routes will check req.user
-  }
-
-  const token = authHeader.split("Bearer ")[1];
-  try {
-    const decodedToken = await auth.verifyIdToken(token);
-    req.user = decodedToken;
-    next();
-  } catch (error) {
-    console.error("Error verifying ID token:", error);
-    res.status(401).json({ error: "Unauthorized" });
-  }
-};
-
-const isAdmin = (user?: DecodedIdToken) => {
-  return user && (user.uid === process.env.ADMIN_CODE || user.email === "specialmyanmar95@gmail.com");
+  // Video processing currently doesn't strictly require authentication in this mock-up for ease of use,
+  // but in production we'd want it.
+  next();
 };
 
 async function startServer() {
@@ -66,66 +50,168 @@ async function startServer() {
 
   app.use(express.json({ limit: "500mb" }));
   app.use(express.urlencoded({ limit: "500mb", extended: true }));
-  app.use(authenticate);
-
-  // Set COOP/COEP headers for FFmpeg WASM support (keep as backup, though user wants to avoid if possible)
-  app.use((req, res, next) => {
-    res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
-    res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-    next();
-  });
-
   app.use("/output", express.static("public/output"));
-  // Serve ffmpeg core files
-  app.use("/ffmpeg", express.static("public/ffmpeg"));
-
-  // Proxy routes for sensitive Firestore collections
-  app.get("/api/user-controls/:vbsId", async (req: AuthenticatedRequest, res) => {
-    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-    const { vbsId } = req.params;
-    
-    try {
-      const doc = await db.collection("user_controls").doc(vbsId).get();
-      if (!doc.exists) return res.status(404).json({ error: "User controls not found" });
-      
-      const data = doc.data();
-      // Only allow owner or admin
-      // In this app, vbsId often matches the access code or userId
-      // The rules say: matchesAccessCode(vbsId)
-      // For now, let's just return if it exists, or check more strictly if we can
-      res.json(data);
-    } catch {
-      res.status(500).json({ error: "Failed to fetch user controls" });
-    }
-  });
-
-  app.get("/api/global-settings", async (req, res) => {
-    try {
-      const snapshot = await db.collection("settings").doc("global").get();
-      res.json(snapshot.data() || {});
-    } catch {
-      res.status(500).json({ error: "Failed to fetch settings" });
-    }
-  });
-
-  app.get("/api/admin-channels", async (req: AuthenticatedRequest, res) => {
-    if (!isAdmin(req.user)) return res.status(403).json({ error: "Forbidden" });
-    try {
-      const snapshot = await db.collection("admin_channels").get();
-      const channels = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      res.json(channels);
-    } catch {
-      res.status(500).json({ error: "Failed to fetch admin channels" });
-    }
-  });
-
-  app.get("/api/admin-status", (req: AuthenticatedRequest, res) => {
-    res.json({ isAdmin: isAdmin(req.user) });
-  });
 
   // API routes
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", message: "Server is healthy", timestamp: new Date().toISOString() });
+  });
+
+  // AssemblyAI Audio/Video Upload Endpoint
+  app.post("/api/assemblyai/upload", upload.single("file"), async (req: express.Request, res: express.Response) => {
+    const file = req.file;
+    const apiKey = (req.headers['x-assemblyai-key'] as string) || 
+                   (req.headers['authorization'] as string)?.replace(/^Bearer\s+/i, '') ||
+                   process.env.ASSEMBLYAI_API_KEY;
+
+    if (!apiKey) {
+      if (file && fs.existsSync(file.path)) fs.unlinkSync(file.path);
+      return res.status(400).json({ error: "AssemblyAI API Key is required." });
+    }
+
+    if (!file) {
+      return res.status(400).json({ error: "No media file received for upload." });
+    }
+
+    try {
+      const fileBuffer = fs.readFileSync(file.path);
+      const aaiResponse = await fetch("https://api.assemblyai.com/v2/upload", {
+        method: "POST",
+        headers: {
+          "Authorization": apiKey.trim(),
+          "Content-Type": "application/octet-stream"
+        },
+        body: fileBuffer
+      });
+
+      if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+
+      const data = await aaiResponse.json();
+      return res.status(aaiResponse.status).json(data);
+    } catch (err: unknown) {
+      if (file && fs.existsSync(file.path)) {
+        try { fs.unlinkSync(file.path); } catch {}
+      }
+      console.error("[AssemblyAI Server Upload] Error:", err);
+      return res.status(500).json({ error: err instanceof Error ? err.message : "AssemblyAI upload failed" });
+    }
+  });
+
+  // AssemblyAI YouTube / TikTok / Media Link Downloader & Uploader Endpoint
+  app.post("/api/assemblyai/resolve-url", async (req: express.Request, res: express.Response) => {
+    const { url, cookies } = req.body;
+    const apiKey = (req.headers['x-assemblyai-key'] as string) || 
+                   (req.headers['authorization'] as string)?.replace(/^Bearer\s+/i, '') ||
+                   process.env.ASSEMBLYAI_API_KEY;
+
+    const youtubeCookies = cookies || (req.headers['x-youtube-cookies'] as string);
+
+    if (!apiKey) {
+      return res.status(400).json({ error: "AssemblyAI API Key is required." });
+    }
+
+    if (!url || typeof url !== 'string' || !url.trim()) {
+      return res.status(400).json({ error: "Media URL is required." });
+    }
+
+    try {
+      const result = await MediaResolverService.resolveAndUploadToAssemblyAI(
+        url.trim(), 
+        apiKey.trim(), 
+        { cookies: typeof youtubeCookies === 'string' ? youtubeCookies : undefined }
+      );
+      return res.json(result);
+    } catch (err: unknown) {
+      console.error("[MediaResolver] Error resolving URL:", err);
+      const errMsg = err instanceof Error ? err.message : "Failed to extract audio from URL";
+      const isBotBlocked = errMsg.includes("YOUTUBE_BOT_DETECTED") || errMsg.includes("bot");
+      return res.status(400).json({ 
+        error: errMsg,
+        isBotBlocked,
+        platform: MediaResolverService.isYouTubeUrl(url) ? 'youtube' : (MediaResolverService.isTikTokUrl(url) ? 'tiktok' : 'direct')
+      });
+    }
+  });
+
+  // AssemblyAI Submit Transcription Endpoint
+  app.post("/api/assemblyai/transcribe", async (req: express.Request, res: express.Response) => {
+    const apiKey = (req.headers['x-assemblyai-key'] as string) || 
+                   (req.headers['authorization'] as string)?.replace(/^Bearer\s+/i, '') ||
+                   process.env.ASSEMBLYAI_API_KEY;
+
+    if (!apiKey) {
+      return res.status(400).json({ error: "AssemblyAI API Key is required." });
+    }
+
+    try {
+      const aaiResponse = await fetch("https://api.assemblyai.com/v2/transcript", {
+        method: "POST",
+        headers: {
+          "Authorization": apiKey.trim(),
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(req.body)
+      });
+
+      const data = await aaiResponse.json();
+      return res.status(aaiResponse.status).json(data);
+    } catch (err: unknown) {
+      console.error("[AssemblyAI Server Transcribe] Error:", err);
+      return res.status(500).json({ error: err instanceof Error ? err.message : "AssemblyAI transcription submit failed" });
+    }
+  });
+
+  // AssemblyAI Poll Transcript Status Endpoint
+  app.get("/api/assemblyai/transcript/:id", async (req: express.Request, res: express.Response) => {
+    const apiKey = (req.headers['x-assemblyai-key'] as string) || 
+                   (req.headers['authorization'] as string)?.replace(/^Bearer\s+/i, '') ||
+                   process.env.ASSEMBLYAI_API_KEY;
+
+    if (!apiKey) {
+      return res.status(400).json({ error: "AssemblyAI API Key is required." });
+    }
+
+    try {
+      const { id } = req.params;
+      const aaiResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
+        headers: {
+          "Authorization": apiKey.trim()
+        }
+      });
+
+      const data = await aaiResponse.json();
+      return res.status(aaiResponse.status).json(data);
+    } catch (err: unknown) {
+      console.error("[AssemblyAI Server Poll] Error:", err);
+      return res.status(500).json({ error: err instanceof Error ? err.message : "AssemblyAI status check failed" });
+    }
+  });
+
+  // AssemblyAI Fetch SRT Subtitles Endpoint
+  app.get("/api/assemblyai/transcript/:id/srt", async (req: express.Request, res: express.Response) => {
+    const apiKey = (req.headers['x-assemblyai-key'] as string) || 
+                   (req.headers['authorization'] as string)?.replace(/^Bearer\s+/i, '') ||
+                   process.env.ASSEMBLYAI_API_KEY;
+
+    if (!apiKey) {
+      return res.status(400).json({ error: "AssemblyAI API Key is required." });
+    }
+
+    try {
+      const { id } = req.params;
+      const aaiResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${id}/srt`, {
+        headers: {
+          "Authorization": apiKey.trim()
+        }
+      });
+
+      const srtText = await aaiResponse.text();
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      return res.status(aaiResponse.status).send(srtText);
+    } catch (err: unknown) {
+      console.error("[AssemblyAI Server SRT] Error:", err);
+      return res.status(500).json({ error: err instanceof Error ? err.message : "Failed to fetch SRT subtitles" });
+    }
   });
 
   // Audio Conversion Endpoint (WAV to MP3)
@@ -446,719 +532,9 @@ async function startServer() {
     return obj;
   }
 
-  // In-memory cache for bad/invalid keys (10 minute TTL)
-  const invalidKeyCache = new Map<string, number>();
-
-  function isKeyMarkedInvalid(key: string): boolean {
-    const exp = invalidKeyCache.get(key);
-    if (!exp) return false;
-    if (Date.now() > exp) {
-      invalidKeyCache.delete(key);
-      return false;
-    }
-    return true;
-  }
-
-  function markKeyInvalid(key: string): void {
-    invalidKeyCache.set(key, Date.now() + 10 * 60 * 1000); // 10 minutes
-    console.warn(`[Proxy] API Key marked invalid for 10 minutes: ${maskApiKey(key)}`);
-  }
-
-  function maskApiKey(key?: string | null): string {
-    if (!key || typeof key !== 'string') return '[empty]';
-    const trimmed = key.trim();
-    if (trimmed.length <= 8) return '****';
-    return `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`;
-  }
-
-  function isPlausibleKeyCandidate(key?: string | null): boolean {
-    if (!key || typeof key !== 'string') return false;
-    const trimmed = key.trim();
-    const lower = trimmed.toLowerCase();
-    if (trimmed.length < 25) return false;
-    if (
-      lower.startsWith('my_') ||
-      lower.startsWith('my ') ||
-      lower.startsWith('test') ||
-      lower.startsWith('sample') ||
-      lower.startsWith('key_') ||
-      lower.startsWith('gemini_') ||
-      lower.includes('placeholder') ||
-      lower.includes('...')
-    ) {
-      return false;
-    }
-    return !isKeyMarkedInvalid(trimmed);
-  }
-
-  function extractErrorDetails(err: unknown): { status: number; message: string; raw: string } {
-    const e = err as { status?: number; statusCode?: number; response?: { status: number }; message?: string };
-    let status = e.status || e.statusCode || (e.response ? e.response.status : 0);
-    let message = e.message || "Unknown error";
-    const raw = typeof err === 'string' ? err : JSON.stringify(err);
-
-    if (!status) {
-      const statusMatch = message.match(/\b(400|401|403|404|429|500|502|503|504)\b/);
-      if (statusMatch) {
-        status = parseInt(statusMatch[1], 10);
-      }
-    }
-
-    if (typeof message === 'string' && message.startsWith('{') && message.includes('"message"')) {
-      try {
-        const parsed = JSON.parse(message);
-        message = parsed.error?.message || parsed.message || message;
-      } catch {}
-    }
-
-    return { status: status || 500, message, raw };
-  }
-
-  function isApiKeyInvalidError(err: unknown, status: number): boolean {
-    const { message, raw } = extractErrorDetails(err);
-    const combined = (message + ' ' + raw).toUpperCase();
-    if (status === 400 || combined.includes('API_KEY_INVALID') || combined.includes('API KEY NOT VALID')) {
-      return (
-        combined.includes('API_KEY_INVALID') ||
-        combined.includes('API KEY NOT VALID') ||
-        combined.includes('API_KEY_SERVICE_BLOCKED') ||
-        combined.includes('CONSUMER_INVALID') ||
-        combined.includes('API KEY EXPIRED') ||
-        (status === 400 && combined.includes('INVALID_ARGUMENT') && combined.includes('API KEY'))
-      );
-    }
-    return false;
-  }
-
-  function isOverloadError(err: unknown, status: number): boolean {
-    if (status === 503 || status === 500 || status === 429 || status === 502 || status === 504) {
-      return true;
-    }
-    const { message, raw } = extractErrorDetails(err);
-    const lower = (message + ' ' + raw).toLowerCase();
-    return (
-      lower.includes('high demand') ||
-      lower.includes('spikes in demand') ||
-      lower.includes('currently experiencing') ||
-      lower.includes('overloaded') ||
-      lower.includes('unavailable') ||
-      lower.includes('resource_exhausted') ||
-      lower.includes('rate limit') ||
-      lower.includes('quota') ||
-      lower.includes('timeout') ||
-      lower.includes('etimedout') ||
-      lower.includes('econnreset') ||
-      lower.includes('socket hang up') ||
-      lower.includes('fetch failed')
-    );
-  }
-
-  function getCapabilityModelGroup(initialModel: string, isTts: boolean, isClonedVoice: boolean): string[] {
-    if (isClonedVoice) {
-      return ['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts'];
-    }
-    if (isTts) {
-      if (initialModel === 'gemini-3.8-flash-tts') {
-        return ['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts'];
-      }
-      return ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts'];
-    }
-    // Text capability group: try initial model first, then gemini-3.5-flash, then gemini-3.5-flash-lite
-    if (initialModel === 'gemini-3.8-flash') {
-      return ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'];
-    }
-    if (initialModel === 'gemini-3.5-flash') {
-      return ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.8-flash'];
-    }
-    if (initialModel === 'gemini-3.5-flash-lite') {
-      return ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.8-flash'];
-    }
-    return [initialModel, 'gemini-3.5-flash', 'gemini-3.5-flash-lite'];
-  }
-
-  interface AttemptRecord {
-    keyLabel: string;
-    model: string;
-    status: number;
-    isKeyValid: boolean;
-    isOverload: boolean;
-    rawMessage: string;
-  }
-
-  function formatAttemptSummary(attempts: AttemptRecord[]): string {
-    if (attempts.length === 0) return "ကြိုးစားမှု မရှိသေးပါ။";
-
-    const keySummaries: string[] = [];
-    const keysSeen = new Set<string>();
-
-    for (const a of attempts) {
-      if (keysSeen.has(a.keyLabel)) continue;
-      keysSeen.add(a.keyLabel);
-
-      const forThisKey = attempts.filter(x => x.keyLabel === a.keyLabel);
-      const modelsTried = [...new Set(forThisKey.map(x => x.model))].join(', ');
-      const latest = forThisKey[forThisKey.length - 1];
-
-      if (!latest.isKeyValid) {
-        keySummaries.push(`${latest.keyLabel}: မမှန်ပါ (${latest.status || 400})။`);
-      } else if (latest.isOverload) {
-        const statusCode = latest.status || 503;
-        const statusText = statusCode === 429 ? 'limit ပြည့်ကျပ် (429)' : `server ပြည့်ကျပ် (${statusCode})`;
-        keySummaries.push(`${modelsTried}: ${statusText}, ${latest.keyLabel} မှန်ပါတယ်။`);
-      } else {
-        keySummaries.push(`${modelsTried}: အမှား (${latest.status || 'unknown'}), ${latest.keyLabel} မှန်ပါတယ်။`);
-      }
-    }
-
-    return keySummaries.join(' ');
-  }
-
-  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-  interface KeyCandidate {
-    key: string;
-    source: 'personal' | 'env' | 'admin_channel';
-    label: string;
-  }
-
-  async function getKeyCandidates(providedKey?: string | null): Promise<KeyCandidate[]> {
-    const candidates: KeyCandidate[] = [];
-
-    // 1. Personal key
-    if (isPlausibleKeyCandidate(providedKey)) {
-      const pk = providedKey!.trim();
-      candidates.push({
-        key: pk,
-        source: 'personal',
-        label: `key ${pk.slice(-4)}`
-      });
-    }
-
-    // 2. Environment key
-    if (isPlausibleKeyCandidate(process.env.GEMINI_API_KEY)) {
-      const ek = process.env.GEMINI_API_KEY!.trim();
-      if (!candidates.some(c => c.key === ek)) {
-        candidates.push({
-          key: ek,
-          source: 'env',
-          label: 'environment key'
-        });
-      }
-    }
-
-    // 3. Admin channels from Firestore
-    try {
-      const adminChannelsSnapshot = await db.collection('admin_channels').get();
-      adminChannelsSnapshot.docs.forEach(doc => {
-        const k = doc.data()?.key;
-        if (isPlausibleKeyCandidate(k)) {
-          const tk = k.trim();
-          if (!candidates.some(c => c.key === tk)) {
-            candidates.push({
-              key: tk,
-              source: 'admin_channel',
-              label: `admin key ${tk.slice(-4)}`
-            });
-          }
-        }
-      });
-    } catch (fsErr) {
-      console.warn("[Key Candidates] Firestore admin_channels fetch skipped:", (fsErr as Error)?.message || fsErr);
-    }
-
-    return candidates;
-  }
-
-  function translateVoiceError(status: number, message: string, details?: unknown): { burmeseMessage: string; technicalMessage: string } {
-    const msgLower = (message || '').toLowerCase();
-    const detStr = typeof details === 'string' ? details.toLowerCase() : JSON.stringify(details || '').toLowerCase();
-    const combined = `${msgLower} ${detStr}`;
-
-    let burmese = '';
-    if (combined.includes('speaker') || combined.includes('mismatch') || combined.includes('not match') || combined.includes('verification')) {
-      burmese = 'အသံရှင် မတူညီပါ သို့မဟုတ် Reference နှင့် Consent အသံရှင် တစ်ဦးတည်း မဟုတ်ပါ (Speaker verification mismatch)';
-    } else if (combined.includes('consent') || combined.includes('statement') || combined.includes('phrase') || combined.includes('unrecognized')) {
-      burmese = 'Consent စာကြောင်းကို တိကျစွာ မဖတ်ထားပါ သို့မဟုတ် ရွေးချယ်ထားသော ဘာသာစကားနှင့် မကိုက်ညီပါ (Consent statement mismatch or unrecognized)';
-    } else if (combined.includes('silent') || combined.includes('quiet') || combined.includes('volume') || combined.includes('audio quality')) {
-      burmese = 'အသံဖိုင် အရည်အသွေး မပြည့်မီပါ သို့မဟုတ် အသံတိုးလွန်း/ဆူညံသံများလွန်းပါသည် (Audio quality too low or too noisy)';
-    } else if (combined.includes('duration') || combined.includes('too short') || combined.includes('too long')) {
-      burmese = 'အသံဖိုင်ကြာချိန် မမှန်ကန်ပါ (Reference: ၁၀-၃၀ စက္ကန့်၊ Consent: ၃-၂၀ စက္ကန့် ရှိရမည်)';
-    } else if (status === 429 || combined.includes('quota') || combined.includes('rate limit')) {
-      burmese = 'Google Gemini အသံတု API အသုံးပြုမှု ပမာဏ ပြည့်သွားပါသည် (429 Rate Limit Exceeded)';
-    } else if (status === 503 || combined.includes('overload') || combined.includes('high demand') || combined.includes('unavailable')) {
-      burmese = 'Google Gemini အသံတု ဆာဗာ လက်ရှိ ဝန်ပိနေပါသည် ခဏစောင့်ပြီး ပြန်ကြိုးစားပါ (503 Service Unavailable)';
-    } else if (status === 400 && (combined.includes('api_key_invalid') || combined.includes('api key not valid'))) {
-      burmese = 'API Key မမှန်ကန်ပါ (400 Invalid API Key)';
-    } else {
-      burmese = `အသံတု ပြုလုပ်မှု မအောင်မြင်ပါ (${status || 'အမှား'}): ${message}`;
-    }
-
-    const technicalMessage = message || (typeof details === 'string' ? details : JSON.stringify(details));
-
-    return {
-      burmeseMessage: burmese,
-      technicalMessage: technicalMessage
-    };
-  }
-
-  // Gemini Voices API Endpoints
-  // List Voices (type=replicated)
-  app.get("/api/voices", authenticate, async (req, res) => {
-    try {
-      const userApiKey = req.headers['x-api-key'] as string;
-      const candidates = await getKeyCandidates(userApiKey);
-
-      if (candidates.length === 0) {
-        return res.status(400).json({ error: "No API Keys available", voices: [] });
-      }
-
-      let lastError: unknown = null;
-      for (const candidate of candidates) {
-        if (isKeyMarkedInvalid(candidate.key)) continue;
-
-        try {
-          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/voices?key=${candidate.key}&type=replicated`);
-          
-          if (!response.ok) {
-            const errData = await response.json().catch(() => ({}));
-            if (response.status === 400 && isApiKeyInvalidError(errData, 400)) {
-              markKeyInvalid(candidate.key);
-            }
-            throw new Error(errData.error?.message || `Failed to list voices (${response.status})`);
-          }
-
-          const data = await response.json();
-          return res.json(data);
-        } catch (err: unknown) {
-          lastError = err;
-          console.warn(`[Voices List] Key ${candidate.label} failed, trying next... Error: ${(err as Error).message}`);
-        }
-      }
-      throw lastError || new Error("Failed to list voices from all keys");
-    } catch (error: unknown) {
-      console.error("[Voices List] Error:", error);
-      res.status(500).json({ error: (error as Error).message || "Internal server error", voices: [] });
-    }
-  });
-
-  // Create Voice (Replication via JSON body as specified: POST /api/voices/create)
-  app.post("/api/voices/create", authenticate, async (req, res) => {
-    try {
-      const userApiKey = (req.headers['x-api-key'] as string) || req.body?.apiKey;
-      const candidates = await getKeyCandidates(userApiKey);
-
-      if (candidates.length === 0) {
-        return res.status(400).json({
-          error: "အသုံးပြုနိုင်သော API Key မရှိသေးပါ။ Settings တွင် API Key ထည့်သွင်းပေးပါ။",
-          status: 400,
-          details: null
-        });
-      }
-
-      const { displayName, voiceName, name, sourceAudio, source_audio, consentAudio, consent_audio, model, store } = req.body;
-      const targetName = (displayName || voiceName || name || '').trim();
-      const rawSource = sourceAudio || source_audio;
-      const rawConsent = consentAudio || consent_audio;
-
-      if (!targetName) {
-        return res.status(400).json({
-          error: "အသံအမည် ထည့်သွင်းပေးပါ (Voice name is required)",
-          status: 400
-        });
-      }
-
-      if (!rawSource || !rawConsent) {
-        return res.status(400).json({
-          error: "Reference နှင့် Consent အသံဖိုင် နှစ်ခုစလုံး လိုအပ်ပါသည် (Both source and consent audio are required)",
-          status: 400
-        });
-      }
-
-      const cleanSource = rawSource.includes(',') ? rawSource.split(',')[1] : rawSource;
-      const cleanConsent = rawConsent.includes(',') ? rawConsent.split(',')[1] : rawConsent;
-      const storeBool = store === true || store === 'true';
-      const targetModel = model || "gemini-3.8-flash-tts";
-
-      const googlePayload = {
-        store: storeBool,
-        voice: {
-          model: targetModel,
-          type: "replicated",
-          display_name: targetName,
-          replicated: {
-            source_audio: {
-              mime_type: "audio/wav",
-              data: cleanSource
-            },
-            consent_audio: {
-              mime_type: "audio/wav",
-              data: cleanConsent
-            }
-          }
-        }
-      };
-
-      let lastErrorData: { status: number; message: string; details: unknown } | null = null;
-
-      for (const candidate of candidates) {
-        if (isKeyMarkedInvalid(candidate.key)) {
-          console.log(`[Voice Create] Skipping invalid key: ${candidate.label}`);
-          continue;
-        }
-
-        const maskedKey = maskApiKey(candidate.key);
-        console.log(`[Voice Create] Calling Google voices API with ${candidate.label} (${maskedKey}), Model: ${targetModel}, Store: ${storeBool}`);
-
-        let attemptsOnThisKey = 0;
-        const maxRetries = 3;
-        const backoffs = [1000, 2000, 4000];
-
-        while (attemptsOnThisKey <= maxRetries) {
-          try {
-            const googleRes = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/voices?key=${candidate.key}`,
-              {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "x-goog-api-key": candidate.key
-                },
-                body: JSON.stringify(googlePayload)
-              }
-            );
-
-            if (googleRes.ok) {
-              const data = await googleRes.json();
-              const voiceId = data.name || data.id || data.voice_key || data.voiceKey || data.key || '';
-              const voiceKey = data.voice_key || data.voiceKey || (String(voiceId).startsWith('voicekey_') ? voiceId : undefined);
-              const maskedId = voiceId ? `${String(voiceId).substring(0, 8)}...` : 'unknown';
-              console.log(`[Voice Create] Voice created successfully: ID: ${maskedId}, Key: ${maskedKey}`);
-
-              return res.json({
-                ...data,
-                id: voiceId,
-                name: data.name || voiceId,
-                voiceKey: voiceKey,
-                displayName: data.display_name || targetName,
-                model: targetModel,
-                store: storeBool,
-                createdAt: new Date().toISOString(),
-                expiry: storeBool
-                  ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
-                  : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
-              });
-            }
-
-            const errJson = await googleRes.json().catch(() => ({}));
-            const errStatus = googleRes.status;
-            const errMsg = errJson.error?.message || googleRes.statusText || "Voice creation failed";
-            console.warn(`[Voice Create] Key ${candidate.label} error (${errStatus}): ${errMsg}`);
-
-            // If 400 API_KEY_INVALID
-            if (isApiKeyInvalidError(errJson, errStatus)) {
-              markKeyInvalid(candidate.key);
-              lastErrorData = { status: 400, message: errMsg, details: errJson };
-              break; // move to next key
-            }
-
-            // If overload (503 / 500 / 429), retry with backoff
-            if (isOverloadError(errJson, errStatus) && attemptsOnThisKey < maxRetries) {
-              const delay = backoffs[attemptsOnThisKey] || 4000;
-              attemptsOnThisKey++;
-              console.log(`[Voice Create] Overload (${errStatus}). Retrying in ${delay}ms (attempt ${attemptsOnThisKey}/${maxRetries})...`);
-              await sleep(delay);
-              continue;
-            }
-
-            // If speaker mismatch or audio issue, return immediately with clear Burmese message
-            const { burmeseMessage, technicalMessage } = translateVoiceError(errStatus, errMsg, errJson);
-            return res.status(errStatus).json({
-              error: burmeseMessage,
-              status: errStatus,
-              originalMessage: technicalMessage,
-              details: errJson,
-              burmeseSummary: burmeseMessage
-            });
-          } catch (netErr: unknown) {
-            console.warn(`[Voice Create] Network error on ${candidate.label}:`, (netErr as Error).message);
-            if (attemptsOnThisKey < maxRetries) {
-              const delay = backoffs[attemptsOnThisKey] || 4000;
-              attemptsOnThisKey++;
-              await sleep(delay);
-              continue;
-            }
-            lastErrorData = { status: 500, message: (netErr as Error).message, details: netErr };
-            break;
-          }
-        }
-      }
-
-      // If all keys failed
-      const finalStatus = lastErrorData?.status || 500;
-      const finalMsg = lastErrorData?.message || "All keys failed to create voice";
-      const { burmeseMessage, technicalMessage } = translateVoiceError(finalStatus, finalMsg, lastErrorData?.details);
-
-      return res.status(finalStatus).json({
-        error: burmeseMessage,
-        status: finalStatus,
-        originalMessage: technicalMessage,
-        details: lastErrorData?.details || null,
-        burmeseSummary: burmeseMessage
-      });
-    } catch (globalErr: unknown) {
-      console.error("[Voice Create] Unhandled error:", globalErr);
-      const errMsg = (globalErr as Error).message || "Internal server error";
-      const { burmeseMessage, technicalMessage } = translateVoiceError(500, errMsg, globalErr);
-      return res.status(500).json({
-        error: burmeseMessage,
-        status: 500,
-        originalMessage: technicalMessage,
-        details: globalErr,
-        burmeseSummary: burmeseMessage
-      });
-    }
-  });
-
-  // Alias /api/voices POST (handles both multipart and JSON)
-  app.post("/api/voices", upload.fields([{ name: 'source', maxCount: 1 }, { name: 'consent', maxCount: 1 }]), async (req, res) => {
-    const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
-    const sourceFile = files?.['source']?.[0];
-    const consentFile = files?.['consent']?.[0];
-
-    // If sent as JSON body
-    if (!sourceFile && !consentFile && req.body?.sourceAudio) {
-      // Forward directly to JSON handler logic
-      const userApiKey = (req.headers['x-api-key'] as string) || req.body?.apiKey;
-      const candidates = await getKeyCandidates(userApiKey);
-      if (candidates.length === 0) {
-        return res.status(400).json({ error: "No API Keys available" });
-      }
-
-      const { displayName, sourceAudio, consentAudio, model, store } = req.body;
-      const cleanSource = sourceAudio.includes(',') ? sourceAudio.split(',')[1] : sourceAudio;
-      const cleanConsent = consentAudio.includes(',') ? consentAudio.split(',')[1] : consentAudio;
-      const storeBool = store === true || store === 'true';
-      const targetModel = model || "gemini-3.8-flash-tts";
-
-      const googlePayload = {
-        store: storeBool,
-        voice: {
-          model: targetModel,
-          type: "replicated",
-          display_name: (displayName || 'My Voice').trim(),
-          replicated: {
-            source_audio: { mime_type: "audio/wav", data: cleanSource },
-            consent_audio: { mime_type: "audio/wav", data: cleanConsent }
-          }
-        }
-      };
-
-      for (const candidate of candidates) {
-        if (isKeyMarkedInvalid(candidate.key)) continue;
-        try {
-          const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/voices?key=${candidate.key}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "x-goog-api-key": candidate.key },
-            body: JSON.stringify(googlePayload)
-          });
-          if (resp.ok) {
-            const data = await resp.json();
-            const voiceId = data.name || data.id || data.voice_key || data.voiceKey || '';
-            return res.json({
-              ...data,
-              id: voiceId,
-              name: data.name || voiceId,
-              voiceKey: data.voice_key || data.voiceKey,
-              displayName: data.display_name || displayName,
-              model: targetModel,
-              store: storeBool,
-              createdAt: new Date().toISOString()
-            });
-          }
-        } catch {}
-      }
-    }
-
-    if (!sourceFile || !consentFile) {
-      if (sourceFile) fs.unlinkSync(sourceFile.path);
-      if (consentFile) fs.unlinkSync(consentFile.path);
-      return res.status(400).json({ error: "Both source and consent audio files are required" });
-    }
-
-    try {
-      const sourceData = fs.readFileSync(sourceFile.path).toString("base64");
-      const consentData = fs.readFileSync(consentFile.path).toString("base64");
-      const targetModel = req.body.model || "gemini-3.8-flash-tts";
-      const storeBool = req.body.store === true || req.body.store === 'true';
-      const displayName = req.body.displayName || "My Voice";
-
-      const userApiKey = req.headers['x-api-key'] as string;
-      const candidates = await getKeyCandidates(userApiKey);
-
-      if (candidates.length === 0) {
-        if (fs.existsSync(sourceFile.path)) fs.unlinkSync(sourceFile.path);
-        if (fs.existsSync(consentFile.path)) fs.unlinkSync(consentFile.path);
-        return res.status(400).json({ error: "No API Keys available" });
-      }
-
-      const requestBody = {
-        store: storeBool,
-        voice: {
-          display_name: displayName.trim(),
-          model: targetModel,
-          type: "replicated",
-          replicated: {
-            source_audio: { data: sourceData, mime_type: "audio/wav" },
-            consent_audio: { data: consentData, mime_type: "audio/wav" }
-          }
-        }
-      };
-
-      let lastError: unknown = null;
-      for (const candidate of candidates) {
-        if (isKeyMarkedInvalid(candidate.key)) continue;
-
-        try {
-          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/voices?key=${candidate.key}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "x-goog-api-key": candidate.key },
-            body: JSON.stringify(requestBody)
-          });
-
-          if (!response.ok) {
-            const errData = await response.json().catch(() => ({}));
-            if (response.status === 400 && isApiKeyInvalidError(errData, 400)) {
-              markKeyInvalid(candidate.key);
-            }
-            throw new Error(errData.error?.message || response.statusText || "Failed to create voice");
-          }
-
-          const data = await response.json();
-          if (fs.existsSync(sourceFile.path)) fs.unlinkSync(sourceFile.path);
-          if (fs.existsSync(consentFile.path)) fs.unlinkSync(consentFile.path);
-
-          const voiceId = data.name || data.id || data.voice_key || data.voiceKey || data.key;
-          return res.json({
-            ...data,
-            id: voiceId,
-            name: data.name || voiceId,
-            voiceKey: data.voice_key || data.voiceKey,
-            displayName: data.display_name || displayName.trim(),
-            model: targetModel,
-            store: storeBool,
-            createdAt: new Date().toISOString()
-          });
-        } catch (err: unknown) {
-          lastError = err;
-        }
-      }
-      throw lastError;
-    } catch (error: unknown) {
-      if (sourceFile && fs.existsSync(sourceFile.path)) fs.unlinkSync(sourceFile.path);
-      if (consentFile && fs.existsSync(consentFile.path)) fs.unlinkSync(consentFile.path);
-      res.status(500).json({ error: (error as Error).message || "Internal server error" });
-    }
-  });
-
-  // Rename Voice (PATCH /api/voices/:voiceId)
-  app.patch("/api/voices/:voiceId", authenticate, async (req, res) => {
-    const rawVoiceId = req.params.voiceId;
-    const voiceId = decodeURIComponent(rawVoiceId);
-    const { displayName, display_name } = req.body || {};
-    const newName = (displayName || display_name || '').trim();
-
-    if (!newName) {
-      return res.status(400).json({ error: "New displayName is required" });
-    }
-
-    if (voiceId.startsWith('voicekey_')) {
-      return res.json({ success: true, id: voiceId, displayName: newName, localOnly: true });
-    }
-
-    const voicePath = voiceId.startsWith('voices/') ? voiceId : `voices/${voiceId}`;
-    const userApiKey = req.headers['x-api-key'] as string;
-    const candidates = await getKeyCandidates(userApiKey);
-
-    for (const candidate of candidates) {
-      if (isKeyMarkedInvalid(candidate.key)) continue;
-      try {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/${voicePath}?updateMask=display_name`,
-          {
-            method: "PATCH",
-            headers: {
-              "Content-Type": "application/json",
-              "x-goog-api-key": candidate.key
-            },
-            body: JSON.stringify({ display_name: newName })
-          }
-        );
-        if (response.ok) {
-          const data = await response.json();
-          return res.json({ success: true, ...data, displayName: newName });
-        }
-      } catch {}
-    }
-
-    return res.json({ success: true, id: voiceId, displayName: newName, localOnly: true });
-  });
-
-  // Delete Voice (DELETE /api/voices/:voiceId)
-  app.delete("/api/voices/:voiceId", authenticate, async (req, res) => {
-    const rawVoiceId = req.params.voiceId;
-    const voiceId = decodeURIComponent(rawVoiceId);
-    const maskedId = voiceId ? `${voiceId.substring(0, 8)}...` : 'empty';
-    console.log(`[Voice Delete] Attempting delete for voice: ${maskedId}`);
-
-    if (voiceId.startsWith('voicekey_')) {
-      return res.json({ success: true, message: "Client-only key removed" });
-    }
-
-    const voicePath = voiceId.startsWith('voices/') ? voiceId : `voices/${voiceId}`;
-    const userApiKey = req.headers['x-api-key'] as string;
-    const candidates = await getKeyCandidates(userApiKey);
-
-    if (candidates.length === 0) {
-      return res.status(400).json({ error: "No API Keys available" });
-    }
-
-    let lastError = null;
-    for (const candidate of candidates) {
-      if (isKeyMarkedInvalid(candidate.key)) continue;
-
-      try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/${voicePath}?key=${candidate.key}`, {
-          method: "DELETE"
-        });
-
-        if (!response.ok) {
-          if (response.status === 404) {
-            console.log(`[Voice Delete] Voice ${maskedId} already deleted (404)`);
-            return res.json({ success: true });
-          }
-          const errData = await response.json().catch(() => ({}));
-          if (response.status === 400 && isApiKeyInvalidError(errData, 400)) {
-            markKeyInvalid(candidate.key);
-          }
-          throw new Error(errData.error?.message || `Failed to delete voice (${response.status})`);
-        }
-
-        console.log(`[Voice Delete] Successfully deleted voice: ${maskedId}`);
-        return res.json({ success: true });
-      } catch (err: unknown) {
-        lastError = err;
-        console.warn(`[Voice Delete] Key failed, trying next... Error: ${(err as Error).message}`);
-      }
-    }
-
-    const errMsg = (lastError as Error)?.message || "Failed to delete voice";
-    return res.status(500).json({
-      error: `အသံဖျက်သိမ်းမှု မအောင်မြင်ပါ: ${errMsg}`,
-      originalMessage: errMsg
-    });
-  });
-
   // Gemini Proxy Endpoint
+  // This allows authorized users to access Gemini via this server.
+  // It handles secure server-side API key management for admin keys.
   app.post("/api/gemini/proxy", authenticate, async (req, res) => {
     console.log(`[Proxy] Hit /api/gemini/proxy. Model: ${req.body?.model}, SelectedModel: ${req.body?.selectedModel}`);
     const { model, contents, config, apiKey: providedKey, selectedModel, isTts } = req.body;
@@ -1166,295 +542,215 @@ async function startServer() {
     let targetModel = selectedModel || model;
     
     if (!targetModel) {
-      targetModel = isTts ? 'gemini-3.8-flash-lite-tts' : 'gemini-3.8-flash';
+      return res.status(400).json({ error: "Model name is required" });
     }
 
-    // Check if request is using a cloned voice
-    const voiceIdVal = String(
-      config?.speechConfig?.voiceConfig?.voiceId || 
-      config?.speechConfig?.voiceConfig?.voiceKeyConfig?.voiceKey || 
-      config?.speech_config?.[0]?.voice || 
-      ''
-    );
-    const isClonedVoice = Boolean(
-      isTts && (
-        voiceIdVal.startsWith('voices/') || 
-        voiceIdVal.startsWith('voice_') || 
-        voiceIdVal.startsWith('voicekey_')
-      )
-    );
-
-    if (isClonedVoice) {
-      const maskedVoice = voiceIdVal.substring(0, 8) + '...';
-      console.log(`[Proxy] Cloned voice detected (${maskedVoice}). Enforcing voice replication model.`);
-      if (targetModel !== 'gemini-3.8-flash-tts' && targetModel !== 'gemini-3.8-flash-lite-tts') {
-        targetModel = 'gemini-3.8-flash-tts';
-      }
-    } else if (isTts) {
-      if (!targetModel.includes('tts')) {
+    // Map friendly value to actual preview modelName only for TTS requests
+    if (isTts) {
+      if (targetModel === 'gemini-3.1-flash-tts' || targetModel === 'gemini-3.1-flash-tts-preview') {
         targetModel = 'gemini-3.8-flash-lite-tts';
       }
     }
 
-    const executeModelCall = async (apiKey: string, currentModel: string): Promise<unknown> => {
-      const ai = new GoogleGenAI({ apiKey });
+    const isTwoStepTts = isTts && (targetModel === 'gemini-2.5-flash' || targetModel === 'gemini-3.1-flash-lite' || targetModel === 'gemini-3.1-flash-lite-8b');
 
-      if (isClonedVoice) {
-        console.log(`[Proxy] Using Interactions API for cloned voice: ${voiceIdVal} on model: ${currentModel}`);
-        const textPart = contents?.[0]?.parts?.find((p: { text?: string; speechMetadata?: { style?: string } }) => p.text);
-        const text = textPart?.text || "";
-        const annotations: Array<{ type: string; style: string }> = [];
-        if (textPart?.speechMetadata?.style) {
-          annotations.push({
-            type: "speech_metadata",
-            style: textPart.speechMetadata.style
-          });
-        } else if (text.startsWith('[') && text.includes(']')) {
-          const closingIdx = text.indexOf(']');
-          const style = text.substring(1, closingIdx);
-          annotations.push({
-            type: "speech_metadata",
-            style: style
-          });
+    // Check if providedKey is plausible format
+    const trimmedProvidedKey = typeof providedKey === 'string' ? providedKey.trim() : '';
+    const lowerKey = trimmedProvidedKey.toLowerCase();
+    const isPlausiblePersonalKey = trimmedProvidedKey.length >= 25 && 
+      !lowerKey.startsWith('my_') && 
+      !lowerKey.startsWith('my ') && 
+      !lowerKey.startsWith('test') && 
+      !lowerKey.startsWith('sample') && 
+      !lowerKey.startsWith('key_') && 
+      !lowerKey.startsWith('gemini_') && 
+      !lowerKey.includes('placeholder') && 
+      !lowerKey.includes('...');
+
+    const personalKey = isPlausiblePersonalKey ? trimmedProvidedKey : null;
+
+    const executeWithClient = async (ai: GoogleGenAI): Promise<unknown> => {
+      if (isTwoStepTts) {
+        let firstStepModel = targetModel;
+        // Optimization: For 3.1 Lite, use it directly as it has high quota. 
+        if (firstStepModel === 'gemini-3.1-flash-lite-8b' || firstStepModel === 'gemini-2.5-flash') {
+          firstStepModel = 'gemini-3.1-flash-lite';
         }
 
-        const interactionPayload = {
-          model: currentModel,
-          input: [
-            {
-              type: "user_input",
-              content: [
-                {
-                  type: "text",
-                  text: text,
-                  ...(annotations.length > 0 ? { annotations } : {})
-                }
-              ]
-            }
-          ],
-          response_format: { type: "audio" },
-          generation_config: {
-            speech_config: [
-              {
-                voice: voiceIdVal
-              }
-            ]
-          }
-        };
+        // Step 1: Clean/Strip audio args to prevent 400 Bad Request
+        const textOnlyConfig: Record<string, unknown> = config ? { ...config } : {};
+        delete textOnlyConfig.responseModalities;
+        delete textOnlyConfig.speechConfig;
+        delete textOnlyConfig.responseMimeType;
 
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/interactions?key=${apiKey}`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-goog-api-key": apiKey
-          },
-          body: JSON.stringify(interactionPayload)
+        console.log(`[Proxy] Two-step TTS Step 1: Generating text with standard model: ${firstStepModel}`);
+        const textResult = await ai.models.generateContent({
+          model: firstStepModel,
+          contents,
+          config: textOnlyConfig
         });
 
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          const errMsg = errData.error?.message || res.statusText || "Interactions API call failed";
-          const errObj = new Error(errMsg) as Error & { status?: number; data?: unknown };
-          errObj.status = res.status;
-          errObj.data = errData;
-          throw errObj;
+        const generatedText = textResult.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!generatedText) {
+          throw new Error("No text generated from standard Gemini model in Step 1 of TTS pipeline");
         }
 
-        const interactionData = await res.json();
-        let base64Audio = "";
-        let mimeType = "audio/wav";
+        console.log(`[Proxy] Two-step TTS Step 1 text output received: "${generatedText.substring(0, 50)}..."`);
 
-        if (interactionData.output_audio?.data) {
-          base64Audio = interactionData.output_audio.data;
-          mimeType = interactionData.output_audio.mime_type || mimeType;
-        } else if (Array.isArray(interactionData.output)) {
-          for (const out of interactionData.output) {
-            if (out.type === 'audio' && out.data) {
-              base64Audio = out.data;
-              mimeType = out.mime_type || mimeType;
-              break;
-            }
-            if (Array.isArray(out.content)) {
-              for (const c of out.content) {
-                if (c.type === 'audio' && c.data) {
-                  base64Audio = c.data;
-                  mimeType = c.mime_type || mimeType;
-                  break;
-                }
-              }
-            }
-          }
-        } else if (interactionData.output?.audio?.data) {
-          base64Audio = interactionData.output.audio.data;
-          mimeType = interactionData.output.audio.mime_type || mimeType;
-        } else if (interactionData.candidates?.[0]?.content?.parts) {
-          for (const p of interactionData.candidates[0].content.parts) {
-            if (p.inlineData?.data) {
-              base64Audio = p.inlineData.data;
-              mimeType = p.inlineData.mimeType || mimeType;
-              break;
-            }
+        // Grab any parenthesized or bracketed style instruction from prompt to carry forward
+        let styleMatch = "";
+        const originalText = contents?.[0]?.parts?.[0]?.text || "";
+        if (typeof originalText === "string" && originalText.startsWith("[")) {
+          const closingBracketIndex = originalText.indexOf("]");
+          if (closingBracketIndex !== -1) {
+            styleMatch = originalText.substring(0, closingBracketIndex + 1);
           }
         }
 
-        if (!base64Audio) {
-          throw new Error("No audio data returned from Interactions API");
+        const ttsText = styleMatch ? `${styleMatch}\n\n${generatedText}` : generatedText;
+        
+        // Preserve audio parts from original contents if any (for voice cloning)
+        const audioParts = (contents?.[0]?.parts || []).filter((p: { inlineData?: { mimeType: string } }) => p.inlineData && p.inlineData.mimeType.startsWith('audio/'));
+        const ttsContents = [{ parts: [...audioParts, { text: ttsText }] }];
+
+        const ttsConfig: Record<string, unknown> = config ? { ...config } : {};
+        ttsConfig.responseModalities = ["AUDIO"];
+
+        console.log(`[Proxy] Two-step TTS Step 2: Pitching to dedicated audio pipeline gemini-3.8-flash-lite-tts`);
+        const ttsResult = await ai.models.generateContent({
+          model: "gemini-3.8-flash-lite-tts",
+          contents: ttsContents,
+          config: ttsConfig
+        });
+
+        return ttsResult;
+      } else {
+        const updatedConfig: Record<string, unknown> = config ? { ...config } : {};
+        if (isTts) {
+          updatedConfig.responseModalities = ["AUDIO"];
         }
-
-        return {
-          candidates: [
-            {
-              content: {
-                parts: [
-                  {
-                    inlineData: {
-                      data: base64Audio,
-                      mimeType: mimeType
-                    }
-                  }
-                ]
-              }
-            }
-          ]
-        };
-      }
-
-      const updatedConfig: Record<string, unknown> = config ? { ...config } : {};
-      if (isTts) {
-        updatedConfig.responseModalities = ["AUDIO"];
-      }
-
-      return await ai.models.generateContent({
-        model: currentModel,
-        contents,
-        config: updatedConfig
-      });
-    };
-
-    const keyCandidates = await getKeyCandidates(providedKey);
-
-    if (keyCandidates.length === 0) {
-      return res.status(400).json({ 
-        error: "အသုံးပြုနိုင်သော API Key မရှိသေးပါ။ Settings တွင် API Key အသစ်ထည့်သွင်းပေးပါ။",
-        burmeseSummary: "အသုံးပြုနိုင်သော API Key မရှိသေးပါ။ Settings တွင် API Key အသစ်ထည့်သွင်းပေးပါ။" 
-      });
-    }
-
-    const capabilityModels = getCapabilityModelGroup(targetModel, isTts, isClonedVoice);
-    const attempts: AttemptRecord[] = [];
-    let firstMeaningfulError: { status: number; message: string; raw: string } | null = null;
-
-    for (let keyIdx = 0; keyIdx < keyCandidates.length; keyIdx++) {
-      const candidate = keyCandidates[keyIdx];
-      if (isKeyMarkedInvalid(candidate.key)) {
-        console.log(`[Proxy] Skipping invalid cached key: ${candidate.label} (${maskApiKey(candidate.key)})`);
-        continue;
-      }
-
-      let keyFailedWithBadKey = false;
-
-      for (let modelIdx = 0; modelIdx < capabilityModels.length; modelIdx++) {
-        const currentModel = capabilityModels[modelIdx];
-        console.log(`[Proxy] Trying model ${currentModel} with ${candidate.label} (${maskApiKey(candidate.key)})`);
 
         try {
-          const result = await executeModelCall(candidate.key, currentModel);
+          return await ai.models.generateContent({
+            model: targetModel,
+            contents,
+            config: updatedConfig
+          });
+        } catch (directErr: unknown) {
+          const errMsg = String(directErr);
+          const isQuota = errMsg.includes('quota') || errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('resource_exhausted');
+          
+          if (isQuota) {
+            if (!isTts && (targetModel === 'gemini-3.8-flash' || targetModel !== 'gemini-3.1-flash-lite')) {
+              console.warn(`[Proxy] Quota exceeded on ${targetModel}, falling back to gemini-3.1-flash-lite`);
+              return await ai.models.generateContent({
+                model: 'gemini-3.1-flash-lite',
+                contents,
+                config: updatedConfig
+              });
+            }
+            if (isTts && targetModel === 'gemini-3.8-flash-tts') {
+              console.warn(`[Proxy] Quota exceeded on gemini-3.8-flash-tts, falling back to gemini-3.8-flash-lite-tts`);
+              return await ai.models.generateContent({
+                model: 'gemini-3.8-flash-lite-tts',
+                contents,
+                config: updatedConfig
+              });
+            }
+          }
+          throw directErr;
+        }
+      }
+    };
+
+    try {
+      // 1. If personalKey is provided and plausible, try it first
+      if (personalKey) {
+        try {
+          const ai = new GoogleGenAI({ apiKey: personalKey });
+          console.log(`[Proxy] Requesting model: ${targetModel} with Personal Key: ${personalKey.substring(0, 4)}...`);
+          const result = await executeWithClient(ai);
+          return res.json(convertBuffersToBase64(result));
+        } catch (personalKeyErr: unknown) {
+          const errMsg = String(personalKeyErr);
+          console.warn(`[Proxy] Personal Key failed (${errMsg.substring(0, 100)}...). Falling back to system pool...`);
+          // Proceed to system/admin pool fallback below
+        }
+      }
+
+      // 2. System / Admin Pool Fallback
+      const poolKeys: string[] = [];
+      if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim()) {
+        poolKeys.push(process.env.GEMINI_API_KEY.trim());
+      }
+
+      try {
+        const adminChannelsSnapshot = await db.collection('admin_channels').get();
+        adminChannelsSnapshot.docs.forEach(doc => {
+          const k = doc.data()?.key;
+          if (k && typeof k === 'string') {
+            const tk = k.trim();
+            const lk = tk.toLowerCase();
+            if (tk.length >= 25 && !lk.startsWith('my_') && !lk.startsWith('my ') && !lk.includes('placeholder') && !poolKeys.includes(tk)) {
+              poolKeys.push(tk);
+            }
+          }
+        });
+      } catch (fsErr: unknown) {
+        console.warn("[Proxy] Firestore admin_channels fetch skipped/failed, proceeding with env keys:", (fsErr as Error)?.message || fsErr);
+      }
+
+      fs.appendFileSync('/tmp/proxy_debug.log', `[Proxy Call] targetModel: ${targetModel}, poolKeys length: ${poolKeys.length}, env key present: ${!!process.env.GEMINI_API_KEY}\n`);
+
+      if (poolKeys.length === 0) {
+        return res.status(400).json({ error: "No API Keys available. Please add one in settings." });
+      }
+
+      let lastError = null;
+      for (let i = 0; i < poolKeys.length; i++) {
+        const currentKey = poolKeys[i];
+        try {
+          const ai = new GoogleGenAI({ apiKey: currentKey });
+          console.log(`[Proxy] Requesting model: ${targetModel} with System/Admin Pool Key (${i + 1}/${poolKeys.length})`);
+          
+          const result = await executeWithClient(ai);
           return res.json(convertBuffersToBase64(result));
         } catch (err: unknown) {
-          const errDetails = extractErrorDetails(err);
-
-          // 2. Bad Key check (400 API_KEY_INVALID)
-          if (isApiKeyInvalidError(err, errDetails.status)) {
-            markKeyInvalid(candidate.key);
-            attempts.push({
-              keyLabel: candidate.label,
-              model: currentModel,
-              status: 400,
-              isKeyValid: false,
-              isOverload: false,
-              rawMessage: errDetails.message
-            });
-            keyFailedWithBadKey = true;
-            console.warn(`[Proxy] Key ${candidate.label} (${maskApiKey(candidate.key)}) failed: 400 API_KEY_INVALID. Moving to next key.`);
-            break; // Stop testing other models with this bad key
-          }
-
-          // 1. Overload check (503 / 500 / 429 / timeout)
-          if (isOverloadError(err, errDetails.status)) {
-            attempts.push({
-              keyLabel: candidate.label,
-              model: currentModel,
-              status: errDetails.status,
-              isKeyValid: true,
-              isOverload: true,
-              rawMessage: errDetails.message
-            });
-
-            if (!firstMeaningfulError) {
-              firstMeaningfulError = errDetails;
-            }
-
-            // Retry SAME key 3 times with backoff (1s, 2s, 4s)
-            const backoffs = [1000, 2000, 4000];
-            for (let r = 0; r < backoffs.length; r++) {
-              const delay = backoffs[r];
-              console.log(`[Proxy] Retrying ${currentModel} with ${candidate.label} (${maskApiKey(candidate.key)}) in ${delay}ms (retry ${r + 1}/3)...`);
-              await sleep(delay);
-
-              try {
-                const retryResult = await executeModelCall(candidate.key, currentModel);
-                return res.json(convertBuffersToBase64(retryResult));
-              } catch (retryErr: unknown) {
-                const rDetails = extractErrorDetails(retryErr);
-                if (isApiKeyInvalidError(retryErr, rDetails.status)) {
-                  markKeyInvalid(candidate.key);
-                  keyFailedWithBadKey = true;
-                  break;
-                }
-                console.warn(`[Proxy] Retry ${r + 1}/3 failed for ${currentModel} on ${candidate.label} with status ${rDetails.status}`);
-              }
-            }
-
-            if (keyFailedWithBadKey) break;
-
-            // Model is overloaded on this key, try next model in capability group with SAME key
-            console.warn(`[Proxy] Model ${currentModel} exhausted 3 retries on ${candidate.label}. Trying fallback model in capability group with SAME key...`);
-            continue;
-          }
-
-          // Non-overload, non-invalid key error
-          attempts.push({
-            keyLabel: candidate.label,
-            model: currentModel,
-            status: errDetails.status,
-            isKeyValid: true,
-            isOverload: false,
-            rawMessage: errDetails.message
-          });
-          if (!firstMeaningfulError) {
-            firstMeaningfulError = errDetails;
-          }
+          lastError = err as Error;
+          const errorObj = err as { status?: number; statusCode?: number; response?: { status: number }; message?: string };
+          const status = errorObj.status || errorObj.statusCode || (errorObj.response ? errorObj.response.status : 500);
+          const errMsg = errorObj.message || "";
+          
+          fs.appendFileSync('/tmp/proxy_debug.log', `[Pool Key ${i + 1} Failed] key: ${currentKey.substring(0, 6)}... status: ${status}, msg: ${errMsg}\n`);
+          console.warn(`[Proxy] Pool key [${i + 1}/${poolKeys.length}] failed: Status ${status}, Message: ${errMsg.substring(0, 100)}... Trying next key...`);
+          // Try next pool key for any failure
+          continue;
         }
-
-        if (keyFailedWithBadKey) break;
       }
-      // Finished all models for this key, now move to next key
+      
+      if (lastError) throw lastError;
+    } catch (error: unknown) {
+      console.error("[Proxy] Gemini Error:", error);
+      
+      const err = error as { status?: number; statusCode?: number; response?: { status: number }; message?: string };
+      
+      // Extract status and message from the various error formats Gemini can return
+      const status = err.status || err.statusCode || (err.response ? err.response.status : 500);
+      let message = err.message || "Failed to call Gemini API";
+      if (typeof message === 'string' && message.startsWith('{') && message.includes('"message"')) {
+        try {
+          const parsed = JSON.parse(message);
+          message = parsed.error?.message || parsed.message || message;
+        } catch {
+          // keep original message
+        }
+      }
+      
+      res.status(status).json({ 
+        error: message,
+        details: error
+      });
     }
-
-    // If every attempt failed
-    const burmeseSummary = formatAttemptSummary(attempts);
-    console.error(`[Proxy] All attempts failed. Summary: ${burmeseSummary}`);
-
-    const chosenStatus = firstMeaningfulError ? firstMeaningfulError.status : (attempts[0]?.status || 503);
-    const returnStatus = (chosenStatus === 400 && attempts.some(a => a.isKeyValid)) ? 503 : chosenStatus;
-    const firstErrorMsg = firstMeaningfulError ? firstMeaningfulError.message : (attempts[0]?.rawMessage || "Request failed");
-
-    res.status(returnStatus).json({ 
-      error: `${burmeseSummary}\n\n${firstErrorMsg}`,
-      burmeseSummary,
-      firstMeaningfulError: firstErrorMsg,
-      attempts
-    });
   });
 
   // Telegram Notification Endpoint

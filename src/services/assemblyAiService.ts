@@ -1,0 +1,540 @@
+/**
+ * AssemblyAI Speech-to-Text & Auto-SRT Subtitle Generation Service
+ * Supports:
+ * - Direct audio/video file upload or external media URL
+ * - Automatic speech transcription with millisecond-accurate timestamps
+ * - Native .SRT & .VTT subtitle generation
+ * - Fallback to proxy route (/api/assemblyai/proxy) or direct browser fetch
+ */
+
+export interface AssemblyAIWord {
+  text: string;
+  start: number; // milliseconds
+  end: number;   // milliseconds
+  confidence: number;
+  speaker?: string | null;
+}
+
+export interface AssemblyAIUtterance {
+  start: number;
+  end: number;
+  confidence: number;
+  channel?: string;
+  speaker?: string;
+  text: string;
+  words: AssemblyAIWord[];
+}
+
+export interface AssemblyAITranscriptResponse {
+  id: string;
+  status: 'queued' | 'processing' | 'completed' | 'error';
+  text?: string;
+  words?: AssemblyAIWord[];
+  utterances?: AssemblyAIUtterance[];
+  confidence?: number;
+  audio_duration?: number; // seconds
+  language_code?: string;
+  error?: string;
+}
+
+export interface AssemblyAITranscribeOptions {
+  apiKey: string;
+  audioUrl?: string;
+  file?: File | Blob;
+  youtubeCookies?: string;
+  languageCode?: string;
+  autoLanguage?: boolean;
+  speakerLabels?: boolean;
+  speechModel?: 'best' | 'nano';
+  punctuate?: boolean;
+  formatText?: boolean;
+  onProgress?: (step: string, percent?: number) => void;
+}
+
+class AssemblyAIService {
+  private static STORAGE_KEY = 'vbs_assemblyai_api_key';
+  private static YOUTUBE_COOKIES_KEY = 'vbs_youtube_cookies';
+
+  /**
+   * Get the saved AssemblyAI API key from localStorage or env
+   */
+  getStoredApiKey(): string {
+    const local = localStorage.getItem(AssemblyAIService.STORAGE_KEY);
+    if (local && local.trim().length > 10) return local.trim();
+    // Check if injected via Vite env
+    const envKey = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_ASSEMBLYAI_API_KEY;
+    if (envKey && envKey.trim().length > 10) return envKey.trim();
+    return '';
+  }
+
+  /**
+   * Get saved YouTube Cookies
+   */
+  getYoutubeCookies(): string {
+    return localStorage.getItem(AssemblyAIService.YOUTUBE_COOKIES_KEY) || '';
+  }
+
+  /**
+   * Save YouTube Cookies to localStorage
+   */
+  setYoutubeCookies(cookies: string): void {
+    if (cookies && cookies.trim()) {
+      localStorage.setItem(AssemblyAIService.YOUTUBE_COOKIES_KEY, cookies.trim());
+    } else {
+      localStorage.removeItem(AssemblyAIService.YOUTUBE_COOKIES_KEY);
+    }
+  }
+
+  /**
+   * Remove saved YouTube Cookies
+   */
+  clearYoutubeCookies(): void {
+    localStorage.removeItem(AssemblyAIService.YOUTUBE_COOKIES_KEY);
+  }
+
+  /**
+   * Save the AssemblyAI API key to localStorage
+   */
+  setStoredApiKey(key: string): void {
+    if (key && key.trim()) {
+      localStorage.setItem(AssemblyAIService.STORAGE_KEY, key.trim());
+    } else {
+      localStorage.removeItem(AssemblyAIService.STORAGE_KEY);
+    }
+  }
+
+  /**
+   * Remove the stored AssemblyAI API key
+   */
+  clearStoredApiKey(): void {
+    localStorage.removeItem(AssemblyAIService.STORAGE_KEY);
+  }
+
+  /**
+   * Detect type of media link (YouTube, TikTok, Direct)
+   */
+  detectUrlType(url: string): 'youtube' | 'tiktok' | 'direct' {
+    if (!url) return 'direct';
+    const clean = url.trim().toLowerCase();
+    if (clean.includes('youtube.com/') || clean.includes('youtu.be/')) {
+      return 'youtube';
+    }
+    if (clean.includes('tiktok.com/')) {
+      return 'tiktok';
+    }
+    return 'direct';
+  }
+
+  /**
+   * Resolve YouTube, TikTok, or web media URL, extract audio on the backend,
+   * upload it to AssemblyAI, and return the upload_url
+   */
+  async resolveMediaUrl(
+    url: string, 
+    apiKey: string, 
+    cookies?: string
+  ): Promise<{ upload_url: string; title: string; source: 'youtube' | 'tiktok' | 'direct' }> {
+    const key = apiKey.trim();
+    if (!key) throw new Error('AssemblyAI API Key မရှိပါ။ ကျေးဇူးပြု၍ API Key အရင်ထည့်သွင်းပါ။');
+
+    const cleanUrl = url.trim();
+    if (!cleanUrl) throw new Error('Media URL ထည့်သွင်းပေးရန် လိုအပ်ပါသည်။');
+
+    const effectiveCookies = cookies?.trim() || this.getYoutubeCookies();
+
+    // Call backend endpoint to download and upload to AssemblyAI
+    const resp = await fetch('/api/assemblyai/resolve-url', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-assemblyai-key': key
+      },
+      body: JSON.stringify({ 
+        url: cleanUrl,
+        cookies: effectiveCookies || undefined
+      })
+    });
+
+    if (!resp.ok) {
+      const errJson = await resp.json().catch(() => ({}));
+      const rawError = errJson.error || '';
+      
+      if (errJson.isBotBlocked || rawError.includes('YOUTUBE_BOT_DETECTED') || rawError.includes('bot') || rawError.includes('Bot')) {
+        throw new Error(
+          `YouTube ၏ Bot စစ်ဆေးရေးစနစ် (Bot Verification) ကြောင့် Cloud Server မှ ဤဗီဒီယိုကို တိုက်ရိုက်ဆွဲယူခွင့် မရနိုင်ပါ။\n\n` +
+          `အကြံပြုချက်- အမြန်ဆုံးနှင့် ၁၀၀% အဆင်ပြေစေရန် 'ဖိုင်တင်သွင်းမည် (Upload)' tab သို့ ပြောင်း၍ မိမိစက်ထဲရှိ Video/Audio ဖိုင်ကို တိုက်ရိုက်တင်သွင်းပါ (သို့မဟုတ် TikTok / Direct URL သုံးပါ)။`
+        );
+      }
+
+      throw new Error(errJson.error || `Media ဒေါင်းလုဒ် မအောင်မြင်ပါ (HTTP ${resp.status})`);
+    }
+
+    const data = await resp.json();
+    if (!data.upload_url) {
+      throw new Error('Backend failed to return an AssemblyAI upload_url');
+    }
+
+    return data;
+  }
+
+  /**
+   * Upload audio/video file to AssemblyAI hosting
+   * Attempts server proxy first, falls back to direct AssemblyAI API if needed.
+   */
+  async uploadMedia(file: File | Blob, apiKey: string, onProgress?: (percent: number) => void): Promise<string> {
+    const key = apiKey.trim();
+    if (!key) throw new Error('AssemblyAI API Key မရှိပါ။ ကျေးဇူးပြု၍ API Key အရင်ထည့်သွင်းပါ။');
+
+    onProgress?.(10);
+
+    // Strategy 1: Try backend Express/Vercel proxy
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const resp = await fetch('/api/assemblyai/upload', {
+        method: 'POST',
+        headers: {
+          'x-assemblyai-key': key
+        },
+        body: formData
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.upload_url) {
+          return data.upload_url;
+        }
+      }
+    } catch (proxyErr) {
+      console.warn('[AssemblyAI] Backend upload proxy failed, trying direct upload:', proxyErr);
+    }
+
+    // Strategy 2: Direct upload to AssemblyAI API
+    try {
+      const uploadResp = await fetch('https://api.assemblyai.com/v2/upload', {
+        method: 'POST',
+        headers: {
+          'Authorization': key,
+          'Content-Type': 'application/octet-stream'
+        },
+        body: file
+      });
+
+      if (!uploadResp.ok) {
+        const errJson = await uploadResp.json().catch(() => ({}));
+        throw new Error(errJson.error || `Upload failed with status ${uploadResp.status}`);
+      }
+
+      const uploadData = await uploadResp.json();
+      if (!uploadData.upload_url) {
+        throw new Error('AssemblyAI upload did not return an upload_url');
+      }
+
+      return uploadData.upload_url;
+    } catch (directErr) {
+      console.error('[AssemblyAI] Direct upload failed:', directErr);
+      throw new Error(`ဖိုင်တင်ခြင်း မအောင်မြင်ပါ: ${directErr instanceof Error ? directErr.message : String(directErr)}`);
+    }
+  }
+
+  /**
+   * Submit media URL for transcription
+   */
+  async submitTranscription(options: {
+    audioUrl: string;
+    apiKey: string;
+    languageCode?: string;
+    autoLanguage?: boolean;
+    speakerLabels?: boolean;
+    speechModel?: 'best' | 'nano';
+    punctuate?: boolean;
+    formatText?: boolean;
+  }): Promise<string> {
+    const {
+      audioUrl,
+      apiKey,
+      languageCode,
+      autoLanguage = true,
+      speakerLabels = true,
+      speechModel = 'best',
+      punctuate = true,
+      formatText = true
+    } = options;
+
+    const speechModels = speechModel === 'nano' ? ['nano'] : ['universal-3-5-pro', 'universal-2'];
+
+    const payload: Record<string, unknown> = {
+      audio_url: audioUrl,
+      speech_models: speechModels,
+      punctuate,
+      format_text: formatText,
+      speaker_labels: speakerLabels
+    };
+
+    if (languageCode && languageCode !== 'auto') {
+      payload.language_code = languageCode;
+    } else if (autoLanguage) {
+      payload.language_detection = true;
+    }
+
+    // Strategy 1: Try proxy endpoint
+    try {
+      const resp = await fetch('/api/assemblyai/transcribe', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-assemblyai-key': apiKey.trim()
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.id) return data.id;
+      }
+    } catch (e) {
+      console.warn('[AssemblyAI] Proxy transcribe failed, trying direct API:', e);
+    }
+
+    // Strategy 2: Direct API
+    const directResp = await fetch('https://api.assemblyai.com/v2/transcript', {
+      method: 'POST',
+      headers: {
+        'Authorization': apiKey.trim(),
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!directResp.ok) {
+      const err = await directResp.json().catch(() => ({}));
+      throw new Error(err.error || `Transcription request failed (${directResp.status})`);
+    }
+
+    const resData = await directResp.json();
+    if (!resData.id) {
+      throw new Error('No transcript ID returned by AssemblyAI');
+    }
+
+    return resData.id;
+  }
+
+  /**
+   * Poll transcript status until completed or failed
+   */
+  async pollTranscript(id: string, apiKey: string): Promise<AssemblyAITranscriptResponse> {
+    // Try proxy
+    try {
+      const resp = await fetch(`/api/assemblyai/transcript/${id}`, {
+        headers: { 'x-assemblyai-key': apiKey.trim() }
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+    } catch {
+      // ignore, fall back
+    }
+
+    // Direct
+    const directResp = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
+      headers: { 'Authorization': apiKey.trim() }
+    });
+
+    if (!directResp.ok) {
+      const err = await directResp.json().catch(() => ({}));
+      throw new Error(err.error || `Polling failed (${directResp.status})`);
+    }
+
+    return await directResp.json();
+  }
+
+  /**
+   * Fetch ready-to-use SRT subtitles from AssemblyAI
+   */
+  async getSrtContent(id: string, apiKey: string): Promise<string> {
+    // Try proxy
+    try {
+      const resp = await fetch(`/api/assemblyai/transcript/${id}/srt`, {
+        headers: { 'x-assemblyai-key': apiKey.trim() }
+      });
+      if (resp.ok) {
+        const srtText = await resp.text();
+        if (srtText && srtText.trim().length > 0) return srtText;
+      }
+    } catch {
+      // fallback
+    }
+
+    // Direct
+    const directResp = await fetch(`https://api.assemblyai.com/v2/transcript/${id}/srt`, {
+      headers: { 'Authorization': apiKey.trim() }
+    });
+
+    if (!directResp.ok) {
+      throw new Error(`Failed to fetch SRT subtitles (${directResp.status})`);
+    }
+
+    return await directResp.text();
+  }
+
+  /**
+   * Helper to format milliseconds to SRT timestamp: 00:01:23,456
+   */
+  formatSrtTime(ms: number): string {
+    const totalSeconds = Math.floor(ms / 1000);
+    const milliseconds = Math.floor(ms % 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    const pad = (n: number, z = 2) => String(n).padStart(z, '0');
+    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)},${pad(milliseconds, 3)}`;
+  }
+
+  /**
+   * Generate SRT manually from word-level timestamps if needed
+   */
+  generateSrtFromWords(words: AssemblyAIWord[], maxCharsPerLine = 48, maxDurationMs = 3500): string {
+    if (!words || words.length === 0) return '';
+
+    const lines: Array<{ start: number; end: number; text: string; speaker?: string | null }> = [];
+    let currentWords: AssemblyAIWord[] = [];
+    let currentLength = 0;
+
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i];
+      const wordText = w.text || '';
+      currentWords.push(w);
+      currentLength += wordText.length + 1;
+
+      const firstWord = currentWords[0];
+      const duration = w.end - firstWord.start;
+      const isPunctuationEnd = /[.!?။]$/.test(wordText);
+      const isNextDifferentSpeaker = i + 1 < words.length && words[i + 1].speaker !== w.speaker;
+
+      if (currentLength >= maxCharsPerLine || duration >= maxDurationMs || isPunctuationEnd || isNextDifferentSpeaker || i === words.length - 1) {
+        lines.push({
+          start: firstWord.start,
+          end: w.end,
+          text: currentWords.map(item => item.text).join(' '),
+          speaker: firstWord.speaker
+        });
+        currentWords = [];
+        currentLength = 0;
+      }
+    }
+
+    return lines
+      .map((item, index) => {
+        const timecode = `${this.formatSrtTime(item.start)} --> ${this.formatSrtTime(item.end)}`;
+        const speakerPrefix = item.speaker ? `[Speaker ${item.speaker}]: ` : '';
+        return `${index + 1}\r\n${timecode}\r\n${speakerPrefix}${item.text}\r\n`;
+      })
+      .join('\r\n');
+  }
+
+  /**
+   * High-level complete runner:
+   * Takes audio/video file OR public URL -> uploads -> submits -> polls -> returns transcript + srt
+   */
+  async processToSrt(options: AssemblyAITranscribeOptions): Promise<{
+    transcript: AssemblyAITranscriptResponse;
+    srt: string;
+    audioUrl: string;
+  }> {
+    const { apiKey, file, audioUrl: providedUrl, onProgress } = options;
+
+    let targetAudioUrl = providedUrl?.trim() || '';
+
+    // Step 1: Upload media if file provided, or extract from YouTube/TikTok if URL provided
+    if (file) {
+      onProgress?.('ဖိုင်ကို AssemblyAI စနစ်သို့ တင်နေပါသည်... (Uploading Media)', 15);
+      targetAudioUrl = await this.uploadMedia(file, apiKey, (p) => {
+        onProgress?.(`ဖိုင်ကို AssemblyAI စနစ်သို့ တင်နေပါသည်... (${p}%)`, Math.round(p * 0.3));
+      });
+    } else if (targetAudioUrl) {
+      const urlType = this.detectUrlType(targetAudioUrl);
+      if (urlType === 'youtube' || urlType === 'tiktok') {
+        const platformName = urlType === 'youtube' ? 'YouTube' : 'TikTok';
+        onProgress?.(`${platformName} မှ အသံဖိုင်ကို ဒေါင်းလုဒ်ဆွဲနေပါသည်... (Downloading audio)`, 10);
+        
+        try {
+          const resolved = await this.resolveMediaUrl(targetAudioUrl, apiKey, options.youtubeCookies);
+          targetAudioUrl = resolved.upload_url;
+          onProgress?.(`အသံဖိုင်ကို AssemblyAI သို့ ပို့ဆောင်ပြီးပါပြီ!`, 30);
+        } catch (resolveErr: unknown) {
+          console.error(`[AssemblyAI] ${platformName} resolution failed:`, resolveErr);
+          throw resolveErr;
+        }
+      }
+    }
+
+    if (!targetAudioUrl) {
+      throw new Error('အသံ သို့မဟုတ် ဗီဒီယို ဖိုင်/URL ထည့်သွင်းပေးရန် လိုအပ်ပါသည်။');
+    }
+
+    // Step 2: Submit transcription request
+    onProgress?.('အသံဖိုင် စာတန်းထိုး ခွဲခြမ်းစိတ်ဖြာမှုကို စတင်နေပါသည်... (Submitting Job)', 35);
+    const transcriptId = await this.submitTranscription({
+      ...options,
+      audioUrl: targetAudioUrl
+    });
+
+    // Step 3: Polling
+    onProgress?.('AI စာသားနှင့် အချိန်ကိုက် ချိန်ညှိနေပါသည်... (Processing with Neural STT)', 50);
+
+    let attempts = 0;
+    const maxAttempts = 180; // ~6 minutes max with 2s interval
+    let transcriptResult: AssemblyAITranscriptResponse | null = null;
+
+    while (attempts < maxAttempts) {
+      attempts++;
+      await new Promise(res => setTimeout(res, 2500));
+
+      const status = await this.pollTranscript(transcriptId, apiKey);
+
+      if (status.status === 'completed') {
+        transcriptResult = status;
+        break;
+      }
+
+      if (status.status === 'error') {
+        throw new Error(status.error || 'AssemblyAI transcription process encountered an error');
+      }
+
+      const progressPercent = Math.min(92, 50 + Math.round((attempts / 40) * 40));
+      onProgress?.(`အသံဖိုင် စာတန်းထိုး ထုတ်လုပ်နေပါသည်... (${status.status})`, progressPercent);
+    }
+
+    if (!transcriptResult) {
+      throw new Error('Transcription time out. ကျေးဇူးပြု၍ နောက်မှ ပြန်လည်စစ်ဆေးပါ။');
+    }
+
+    // Step 4: Fetch SRT Subtitle File
+    onProgress?.('SRT စာတန်းထိုးဖိုင်ကို ရယူနေပါသည်... (Generating SRT)', 96);
+    let srtText = '';
+    try {
+      srtText = await this.getSrtContent(transcriptId, apiKey);
+    } catch (e) {
+      console.warn('[AssemblyAI] SRT endpoint failed, generating from words fallback:', e);
+      if (transcriptResult.words && transcriptResult.words.length > 0) {
+        srtText = this.generateSrtFromWords(transcriptResult.words);
+      }
+    }
+
+    if (!srtText && transcriptResult.words && transcriptResult.words.length > 0) {
+      srtText = this.generateSrtFromWords(transcriptResult.words);
+    }
+
+    onProgress?.('စာတန်းထိုးဖိုင် ထုတ်ယူမှု အောင်မြင်ပါသည်! (Completed)', 100);
+
+    return {
+      transcript: transcriptResult,
+      srt: srtText,
+      audioUrl: targetAudioUrl
+    };
+  }
+}
+
+export const assemblyAiService = new AssemblyAIService();

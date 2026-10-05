@@ -7,7 +7,7 @@ interface HeaderProps {
   isAdmin: boolean;
   apiKeyStatus: { state: 'admin' | 'personal' | 'none'; label: string };
   userControl?: import('../types').VBSUserControl | null;
-  setActiveTab: (tab: 'generate' | 'translator' | 'transcriber' | 'thumbnail' | 'video-studio' | 'history' | 'tools' | 'admin' | 'vbs-admin') => void;
+  setActiveTab: (tab: 'generate' | 'translator' | 'transcriber' | 'thumbnail' | 'history' | 'tools' | 'admin' | 'vbs-admin') => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({ 

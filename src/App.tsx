@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Video, Clipboard, Mic2, Play, Info, Sparkles, Image as ImageIcon, X, Calendar, Layers, Pause, RotateCcw } from 'lucide-react';
+import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, Check, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Clipboard, Mic2, Play, Info, Sparkles, X, Calendar, Layers, Pause, RotateCcw, BookOpen, Eye, EyeOff, Zap } from 'lucide-react';
 import { WelcomePage } from './components/WelcomePage';
 import { Header } from './components/Header';
 import { ApiKeyModal } from './components/ApiKeyModal';
@@ -10,14 +10,14 @@ import { OutputPreview } from './components/OutputPreview';
 import { AdminDashboard } from './components/AdminDashboard';
 import { VideoTranscriber } from './components/VideoTranscriber';
 import { ThumbnailCreator } from './components/ThumbnailCreator';
-import { VideoStudio } from './components/VideoStudio';
 import { PrivacyPolicy } from './components/PrivacyPolicy';
 import { TermsOfService } from './components/TermsOfService';
 import { AnnouncementPanel } from './components/AnnouncementPanel';
 import { Modal, ModalType } from './components/Modal';
 import { BatchQueueModal } from './components/BatchQueueModal';
 import { GeminiTTSService } from './services/geminiService';
-import { apiChannelManager } from './services/apiChannelManager';
+import { apiChannelManager, isPlausibleApiKey } from './services/apiChannelManager';
+import { assemblyAiService } from './services/assemblyAiService';
 import { logActivity } from './services/activityService';
 import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, SystemConfig, VBSUserControl, Announcement } from './types';
 import { DEFAULT_RULES } from './constants';
@@ -27,7 +27,7 @@ import { formatMyanmarDuration, renderProcessedAudio, pcmToWav } from './utils/a
 import { generateOptimizedSubtitles } from './utils/subtitleUtils';
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId } from './firebase';
 
-type Tab = 'generate' | 'translator' | 'transcriber' | 'thumbnail' | 'video-studio' | 'history' | 'tools' | 'admin' | 'vbs-admin';
+type Tab = 'generate' | 'translator' | 'transcriber' | 'thumbnail' | 'history' | 'tools' | 'admin' | 'vbs-admin';
 
 export default function App() {
   const { language, t } = useLanguage();
@@ -72,6 +72,10 @@ export default function App() {
            localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
   }); 
   const [accessCode, setAccessCode] = useState<string | null>(() => localStorage.getItem('vbs_access_code'));
+  
+  const [assemblyApiKeyInput, setAssemblyApiKeyInput] = useState(() => assemblyAiService.getStoredApiKey());
+  const [showAssemblyKey, setShowAssemblyKey] = useState(false);
+  const [isAssemblyKeySaved, setIsAssemblyKeySaved] = useState(false);
   
   const isAdminUser = useMemo(() => {
     return profile?.role === 'admin' || userControl?.role === 'admin' || accessCode === 'saw_vlogs_2026' || vbsId === 'saw_vlogs_2026';
@@ -237,8 +241,9 @@ export default function App() {
     if (isAdminUser) return true;
 
     // Personal checks
-    if (localStorage.getItem('VLOGS_BY_SAW_API_KEY')) return false;
-    if (profile?.api_key_stored) return false;
+    const storedLocalKey = localStorage.getItem('VLOGS_BY_SAW_API_KEY');
+    if (storedLocalKey && isPlausibleApiKey(storedLocalKey)) return false;
+    if (profile?.api_key_stored && isPlausibleApiKey(profile.api_key_stored)) return false;
     
     // Admin checks
     if (globalSettings.allow_admin_keys) {
@@ -253,10 +258,10 @@ export default function App() {
   }, [profile, globalSettings]);
 
   const getEffectiveApiKey = useCallback(() => {
-    // Priority -1: Immediate Channel Manager fetch
+    // Priority -1: Immediate Channel Manager fetch (only if plausible format)
     const immediateLocalKey = apiChannelManager.getActiveKey(false, isAdminUser);
-    if (immediateLocalKey && immediateLocalKey.trim()) {
-      return immediateLocalKey;
+    if (immediateLocalKey && isPlausibleApiKey(immediateLocalKey)) {
+      return immediateLocalKey.trim();
     }
 
     // [ADMIN PREMIUM KEY PRIORITY - COMMANDER ORDER]
@@ -269,7 +274,7 @@ export default function App() {
         globalSettings.primary_key || '',
         globalSettings.secondary_key || '',
         globalSettings.backup_key || ''
-      ].filter(k => k.trim());
+      ].filter(k => isPlausibleApiKey(k));
 
       if (adminKeys.length > 0) {
         console.log("App: Prioritizing Admin Pool (Admin User or Toggle ON)");
@@ -278,7 +283,7 @@ export default function App() {
     }
     
     // Priority 2: Firestore User Profile
-    if (profile?.api_key_stored) {
+    if (profile?.api_key_stored && isPlausibleApiKey(profile.api_key_stored)) {
       console.log("App: Using API Key from Firestore Profile");
       return profile.api_key_stored.trim();
     }
@@ -513,15 +518,15 @@ export default function App() {
           setProfile(data);
           
           // Sync API Key from Firestore to Channel Manager
-          if (data.api_key_stored) {
+          if (data.api_key_stored && isPlausibleApiKey(data.api_key_stored)) {
             apiChannelManager.setUserChannel(data.api_key_stored);
-          }
-          
-          // Sync API Key from Firestore to LocalStorage if missing locally
-          if (data.api_key_stored && !localStorage.getItem('VLOGS_BY_SAW_API_KEY')) {
             const trimmedKey = data.api_key_stored.trim();
             localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
             setLocalApiKey(trimmedKey);
+          } else {
+            apiChannelManager.clearUserChannel();
+            localStorage.removeItem('VLOGS_BY_SAW_API_KEY');
+            setLocalApiKey(null);
           }
         } else if (code === 'saw_vlogs_2026') {
           // Master Admin Fallback
@@ -841,10 +846,15 @@ export default function App() {
       setProfile(codeData);
       
       // Sync API Key from Firestore to LocalStorage if present
-      if (codeData.api_key_stored) {
+      if (codeData.api_key_stored && isPlausibleApiKey(codeData.api_key_stored)) {
         const trimmedKey = codeData.api_key_stored.trim();
         localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
         setLocalApiKey(trimmedKey);
+        apiChannelManager.setUserChannel(trimmedKey);
+      } else {
+        localStorage.removeItem('VLOGS_BY_SAW_API_KEY');
+        setLocalApiKey(null);
+        apiChannelManager.clearUserChannel();
       }
       
       // Log successful login
@@ -918,7 +928,13 @@ export default function App() {
 
     const effectiveKey = getEffectiveApiKey();
     if (!effectiveKey) {
-      setIsApiKeyModalOpen(true);
+      openModal({
+        title: t('common.error'),
+        message: t('generate.noApiKey'),
+        type: 'error',
+        confirmText: language === 'mm' ? 'ပြင်ဆင်ချက်သို့ သွားမည်' : 'Go to Settings',
+        onConfirm: () => setActiveTab('tools')
+      });
       setError(t('generate.noApiKey'));
       return;
     }
@@ -1380,6 +1396,18 @@ export default function App() {
   }, [getEffectiveApiKey, updateHistoryItem, executeSingleTTSItem, accessCode, isAccessGranted, isAuthReady, globalSettings.total_generations]);
 
   const handleQueueBatch = useCallback(async (itemsText: string[], batchConfig: TTSConfig) => {
+    const effectiveKey = getEffectiveApiKey();
+    if (!effectiveKey) {
+      openModal({
+        title: t('common.error'),
+        message: t('generate.noApiKey'),
+        type: 'error',
+        confirmText: language === 'mm' ? 'ပြင်ဆင်ချက်သို့ သွားမည်' : 'Go to Settings',
+        onConfirm: () => setActiveTab('tools')
+      });
+      return;
+    }
+
     const currentBatchId = `batch_${Date.now()}`;
     const newItems: HistoryItem[] = [];
 
@@ -1621,7 +1649,7 @@ export default function App() {
   }, [userControl?.expiryDate, isVbsAdmin]);
 
   const isPremium = isVbsAdmin || (userControl?.membershipStatus === 'premium' && !isExpired);
-  const canUseThumbnail = isPremium;
+  const canUseThumbnail = isPremium || isAccessGranted || isVbsAdmin;
 
   useEffect(() => {
     if (isExpired && userControl?.isUnlimited) {
@@ -1955,19 +1983,10 @@ export default function App() {
                   }
                   setActiveTab('thumbnail');
                 }}
-                icon={<ImageIcon size={18} />}
-                label={t('nav.thumbnail') || 'သမ်းနေးလ်'}
+                icon={<BookOpen size={18} />}
+                label={t('nav.thumbnail') || 'အသံစာအုပ်'}
                 tooltip={canUseThumbnail ? t('tooltips.thumbnail') : t('thumbnailFeature.locked')}
                 locked={!canUseThumbnail}
-              />
-              <NavTab
-                id="video-studio"
-                active={activeTab === 'video-studio'}
-                onClick={() => setActiveTab('video-studio')}
-                icon={<Video size={18} />}
-                label="Video Studio"
-                tooltip="AI-Powered Video Enhancement (Coming Soon)"
-                badge="SOON"
               />
               <NavTab
                 id="history"
@@ -2003,6 +2022,7 @@ export default function App() {
                       setText={setText} 
                       getApiKey={getEffectiveApiKey}
                       showToast={showToast}
+                      openModal={openModal}
                       engineStatus={engineStatus}
                       retryCountdown={retryCountdown}
                       speed={config.speed}
@@ -2011,6 +2031,7 @@ export default function App() {
                       userControl={userControl}
                       isSharedKey={apiKeyStatus.isShared}
                       rewriteCost={globalSettings.rewrite_cost}
+                      onNavigateToSettings={() => setActiveTab('tools')}
                     />
                     
 
@@ -2247,11 +2268,10 @@ export default function App() {
                       }}
                       getApiKey={getEffectiveApiKey}
                       showToast={showToast}
+                      openModal={openModal}
                       isAdmin={isVbsAdmin}
                       userControl={userControl}
-                      isSharedKey={apiKeyStatus.isShared}
-                      allowVideoRecapAdminKey={globalSettings.allow_video_recap_admin_key}
-                      recapCost={globalSettings.recap_cost}
+                      onNavigateToSettings={() => setActiveTab('tools')}
                     />
                   )}
                 </motion.div>
@@ -2266,21 +2286,13 @@ export default function App() {
                 >
                    <ThumbnailCreator 
                      showToast={showToast}
+                     openModal={openModal}
                      getApiKey={getEffectiveApiKey}
                      isAdmin={isVbsAdmin}
                      isPremium={isPremium}
+                     userControl={userControl}
+                     onNavigateToSettings={() => setActiveTab('tools')}
                    />
-                </motion.div>
-              )}
-
-              {activeTab === 'video-studio' && (
-                <motion.div
-                  key="video-studio"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                >
-                  <VideoStudio isAdmin={isVbsAdmin} />
                 </motion.div>
               )}
 
@@ -2879,6 +2891,103 @@ export default function App() {
                         </div>
                         <ChevronRight size={18} className="text-slate-400 group-hover:translate-x-1 transition-transform" />
                       </div>
+                    </div>
+                  </div>
+
+                  {/* AssemblyAI API Key Section (SRT & Subtitles) */}
+                  <div className="glass-card rounded-[24px] p-6 sm:p-8 shadow-2xl transition-all duration-300">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-amber-400/10 rounded-xl flex items-center justify-center text-amber-400">
+                          <Zap size={20} />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">AssemblyAI API Key</h3>
+                            <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-400/20 text-amber-400 px-2 py-0.5 rounded-md">
+                              SRT Subtitles
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">
+                            {language === 'mm' ? 'Recap Video အတွက် အချိန်ကိုက် SRT စာတန်းထိုးထုတ်ယူရန် Key (Google API Key ကို ဘာသာပြန်ရန် အသုံးပြုသည်)' : 'Used in Recap Video tab for time-synced .SRT subtitles. Google API is used for Myanmar translation.'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {assemblyApiKeyInput.trim() ? (
+                          <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full text-xs font-bold">
+                            <CheckCircle2 size={12} />
+                            <span>CONNECTED</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-full text-xs font-bold">
+                            <AlertCircle size={12} />
+                            <span>NOT SET</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                      <div className="relative flex-1">
+                        <input
+                          type={showAssemblyKey ? 'text' : 'password'}
+                          value={assemblyApiKeyInput}
+                          onChange={(e) => setAssemblyApiKeyInput(e.target.value)}
+                          placeholder="Enter your AssemblyAI API Key (e.g. 7b34f8...)"
+                          className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 font-mono focus:outline-none focus:ring-2 focus:ring-amber-400/40 pr-10"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowAssemblyKey(!showAssemblyKey)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition-colors"
+                        >
+                          {showAssemblyKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          assemblyAiService.setStoredApiKey(assemblyApiKeyInput.trim());
+                          setIsAssemblyKeySaved(true);
+                          showToast(language === 'mm' ? 'AssemblyAI Key သိမ်းဆည်းပြီးပါပြီ ✨' : 'AssemblyAI API Key saved!', 'success');
+                          setTimeout(() => setIsAssemblyKeySaved(false), 2000);
+                        }}
+                        className="px-6 py-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-black font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shrink-0 shadow-md shadow-amber-400/20 active:scale-95"
+                      >
+                        {isAssemblyKeySaved ? <Check size={16} /> : <Key size={14} />}
+                        <span>{isAssemblyKeySaved ? 'SAVED' : 'SAVE KEY'}</span>
+                      </button>
+
+                      {assemblyApiKeyInput.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAssemblyApiKeyInput('');
+                            assemblyAiService.setStoredApiKey('');
+                            showToast(language === 'mm' ? 'AssemblyAI Key ဖျက်လိုက်ပါပြီ' : 'Cleared AssemblyAI API Key', 'success');
+                          }}
+                          className="px-3 py-3 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-bold transition-colors"
+                          title="Clear Key"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 pt-3">
+                      <span>{language === 'mm' ? 'အခမဲ့ API Key ရယူရန်' : 'Need a free key?'}</span>
+                      <a
+                        href="https://www.assemblyai.com/dashboard/signup"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 transition-colors"
+                      >
+                        <span>assemblyai.com (100 Hours Free)</span>
+                        <ExternalLink size={11} />
+                      </a>
                     </div>
                   </div>
                 </motion.div>

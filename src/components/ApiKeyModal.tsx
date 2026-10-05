@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Eye, Plus, Trash2, ShieldCheck, ExternalLink, AlertCircle } from 'lucide-react';
+import { X, Eye, EyeOff, Plus, Trash2, ShieldCheck, ExternalLink, AlertCircle, Zap, Check } from 'lucide-react';
 import { apiChannelManager, ApiChannel } from '../services/apiChannelManager';
+import { assemblyAiService } from '../services/assemblyAiService';
 
 interface ApiKeyModalProps {
   isOpen: boolean;
@@ -23,6 +24,26 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role,
   const [settings, setSettings] = useState(apiChannelManager.getSettings());
   const [newKey, setNewKey] = useState('');
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
+  
+  // AssemblyAI API Key State
+  const [assemblyKey, setAssemblyKey] = useState(() => assemblyAiService.getStoredApiKey());
+  const [newAssemblyKey, setNewAssemblyKey] = useState('');
+  const [showAssemblyKey, setShowAssemblyKey] = useState(false);
+  const [assemblyKeySaved, setAssemblyKeySaved] = useState(false);
+
+  const handleSaveAssemblyKey = () => {
+    if (!newAssemblyKey.trim()) return;
+    assemblyAiService.setStoredApiKey(newAssemblyKey.trim());
+    setAssemblyKey(newAssemblyKey.trim());
+    setNewAssemblyKey('');
+    setAssemblyKeySaved(true);
+    setTimeout(() => setAssemblyKeySaved(false), 2500);
+  };
+
+  const handleClearAssemblyKey = () => {
+    assemblyAiService.clearStoredApiKey();
+    setAssemblyKey('');
+  };
 
   useEffect(() => {
     const handleUpdate = () => {
@@ -384,6 +405,83 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role,
                         )}
                       </div>
                     )}
+
+                    {/* AssemblyAI API Key Section (For Video Recap & Auto-SRT) */}
+                    <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                          <Zap size={14} className="text-amber-400" />
+                          <span>AssemblyAI API Key (Recap Video Auto-SRT)</span>
+                        </label>
+                        {assemblyKey && (
+                          <span className="text-[10px] font-bold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <Check size={10} /> Connected
+                          </span>
+                        )}
+                      </div>
+
+                      {assemblyKey ? (
+                        <div className="p-4 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                          <div className="flex-1 truncate pr-3">
+                            <span className="text-xs font-bold text-slate-700 dark:text-slate-200 block mb-0.5">AssemblyAI Key</span>
+                            <div className="font-mono text-[11px] text-slate-400">
+                              {showAssemblyKey ? assemblyKey : maskKey(assemblyKey)}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setShowAssemblyKey(!showAssemblyKey)}
+                              className="p-2 text-slate-400 hover:text-slate-200 rounded-lg hover:bg-white/5 transition-colors"
+                              title={showAssemblyKey ? "Hide Key" : "Show Key"}
+                            >
+                              {showAssemblyKey ? <EyeOff size={15} /> : <Eye size={15} />}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleClearAssemblyKey}
+                              className="p-2 bg-rose-500/10 text-rose-500 rounded-lg hover:bg-rose-500 hover:text-white transition-all"
+                              title="Delete Key"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="flex gap-2">
+                            <input
+                              type="password"
+                              value={newAssemblyKey}
+                              onChange={(e) => setNewAssemblyKey(e.target.value)}
+                              placeholder="Paste AssemblyAI API Key..."
+                              className="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-800 dark:text-slate-200 focus:ring-2 focus:ring-amber-400/20 outline-none transition-all font-mono"
+                            />
+                            <button
+                              type="button"
+                              onClick={handleSaveAssemblyKey}
+                              disabled={!newAssemblyKey.trim()}
+                              className="bg-amber-400 disabled:opacity-50 text-black px-4 rounded-xl font-bold text-xs hover:bg-amber-300 transition-all flex items-center gap-1.5 shrink-0"
+                            >
+                              <Check size={14} />
+                              <span>Save</span>
+                            </button>
+                          </div>
+                          {assemblyKeySaved && (
+                            <p className="text-[11px] text-emerald-400 font-medium">AssemblyAI Key saved successfully!</p>
+                          )}
+                          <a
+                            href="https://www.assemblyai.com/dashboard/signup"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 text-[10px] text-slate-400 hover:text-amber-500 transition-colors w-fit font-medium"
+                          >
+                            <ExternalLink size={10} />
+                            <span>AssemblyAI Key မရှိသေးပါက အခမဲ့ရယူရန် (Free 100 Hours) →</span>
+                          </a>
+                        </div>
+                      )}
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>

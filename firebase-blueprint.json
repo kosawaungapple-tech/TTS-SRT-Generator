@@ -225,10 +225,6 @@
     "/admin_channels/{channelId}": {
       "schema": "ApiChannel",
       "description": "Admin API key channels for the global pool."
-    },
-    "/audiobook_projects/{vbsId}": {
-      "schema": "AudiobookProject",
-      "description": "Step-by-step audiobook project data."
     }
   }
 }

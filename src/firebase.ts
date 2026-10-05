@@ -64,9 +64,9 @@ if (!validateConfig(firebaseConfig)) {
 // Initialize Firebase SDK
 const app = initializeApp(firebaseConfig);
 
-// Use initializeFirestore with long polling to bypass potential WebSocket blocks in the preview environment
+// Initialize Firestore with long polling to bypass potential WebSocket blocks in the preview environment
 export const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true,
+  experimentalAutoDetectLongPolling: true,
 }, firebaseConfig.firestoreDatabaseId);
 
 export const auth = getAuth(app);
@@ -114,11 +114,11 @@ export type { FirebaseUser };
 // Test connection to Firestore
 async function testConnection() {
   try {
+    // Only test if not in a restricted environment if possible, 
+    // but here we'll just try to reach the server once quietly.
     await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if(error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration. ");
-    }
+  } catch {
+    // Silent fail for test connection to avoid confusing console errors
   }
 }
 testConnection();

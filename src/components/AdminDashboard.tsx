@@ -270,7 +270,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     total_generations: 0,
     api_keys: [''],
     welcome_credits: 5,
-    recap_cost: 2,
     tts_cost: 1,
     rewrite_cost: 0.5
   });
@@ -1546,46 +1545,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <Eye size={10} />
                               </button>
                             </div>
-                            {/* Video Usage Info */}
-                            <div className="mt-2 pt-2 border-t border-slate-100 dark:border-white/5 space-y-1.5">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Recap Usage:</span>
-                                <span className={(() => {
-                                  const usedCount = u.lastVideoDate === new Date().toISOString().split("T")[0] ? (u.videosGeneratedToday || 0) : 0;
-                                  const limitCount = u.dailyVideoLimit || 2;
-                                  if (u.isUnlimited) return 'text-amber-500 text-[10px] font-bold';
-                                  return usedCount >= limitCount ? 'text-rose-500 text-[10px] font-bold' : 'text-emerald-500 text-[10px] font-bold';
-                                })()}>
-                                  {u.isUnlimited ? 'Unlimited' : `${u.lastVideoDate === new Date().toISOString().split("T")[0] ? u.videosGeneratedToday || 0 : 0} / ${u.dailyVideoLimit || 2}`}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-1">
-                                <button 
-                                  onClick={() => {
-                                    openModal({
-                                      title: 'Set Daily Video Limit',
-                                      message: `Set daily video transcription limit for ${u.vbsId}:`,
-                                      type: 'prompt',
-                                      inputType: 'text',
-                                      defaultValue: (u.dailyVideoLimit || 2).toString(),
-                                      onConfirm: (val) => {
-                                        const limit = parseInt(val || '2');
-                                        handleUpdateVbsUser(u.vbsId, { dailyVideoLimit: limit });
-                                      }
-                                    });
-                                  }}
-                                  className="px-1.5 py-0.5 bg-slate-100 dark:bg-white/5 text-slate-500 text-[9px] font-bold rounded hover:bg-amber-500 transition-all hover:text-white"
-                                >
-                                  Shift Limit
-                                </button>
-                                <button 
-                                  onClick={() => handleUpdateVbsUser(u.vbsId, { isUnlimited: !u.isUnlimited })}
-                                  className={`px-1.5 py-0.5 text-[9px] font-bold rounded transition-all ${u.isUnlimited ? 'bg-amber-500 text-white' : 'bg-slate-100 dark:bg-white/5 text-slate-500 hover:bg-amber-500 hover:text-white'}`}
-                                >
-                                  {u.isUnlimited ? 'Unlimited ON' : 'Unlimited OFF'}
-                                </button>
-                              </div>
-                            </div>
                           </div>
                         </td>
                         <td className="px-4 py-4">
@@ -1740,20 +1699,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div className="bg-white/50 dark:bg-slate-900/50 border border-brand-purple/10 rounded-2xl p-6 space-y-6">
                 <div className="flex items-center justify-between">
                   <div className="space-y-1">
-                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">{t('admin.allowVideoRecapAdmin')}</h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">Control if Admin Key can be used for Video Recap features.</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setGlobalSettings({ ...globalSettings, allow_video_recap_admin_key: !globalSettings.allow_video_recap_admin_key })}
-                    className={`w-12 h-6 rounded-full transition-all relative ${globalSettings.allow_video_recap_admin_key ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-700'}`}
-                  >
-                    <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${globalSettings.allow_video_recap_admin_key ? 'left-7' : 'left-1'}`} />
-                  </button>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
                     <h4 className="text-sm font-bold text-slate-900 dark:text-white">{t('admin.allowThumbnailAdmin')}</h4>
                     <p className="text-xs text-slate-500 dark:text-slate-400">Control if Admin Key can be used for Thumbnail Generator.</p>
                   </div>
@@ -1783,24 +1728,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             <div className="space-y-6">
               <div className="bg-slate-50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-6">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">Video Recap Cost (Credits)</h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">Credits charged per video transcription action.</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      value={creditSettings.videoRecapCost}
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value);
-                        setCreditSettings({ ...creditSettings, videoRecapCost: isNaN(val) ? 0 : val });
-                      }}
-                      className="w-20 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-1.5 text-sm font-bold text-center"
-                    />
-                  </div>
-                </div>
-
                 <div className="flex items-center justify-between">
                   <div className="space-y-1">
                     <h4 className="text-sm font-bold text-slate-900 dark:text-white">TTS Generation Cost (Credits)</h4>

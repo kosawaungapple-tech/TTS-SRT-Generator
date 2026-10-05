@@ -21,6 +21,26 @@ interface ChannelSettings {
   useAdminKeys: boolean;         // User Preference Toggle
 }
 
+export function isPlausibleApiKey(key?: string | null): boolean {
+  if (!key || typeof key !== 'string') return false;
+  const k = key.trim();
+  const lower = k.toLowerCase();
+  if (
+    lower.startsWith('my_') || 
+    lower.startsWith('my ') || 
+    lower.startsWith('test') || 
+    lower.startsWith('sample') || 
+    lower.startsWith('key_') ||
+    lower.startsWith('gemini_') ||
+    lower.includes('placeholder') || 
+    lower.includes('...') ||
+    k.length < 25
+  ) {
+    return false;
+  }
+  return true;
+}
+
 class ApiChannelManager {
   private adminChannels: ApiChannel[] = [];
   private userChannel: ApiChannel | null = null;
@@ -151,10 +171,15 @@ class ApiChannelManager {
       const userSaved = localStorage.getItem('userChannel');
       if (userSaved) {
         const parsedUser = JSON.parse(userSaved);
-        this.userChannel = parsedUser ? {
-          ...parsedUser,
-          status: parsedUser.status === 'limit' ? 'idle' : parsedUser.status
-        } : null;
+        if (parsedUser && isPlausibleApiKey(parsedUser.key)) {
+          this.userChannel = {
+            ...parsedUser,
+            status: parsedUser.status === 'limit' ? 'idle' : parsedUser.status
+          };
+        } else {
+          this.userChannel = null;
+          localStorage.removeItem('userChannel');
+        }
       }
 
       // 3. Load Settings
@@ -172,14 +197,16 @@ class ApiChannelManager {
       // 4. Legacy Migration (if needed)
       if (this.adminChannels.length === 0 && !this.userChannel) {
         const legacyKey = localStorage.getItem('VLOGS_BY_SAW_API_KEY');
-        if (legacyKey) {
+        if (legacyKey && isPlausibleApiKey(legacyKey)) {
           this.userChannel = {
             id: crypto.randomUUID(),
-            key: legacyKey,
+            key: legacyKey.trim(),
             status: 'active',
             label: 'Personal Key'
           };
           this.saveToStorage();
+        } else if (legacyKey) {
+          localStorage.removeItem('VLOGS_BY_SAW_API_KEY');
         }
       }
     } catch (e) {
@@ -240,16 +267,17 @@ class ApiChannelManager {
       }
     }
 
-    // 3. Otherwise (Personal Key mode selected OR fallback), use Personal Key
-    if (personalKey) {
-      return { label: 'MY KEY', key: personalKey, isShared: false };
+    // 3. Otherwise (Personal Key mode selected OR fallback), use Personal Key if valid format
+    if (personalKey && isPlausibleApiKey(personalKey)) {
+      return { label: 'MY KEY', key: personalKey.trim(), isShared: false };
     }
 
     return null;
   }
 
   getActiveKey(isAdminContext: boolean = false, isUserAdmin: boolean = false): string | null {
-    return this.getActiveSourceInfo(isAdminContext, isUserAdmin)?.key || null;
+    const key = this.getActiveSourceInfo(isAdminContext, isUserAdmin)?.key || null;
+    return (key && isPlausibleApiKey(key)) ? key.trim() : null;
   }
 
   private getSharedAdminChannel(): ApiChannel | null {
@@ -331,6 +359,10 @@ class ApiChannelManager {
 
   // User Pool
   setUserChannel(key: string) {
+    if (!key || !isPlausibleApiKey(key)) {
+      this.clearUserChannel();
+      return;
+    }
     this.userChannel = {
       id: crypto.randomUUID(),
       key: key.trim(),
@@ -358,7 +390,8 @@ class ApiChannelManager {
   }
 
   async callWithAutoSwitch<T>(apiFn: (key: string) => Promise<T>, isAdmin: boolean = false, isUserAdmin: boolean = false): Promise<T> {
-    const personalKey = this.userChannel?.key;
+    const rawPersonalKey = this.userChannel?.key;
+    const personalKey = isPlausibleApiKey(rawPersonalKey) ? rawPersonalKey!.trim() : null;
     const adminKeys = this.adminChannels.map(c => c.key);
     const useAdminMode = this.settings.useAdminKeys;
     const canUseAdminPool = this.settings.allowSharedKeys || isUserAdmin;
@@ -375,14 +408,14 @@ class ApiChannelManager {
       if (canUseAdminPool) {
         console.log("[VBS API] No personal key found, falling back to Admin Pool...");
       } else {
-        if (!isUserAdmin) throw new Error("Personal API Key မရှိသေးပါ။ Key ထည့်ပါ သို့မဟုတ် Admin Pool ပြောင်းပါ။");
+        if (!isUserAdmin) throw new Error("Personal API Key မရှိသေးပါ။ ကျေးဇူးပြု၍ Settings တွင် Key အရင်ထည့်ပါ။");
       }
     }
 
     // If we reach here, we are either in Admin Context OR Admin Mode is selected
     if (!isAdmin && useAdminMode && !canUseAdminPool) {
        if (personalKey) return await apiFn(personalKey);
-       throw new Error("Admin Pool Sharing ကို Admin မှ ပိတ်ထားပါသည်။ Personal Key ထည့်ပါ။");
+       throw new Error("Admin Pool ကို အသုံးပြုခွင့်မရှိပါ။ ကျေးဇူးပြု၍ သင်၏ Personal Key ကို အသုံးပြုပါ။");
     }
 
     // if user is regular user (no keys synced due to restricted permissions) but chose admin pool -> use SERVER POOL (send empty string to proxy)
@@ -392,7 +425,7 @@ class ApiChannelManager {
     }
 
     if (adminKeys.length === 0) {
-      throw new Error("Admin API Keys မရှိသေးပါ။ Admin ထံ ဆက်သွယ်ပါ။");
+      throw new Error("အသုံးပြုနိုင်သော API Key မရှိသေးပါ။ ကျေးဇူးပြု၍ Key ထည့်သွင်းပေးပါ။");
     }
 
     const startIndex = this.adminActiveIndex;

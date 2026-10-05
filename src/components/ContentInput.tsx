@@ -7,7 +7,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { translateError } from '../utils/errorUtils';
 import { estimateMyanmarDuration, formatMyanmarDuration } from '../utils/audioUtils';
 
-import { VBSUserControl } from '../types';
+import { VBSUserControl, ModalConfig } from '../types';
 import { checkAndDeductCredits } from '../services/creditService';
 
 interface ContentInputProps {
@@ -15,6 +15,7 @@ interface ContentInputProps {
   setText: (text: string) => void;
   getApiKey: () => string | null;
   showToast: (message: string, type: 'success' | 'error') => void;
+  openModal: (config: ModalConfig) => void;
   engineStatus: 'ready' | 'cooling' | 'limit';
   retryCountdown: number;
   speed: number;
@@ -23,6 +24,7 @@ interface ContentInputProps {
   userControl: VBSUserControl | null;
   isSharedKey: boolean;
   rewriteCost?: number;
+  onNavigateToSettings?: () => void;
 }
 
 export const ContentInput: React.FC<ContentInputProps> = ({ 
@@ -30,13 +32,15 @@ export const ContentInput: React.FC<ContentInputProps> = ({
   setText, 
   getApiKey, 
   showToast,
+  openModal,
   engineStatus,
   retryCountdown,
   speed,
   hasResult,
   isAdmin,
   userControl,
-  isSharedKey
+  isSharedKey,
+  onNavigateToSettings
 }) => {
   const { language, t } = useLanguage();
   const [isRewriting, setIsRewriting] = useState(false);
@@ -88,7 +92,13 @@ export const ContentInput: React.FC<ContentInputProps> = ({
     const trimmedApiKey = (apiKey || '').trim();
     
     if (!trimmedApiKey) {
-      showToast(t('generate.noApiKey'), 'error');
+      openModal({
+        title: t('common.error'),
+        message: t('generate.noApiKey'),
+        type: 'error',
+        confirmText: language === 'mm' ? 'ပြင်ဆင်ချက်သို့ သွားမည်' : 'Go to Settings',
+        onConfirm: () => { if (onNavigateToSettings) onNavigateToSettings(); }
+      });
       return;
     }
 
