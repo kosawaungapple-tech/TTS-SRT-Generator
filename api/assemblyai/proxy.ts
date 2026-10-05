@@ -32,6 +32,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const { action, id } = req.query;
 
+  // Extract transcript ID from path if present (e.g. /transcript/:id or /transcript/:id/srt)
+  const srtMatch = req.url?.match(/\/transcript\/([a-zA-Z0-9_-]+)\/srt/i);
+  const pollMatch = req.url?.match(/\/transcript\/([a-zA-Z0-9_-]+)(?:\?|$)/i);
+  const targetId = (id as string) || (action as string) || srtMatch?.[1] || pollMatch?.[1];
+
   try {
     // Action 0: Resolve YouTube/TikTok/Media URL
     if (req.method === 'POST' && (action === 'resolve-url' || req.url?.includes('resolve-url'))) {
@@ -73,8 +78,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Action 3: Fetch SRT
-    if (req.method === 'GET' && (action === 'srt' || req.url?.includes('/srt')) && id) {
-      const srtResp = await fetch(`https://api.assemblyai.com/v2/transcript/${id}/srt`, {
+    if (req.method === 'GET' && (action === 'srt' || req.url?.includes('/srt')) && targetId) {
+      const srtResp = await fetch(`https://api.assemblyai.com/v2/transcript/${targetId}/srt`, {
         headers: {
           'Authorization': apiKey.trim()
         }
@@ -86,9 +91,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Action 4: Poll Transcript by ID
-    if (req.method === 'GET' && (action === 'poll' || id)) {
-      const transcriptId = (id as string) || (action as string);
-      const pollResp = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
+    if (req.method === 'GET' && (action === 'poll' || targetId)) {
+      const pollResp = await fetch(`https://api.assemblyai.com/v2/transcript/${targetId}`, {
         headers: {
           'Authorization': apiKey.trim()
         }

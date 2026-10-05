@@ -24,13 +24,14 @@ import {
   ArrowRight,
   Play,
   RotateCcw,
-  Volume2
+  Volume2,
+  X
 } from 'lucide-react';
 import { GeminiTTSService } from '../services/geminiService';
 import { assemblyAiService, AssemblyAITranscriptResponse } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
 import { logActivity } from '../services/activityService';
-import { parseTimestampToSeconds, shiftSrtContent } from '../utils/subtitleUtils';
+import { parseTimestampToSeconds, shiftSrtContent, parseSrtToCues, SrtCue, generateOptimizedSubtitles } from '../utils/subtitleUtils';
 import { formatTime } from '../utils/audioUtils';
 import { VBSUserControl, ModalConfig } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -44,59 +45,6 @@ interface VideoTranscriberProps {
   userControl: VBSUserControl | null;
   onNavigateToSettings?: () => void;
   onProcessingStateChange?: (isProcessing: boolean) => void;
-}
-
-interface SrtCue {
-  index: number;
-  start: string;
-  end: string;
-  text: string;
-  speaker?: string;
-}
-
-function parseSrtToCues(srtText: string): SrtCue[] {
-  if (!srtText) return [];
-  const raw = srtText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const blocks = raw.split(/\n\s*\n/).filter(b => b.trim().length > 0);
-
-  const cues: SrtCue[] = [];
-  for (const block of blocks) {
-    const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
-    if (lines.length >= 2) {
-      let index = parseInt(lines[0], 10);
-      let timeLine = lines[1];
-      let textLines = lines.slice(2);
-
-      if (isNaN(index) || !lines[0].match(/^\d+$/)) {
-        timeLine = lines[0];
-        textLines = lines.slice(1);
-        index = cues.length + 1;
-      }
-
-      const timeParts = timeLine.split('-->');
-      if (timeParts.length === 2) {
-        const start = timeParts[0].trim();
-        const end = timeParts[1].trim();
-        let fullText = textLines.join(' ');
-        let speaker: string | undefined;
-
-        const speakerMatch = fullText.match(/^\[Speaker\s+([^\]]+)\]:\s*(.*)$/i);
-        if (speakerMatch) {
-          speaker = speakerMatch[1];
-          fullText = speakerMatch[2];
-        }
-
-        cues.push({
-          index,
-          start,
-          end,
-          text: fullText,
-          speaker
-        });
-      }
-    }
-  }
-  return cues;
 }
 
 export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({ 
@@ -522,13 +470,39 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
   // Parse SRT cues for list view (Original vs Burmese) with applied timing offset
   const originalCues = useMemo<SrtCue[]>(() => {
     const srt = getEffectiveSrt(assemblyResult?.srt);
-    return parseSrtToCues(srt);
-  }, [assemblyResult?.srt, timingOffset]);
+    const parsed = parseSrtToCues(srt);
+    if (parsed.length > 0) return parsed;
+    // Fallback: If transcript text exists, generate subtitles on the fly
+    if (assemblyResult?.transcript?.text) {
+      const dur = assemblyResult.transcript.audio_duration || 60;
+      const synth = generateOptimizedSubtitles(assemblyResult.transcript.text, dur);
+      return synth.map(s => ({
+        index: s.index,
+        start: s.startTime.replace(/\./g, ','),
+        end: s.endTime.replace(/\./g, ','),
+        text: s.text
+      }));
+    }
+    return [];
+  }, [assemblyResult?.srt, assemblyResult?.transcript?.text, assemblyResult?.transcript?.audio_duration, timingOffset]);
 
   const burmeseCues = useMemo<SrtCue[]>(() => {
     const srt = getEffectiveSrt(translatedBurmeseSrt);
-    return parseSrtToCues(srt);
-  }, [translatedBurmeseSrt, timingOffset]);
+    const parsed = parseSrtToCues(srt);
+    if (parsed.length > 0) return parsed;
+    // Fallback: If translated Burmese script is available, synthesize:
+    if (translatedNarrativeScript) {
+      const dur = assemblyResult?.transcript?.audio_duration || 60;
+      const synth = generateOptimizedSubtitles(translatedNarrativeScript, dur);
+      return synth.map(s => ({
+        index: s.index,
+        start: s.startTime.replace(/\./g, ','),
+        end: s.endTime.replace(/\./g, ','),
+        text: s.text
+      }));
+    }
+    return [];
+  }, [translatedBurmeseSrt, translatedNarrativeScript, assemblyResult?.transcript?.audio_duration, timingOffset]);
 
   // Active cues according to language selection
   const currentDisplayedCues = useMemo<SrtCue[]>(() => {
@@ -936,7 +910,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
                     )}
                     <span className="flex items-center gap-1 font-mono">
                       <FileText size={13} className="text-amber-400" />
-                      <span>{originalCues.length} Cues</span>
+                      <span>{currentDisplayedCues.length || originalCues.length} Cues</span>
                     </span>
                     {assemblyResult.transcript.confidence && (
                       <span className="flex items-center gap-1 font-mono">
@@ -1293,8 +1267,18 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
                       value={srtSearchQuery}
                       onChange={(e) => setSrtSearchQuery(e.target.value)}
                       placeholder={isMm ? 'စာတန်းထိုး ရှာရန်...' : 'Search cues...'}
-                      className="w-full bg-black/60 border border-white/10 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400/50"
+                      className="w-full bg-black/60 border border-white/10 rounded-xl pl-8 pr-8 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400/50"
                     />
+                    {srtSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setSrtSearchQuery('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-0.5"
+                        title={isMm ? 'ရှင်းလင်းမည်' : 'Clear'}
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -1341,8 +1325,40 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
                 {activeResultTab === 'cues' && (
                   <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1.5 custom-scrollbar">
                     {filteredCues.length === 0 ? (
-                      <div className="text-center py-12 text-slate-500 text-sm">
-                        {isMm ? 'ရှာဖွေမှုရလဒ် မတွေ့ပါ' : 'No subtitles found'}
+                      <div className="text-center py-12 px-4 bg-black/40 border border-white/5 rounded-2xl space-y-3">
+                        <p className="text-slate-400 text-sm font-medium">
+                          {srtSearchQuery.trim()
+                            ? (isMm ? `"${srtSearchQuery}" နှင့် ကိုက်ညီသော စာတန်းထိုး ရှာမတွေ့ပါ` : `No cues match "${srtSearchQuery}"`)
+                            : (isMm ? 'စာတန်းထိုး ရှာဖွေမှုရလဒ် မတွေ့ပါ' : 'No subtitles found')}
+                        </p>
+                        {srtSearchQuery.trim() && (
+                          <button
+                            type="button"
+                            onClick={() => setSrtSearchQuery('')}
+                            className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-colors inline-flex items-center gap-1.5"
+                          >
+                            <X size={13} />
+                            <span>{isMm ? 'ရှာဖွေမှုကို ရှင်းလင်းမည်' : 'Clear search'}</span>
+                          </button>
+                        )}
+                        {!srtSearchQuery.trim() && assemblyResult?.transcript?.text && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (assemblyResult?.transcript?.text) {
+                                const dur = assemblyResult.transcript.audio_duration || 60;
+                                const synth = generateOptimizedSubtitles(assemblyResult.transcript.text, dur);
+                                const newSrt = synth.map((sub, i) => `${i + 1}\r\n${sub.startTime.replace(/\./g, ',')} --> ${sub.endTime.replace(/\./g, ',')}\r\n${sub.text}\r\n`).join('\r\n');
+                                setAssemblyResult(prev => prev ? { ...prev, srt: newSrt } : null);
+                                showToast(isMm ? 'အချိန်ကိုက် စာတန်းထိုးများ ပြန်လည်စီစဉ်ပြီးပါပြီ ✨' : 'Subtitles regenerated!', 'success');
+                              }
+                            }}
+                            className="px-4 py-2 bg-amber-400 hover:bg-amber-300 text-black font-bold text-xs rounded-xl shadow-lg transition-transform active:scale-95 inline-flex items-center gap-1.5"
+                          >
+                            <RefreshCw size={14} />
+                            <span>{isMm ? 'စာတန်းထိုးများကို အလိုအလျောက် အပိုင်းခွဲမည်' : 'Auto Split Subtitle Cues'}</span>
+                          </button>
+                        )}
                       </div>
                     ) : (
                       filteredCues.map((cue) => {

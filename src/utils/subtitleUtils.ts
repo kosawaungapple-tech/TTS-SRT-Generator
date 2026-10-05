@@ -249,6 +249,99 @@ export function generateLRC(subtitles: SRTSubtitle[]): string {
   }).join('\r\n');
 }
 
+export interface SrtCue {
+  index: number;
+  start: string;
+  end: string;
+  text: string;
+  speaker?: string;
+}
+
+export function parseSrtToCues(srtText: string): SrtCue[] {
+  if (!srtText) return [];
+  // Strip UTF-8 BOM and clean
+  const clean = srtText.replace(/^\uFEFF/, '').trim();
+  if (!clean || clean.startsWith('<') || clean.toLowerCase().includes('<!doctype') || clean.toLowerCase().includes('<html')) {
+    return [];
+  }
+
+  const raw = clean.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const blocks = raw.split(/\n\s*\n/).filter(b => b.trim().length > 0);
+
+  const cues: SrtCue[] = [];
+
+  // Attempt 1: Standard block-by-block parsing
+  for (const block of blocks) {
+    const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length >= 2) {
+      const timeLineIdx = lines.findIndex(l => /-->|->|–>|—>/.test(l));
+      if (timeLineIdx !== -1) {
+        const timeLine = lines[timeLineIdx];
+        const textLines = lines.slice(timeLineIdx + 1);
+        let index = cues.length + 1;
+        if (timeLineIdx > 0) {
+          const parsedIdx = parseInt(lines[0].replace(/[^\d]/g, ''), 10);
+          if (!isNaN(parsedIdx)) index = parsedIdx;
+        }
+
+        const timeParts = timeLine.split(/\s*(?:-->|->|–>|—>)\s*/);
+        if (timeParts.length >= 2) {
+          const start = timeParts[0].trim();
+          const end = timeParts[1].trim();
+          let fullText = textLines.join(' ').trim();
+          let speaker: string | undefined;
+
+          const speakerMatch = fullText.match(/^\[(?:Speaker\s+)?([^\]]+)\]:\s*(.*)$/i);
+          if (speakerMatch) {
+            speaker = speakerMatch[1];
+            fullText = speakerMatch[2];
+          }
+
+          cues.push({
+            index,
+            start,
+            end,
+            text: fullText,
+            speaker
+          });
+        }
+      }
+    }
+  }
+
+  // Attempt 2: If block splitting found 0 cues, use full regex scanner across raw text
+  if (cues.length === 0) {
+    const regex = /(?:(\d+)\s*\n)?([0-9:,\.\s]+)\s*(?:-->|->|–>|—>)\s*([0-9:,\.\s]+)\s*\n([\s\S]*?)(?=(?:\n\s*\d+\s*\n|\n\s*[0-9:,\.]+\s*(?:-->|->)|\n\s*$|$))/gi;
+    let match: RegExpExecArray | null;
+    let counter = 1;
+    while ((match = regex.exec(raw)) !== null) {
+      const idx = match[1] ? parseInt(match[1], 10) : counter++;
+      const start = match[2].trim();
+      const end = match[3].trim();
+      let cueText = match[4].replace(/\n/g, ' ').trim();
+      let speaker: string | undefined;
+
+      const speakerMatch = cueText.match(/^\[(?:Speaker\s+)?([^\]]+)\]:\s*(.*)$/i);
+      if (speakerMatch) {
+        speaker = speakerMatch[1];
+        cueText = speakerMatch[2];
+      }
+
+      if (cueText) {
+        cues.push({
+          index: idx,
+          start,
+          end,
+          text: cueText,
+          speaker
+        });
+      }
+    }
+  }
+
+  return cues;
+}
+
 export function parseTimestampToSeconds(timestamp: string): number {
   if (!timestamp) return 0;
   const clean = timestamp.trim().replace(/\./g, ',');
@@ -270,7 +363,7 @@ export function parseTimestampToSeconds(timestamp: string): number {
  */
 export function shiftSrtContent(srtText: string, offsetSeconds: number): string {
   if (!srtText || offsetSeconds === 0) return srtText;
-  const raw = srtText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const raw = srtText.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const blocks = raw.split(/\n\s*\n/).filter(b => b.trim().length > 0);
 
   const shiftedBlocks: string[] = [];
@@ -280,22 +373,20 @@ export function shiftSrtContent(srtText: string, offsetSeconds: number): string 
     const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
     if (lines.length < 2) continue;
 
-    let timeLineIdx = 1;
-    if (!lines[0].match(/^\d+$/)) {
-      timeLineIdx = 0;
-    }
+    const timeLineIdx = lines.findIndex(l => /-->|->|–>|—>/.test(l));
+    if (timeLineIdx !== -1) {
+      const timeParts = lines[timeLineIdx].split(/\s*(?:-->|->|–>|—>)\s*/);
+      if (timeParts.length >= 2) {
+        const origStart = parseTimestampToSeconds(timeParts[0]);
+        const origEnd = parseTimestampToSeconds(timeParts[1]);
 
-    const timeParts = lines[timeLineIdx].split('-->');
-    if (timeParts.length === 2) {
-      const origStart = parseTimestampToSeconds(timeParts[0]);
-      const origEnd = parseTimestampToSeconds(timeParts[1]);
+        const newStart = Math.max(0, origStart + offsetSeconds);
+        const newEnd = Math.max(newStart + 0.1, origEnd + offsetSeconds);
 
-      const newStart = Math.max(0, origStart + offsetSeconds);
-      const newEnd = Math.max(newStart + 0.1, origEnd + offsetSeconds);
-
-      lines[timeLineIdx] = `${formatTime(newStart).replace(/\./g, ',')} --> ${formatTime(newEnd).replace(/\./g, ',')}`;
-      lines[0] = String(shiftedBlocks.length + 1);
-      shiftedBlocks.push(lines.join('\r\n'));
+        lines[timeLineIdx] = `${formatTime(newStart).replace(/\./g, ',')} --> ${formatTime(newEnd).replace(/\./g, ',')}`;
+        lines[0] = String(shiftedBlocks.length + 1);
+        shiftedBlocks.push(lines.join('\r\n'));
+      }
     }
   }
 

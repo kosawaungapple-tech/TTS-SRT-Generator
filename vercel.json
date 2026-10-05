@@ -2,6 +2,8 @@
   "buildCommand": "vite build",
   "outputDirectory": "dist",
   "rewrites": [
+    { "source": "/api/assemblyai/(.*)", "destination": "/api/assemblyai/proxy" },
+    { "source": "/api/gemini/(.*)", "destination": "/api/gemini/proxy" },
     { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]

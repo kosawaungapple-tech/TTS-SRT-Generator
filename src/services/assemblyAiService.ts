@@ -7,6 +7,8 @@
  * - Fallback to proxy route (/api/assemblyai/proxy) or direct browser fetch
  */
 
+import { generateOptimizedSubtitles } from '../utils/subtitleUtils';
+
 export interface AssemblyAIWord {
   text: string;
   start: number; // milliseconds
@@ -262,11 +264,9 @@ class AssemblyAIService {
       formatText = true
     } = options;
 
-    const speechModels = speechModel === 'nano' ? ['nano'] : ['universal-3-5-pro', 'universal-2'];
-
     const payload: Record<string, unknown> = {
       audio_url: audioUrl,
-      speech_models: speechModels,
+      speech_model: speechModel === 'nano' ? 'nano' : 'best',
       punctuate,
       format_text: formatText,
       speaker_labels: speakerLabels
@@ -350,21 +350,26 @@ class AssemblyAIService {
   }
 
   /**
-   * Fetch ready-to-use SRT subtitles from AssemblyAI
-   */
-  /**
    * Fetch ready-to-use SRT subtitles from AssemblyAI (with custom chars_per_caption)
    */
   async getSrtContent(id: string, apiKey: string, charsPerCaption = 36): Promise<string> {
     const query = charsPerCaption ? `?chars_per_caption=${charsPerCaption}` : '';
+    const isValidSrt = (text: string): boolean => {
+      if (!text || text.trim().length === 0) return false;
+      const clean = text.trim();
+      if (clean.startsWith('<') || clean.toLowerCase().includes('<!doctype') || clean.toLowerCase().includes('<html')) return false;
+      return /-->|->/.test(clean);
+    };
+
     // Try proxy
     try {
       const resp = await fetch(`/api/assemblyai/transcript/${id}/srt${query}`, {
         headers: { 'x-assemblyai-key': apiKey.trim() }
       });
-      if (resp.ok) {
+      const contentType = resp.headers.get('content-type') || '';
+      if (resp.ok && !contentType.includes('text/html')) {
         const srtText = await resp.text();
-        if (srtText && srtText.trim().length > 0) return srtText;
+        if (isValidSrt(srtText)) return srtText;
       }
     } catch {
       // fallback
@@ -379,7 +384,11 @@ class AssemblyAIService {
       throw new Error(`Failed to fetch SRT subtitles (${directResp.status})`);
     }
 
-    return await directResp.text();
+    const srtText = await directResp.text();
+    if (isValidSrt(srtText)) {
+      return srtText;
+    }
+    throw new Error('Received invalid SRT content from endpoint');
   }
 
   /**
@@ -539,17 +548,42 @@ class AssemblyAIService {
     onProgress?.('SRT စာတန်းထိုးဖိုင်ကို အချိန်ကိုက် စီစဉ်ပြင်ဆင်နေပါသည်...', 96);
     let srtText = '';
 
-    // Prefer high-precision word-level timestamps with silence pause detection
-    if (transcriptResult.words && transcriptResult.words.length > 0) {
-      srtText = this.generateSrtFromWords(transcriptResult.words, 36, 3500);
+    // Strategy 1: Prefer high-precision word-level timestamps with silence pause detection
+    const allWords: AssemblyAIWord[] = (transcriptResult.words && transcriptResult.words.length > 0)
+      ? transcriptResult.words
+      : (transcriptResult.utterances?.flatMap(u => (u.words || []).map(w => ({ ...w, speaker: u.speaker }))) || []);
+
+    if (allWords && allWords.length > 0) {
+      srtText = this.generateSrtFromWords(allWords, 36, 3500);
     }
 
-    if (!srtText || srtText.trim().length === 0) {
+    // Strategy 2: If word-level SRT was empty, build SRT directly from utterances
+    if ((!srtText || srtText.trim().length === 0 || !srtText.includes('-->')) && transcriptResult.utterances && transcriptResult.utterances.length > 0) {
+      srtText = transcriptResult.utterances.map((u, i) => {
+        const timecode = `${this.formatSrtTime(u.start)} --> ${this.formatSrtTime(u.end)}`;
+        const speakerPrefix = u.speaker ? `[Speaker ${u.speaker}]: ` : '';
+        return `${i + 1}\r\n${timecode}\r\n${speakerPrefix}${u.text}\r\n`;
+      }).join('\r\n');
+    }
+
+    // Strategy 3: Fetch directly from AssemblyAI native SRT endpoint
+    if (!srtText || srtText.trim().length === 0 || !srtText.includes('-->')) {
       try {
         srtText = await this.getSrtContent(transcriptId, apiKey, 36);
       } catch (e) {
         console.warn('SRT endpoint fallback failed:', e);
       }
+    }
+
+    // Strategy 4: Fallback to synthetic timed subtitles from transcript text & duration
+    if ((!srtText || srtText.trim().length === 0 || !srtText.includes('-->')) && transcriptResult.text) {
+      const dur = transcriptResult.audio_duration || 60;
+      const synthSubtitles = generateOptimizedSubtitles(transcriptResult.text, dur);
+      srtText = synthSubtitles.map((sub, i) => {
+        const start = sub.startTime.replace(/\./g, ',');
+        const end = sub.endTime.replace(/\./g, ',');
+        return `${i + 1}\r\n${start} --> ${end}\r\n${sub.text}\r\n`;
+      }).join('\r\n');
     }
 
     onProgress?.('စာတန်းထိုး ထုတ်ယူမှု အောင်မြင်စွာ ပြီးစီးပါပြီ!', 100);
