@@ -1,5 +1,5 @@
 import { formatTime, pcmToWav } from "../utils/audioUtils";
-import { generateOptimizedSubtitles, generateSubtitlesFromTimestamps, generateSRT, parseSrtToCues } from "../utils/subtitleUtils";
+import { generateOptimizedSubtitles, generateSubtitlesFromTimestamps, generateSRT } from "../utils/subtitleUtils";
 import { apiChannelManager, isPlausibleApiKey } from "./apiChannelManager";
 import { getIdToken } from "../firebase";
 import { ttsCache } from "./ttsCache";
@@ -804,11 +804,13 @@ export class GeminiTTSService {
     onProgress?: (step: string, percent: number) => void,
     onRetry?: (seconds: number, message: string) => void
   ): Promise<{ translatedSrt: string; narrativeScript: string }> {
-    const cleanSrt = srtContent.replace(/^\uFEFF/, '').trim();
-    if (!cleanSrt || cleanSrt.startsWith('<') || cleanSrt.toLowerCase().includes('<!doctype') || cleanSrt.toLowerCase().includes('<html')) {
+    const normalized = srtContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+    if (!normalized) {
       return { translatedSrt: '', narrativeScript: '' };
     }
 
+    // Parse every original block into structured cue
+    const rawBlocks = normalized.split(/\n\s*\n/).filter(b => b.trim().length > 0);
     interface SrtSourceCue {
       id: number;
       timeLine: string;
@@ -816,13 +818,31 @@ export class GeminiTTSService {
       text: string;
     }
 
-    const parsed = parseSrtToCues(cleanSrt);
-    const cues: SrtSourceCue[] = parsed.map((c, i) => ({
-      id: i + 1,
-      timeLine: `${c.start} --> ${c.end}`,
-      speaker: c.speaker,
-      text: c.text
-    }));
+    const cues: SrtSourceCue[] = [];
+    for (let i = 0; i < rawBlocks.length; i++) {
+      const lines = rawBlocks[i].split('\n').map(l => l.trim()).filter(Boolean);
+      if (lines.length >= 2) {
+        let timeLine = lines[1];
+        let textLines = lines.slice(2);
+        if (!lines[0].match(/^\d+$/)) {
+          timeLine = lines[0];
+          textLines = lines.slice(1);
+        }
+        let fullText = textLines.join(' ');
+        let speaker: string | undefined;
+        const speakerMatch = fullText.match(/^\[(?:Speaker\s+)?([^\]]+)\]:\s*(.*)$/i);
+        if (speakerMatch) {
+          speaker = speakerMatch[1];
+          fullText = speakerMatch[2];
+        }
+        cues.push({
+          id: i + 1,
+          timeLine,
+          speaker,
+          text: fullText
+        });
+      }
+    }
 
     if (cues.length === 0) {
       return { translatedSrt: srtContent, narrativeScript: '' };
