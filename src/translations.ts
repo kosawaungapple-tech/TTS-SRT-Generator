@@ -7,6 +7,7 @@ export const translations = {
       generate: { en: "Generate Voice", mm: "အသံထုတ်ယူခြင်း" },
       translator: { en: "AI Translator", mm: "ဘာသာပြန်" },
       transcriber: { en: "AI Subtitles", mm: "SRT စာတန်းထိုး" },
+      videoEditor: { en: "Video Editor", mm: "ဗီဒီယို ပြင်ဆင်ရန်" },
       thumbnail: { en: "Story Audiobook", mm: "အသံစာအုပ်" },
       history: { en: "History", mm: "မှတ်တမ်း" },
       studio: { en: "Studio", mm: "စတူဒီယို" },
@@ -19,6 +20,7 @@ export const translations = {
     generate: { en: "Audio Extraction / AI Narration", mm: "AI အသံထုတ်ယူခြင်း နှင့် ဇာတ်လမ်းပြောပြခြင်း" },
     translator: { en: "AI Translation Tool", mm: "AI ဘာသာပြန်ကိရိယာ" },
     transcriber: { en: "AI Video Transcription & SRT Subtitles", mm: "ဗီဒီယိုမှ စာတန်းထိုး နှင့် စာသားထုတ်ယူခြင်း" },
+    videoEditor: { en: "Video Subtitles, Color Grading, Aspect Ratio & Anti-Copyright Tools", mm: "စာတန်းထိုး၊ အရောင်ချိန်၊ အချိုးအစားနှင့် မူပိုင်ခွင့်လွတ် အသံ/ဗီဒီယို ပြင်ဆင်ချက်များ" },
     thumbnail: { en: "Story & Audiobook Studio (Chapters, Voices, BGM & Covers)", mm: "ပုံပြင်နှင့် ဝတ္ထု အသံစာအုပ် စတူဒီယို" },
     history: { en: "Your Generation History", mm: "ယခင်ပြုလုပ်ထားသော မှတ်တမ်းများ" },
     settings: { en: "Account & App Settings", mm: "အကောင့်နှင့် အက်ပ်ပြင်ဆင်ချက်များ" },
@@ -251,7 +253,12 @@ export const translations = {
     pause: { en: "Pause Queue", mm: "ခေတ္တရပ်မည်" },
     resume: { en: "Resume Queue", mm: "ဆက်လုပ်မည်" },
     cancelAll: { en: "Cancel Remaining", mm: "ကျန်ရှိမှု ပယ်ဖျက်မည်" },
-    retryAll: { en: "Retry Failed", mm: "မအောင်မြင်သည်များ ပြန်ကြိုးစားမည်" }
+    retryAll: { en: "Retry Failed", mm: "မအောင်မြင်သည်များ ပြန်ကြိုးစားမည်" },
+    autoScroll: { en: "Auto-Scroll", mm: "အလိုအလျောက် ဗဟိုပြုခြင်း" },
+    autoScrollOn: { en: "Auto-Scroll: ON", mm: "အလိုအလျောက် ရွှေ့ခြင်း ဖွင့်ထားသည်" },
+    autoScrollOff: { en: "Auto-Scroll: OFF", mm: "အလိုအလျောက် ရွှေ့ခြင်း ပိတ်ထားသည်" },
+    focusActive: { en: "Center Current Item", mm: "လက်ရှိအရာကို ဗဟိုပြုမည်" },
+    autoCenteredBadge: { en: "Auto-Centered", mm: "ဗဟိုပြုထားသည်" }
   },
 
   // Common / UI

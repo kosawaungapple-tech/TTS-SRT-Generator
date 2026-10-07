@@ -114,14 +114,17 @@ export const MiniAudioPlayer: React.FC<MiniAudioPlayerProps> = ({ base64Data }) 
         {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
       </button>
 
-      <audio 
-        ref={audioRef} 
-        src={audioUrl} 
-        className="hidden" 
-        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
-        onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-        onEnded={() => setIsPlaying(false)}
-      />
+      {audioUrl ? (
+        <audio 
+          ref={audioRef} 
+          src={audioUrl} 
+          className="hidden" 
+          onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+          onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+          onEnded={() => setIsPlaying(false)}
+          onError={() => {}}
+        />
+      ) : null}
     </div>
   );
 };

@@ -31,9 +31,16 @@ import {
   LogIn,
   Megaphone,
   Info,
-  PartyPopper
+  PartyPopper,
+  Type,
+  Cpu,
+  Download,
+  Laptop
 } from 'lucide-react';
-import { SystemConfig, PronunciationRule, GlobalSettings, VBSUserControl, ActivityLog, Announcement, CreditSettings } from '../types';
+import { FfmpegWorkerManager } from './FfmpegWorkerManager';
+import { downloadSetupScript } from '../utils/engineSetupGenerator';
+import { WorkerEngineService, WorkerHealthInfo } from '../services/workerEngineService';
+import { SystemConfig, PronunciationRule, GlobalSettings, VBSUserControl, ActivityLog, Announcement, CreditSettings, CustomFont } from '../types';
 import { db, collection, onSnapshot, query, orderBy, setDoc, doc, deleteDoc, updateDoc, handleFirestoreError, OperationType, getDoc, auth, where, limit, getDocs, serverTimestamp, Timestamp, getCurrentUserId } from '../firebase';
 import { apiChannelManager, ApiChannel } from '../services/apiChannelManager';
 import { Toast, ToastType } from './Toast';
@@ -62,7 +69,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   configOnly = false,
   isSessionSynced
 }) => {
-  const { t } = useLanguage();
+  const { t, isMm } = useLanguage();
   const [isLoading, setIsLoading] = useState(true);
   const [newId, setNewId] = useState('');
   const [newNote, setNewNote] = useState('');
@@ -241,7 +248,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [adminIdInput, setAdminIdInput] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'users' | 'system' | 'rules' | 'announcements'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'system' | 'rules' | 'announcements' | 'fonts' | 'ffmpeg-worker'>('users');
 
   const [newAnnouncement, setNewAnnouncement] = useState<Partial<Announcement>>({
     message: '',
@@ -255,6 +262,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   });
   const [isSavingAnnouncement, setIsSavingAnnouncement] = useState(false);
   const [editingAnnouncementId, setEditingAnnouncementId] = useState<string | null>(null);
+
+  const [newFont, setNewFont] = useState<Partial<CustomFont>>({
+    name: '',
+    family: '',
+    url: '',
+    isGoogleFont: false
+  });
+  const [isSavingFont, setIsSavingFont] = useState(false);
+  const [editingFontId, setEditingFontId] = useState<string | null>(null);
 
   // System Settings State
   const [systemConfig, setSystemConfig] = useState<SystemConfig>({
@@ -300,6 +316,69 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [showAdminKeys, setShowAdminKeys] = useState<Record<string, boolean>>({});
   const [adminKeyStatsMap, setAdminKeyStatsMap] = useState<Record<string, AdminKeyStats>>({});
 
+  // Dedicated FFmpeg Worker Engine State
+  const [workerHealth, setWorkerHealth] = useState<WorkerHealthInfo>(WorkerEngineService.getHealth());
+  const [isCheckingWorker, setIsCheckingWorker] = useState<boolean>(false);
+
+  useEffect(() => {
+    const unsub = WorkerEngineService.subscribe((h) => {
+      setWorkerHealth(h);
+    });
+    return unsub;
+  }, []);
+
+  const handleDownloadEngineSetup = (osType: 'windows' | 'mac' | 'linux') => {
+    const currentOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+    const adminCode = localStorage.getItem('vbs_access_code') || 'saw_vlogs_2026';
+    const proj = systemConfig.firebase_project_id || 'ai-studio-remix';
+
+    downloadSetupScript(osType, {
+      appOrigin: currentOrigin,
+      projectId: proj,
+      adminCode: adminCode,
+      port: 5005
+    });
+
+    const osLabel = osType === 'windows' ? 'Windows (.bat)' : 'Mac/Linux (.sh)';
+    setToast({
+      message: isMm
+        ? `🎬 ${osLabel} အတွက် FFmpeg Engine Setup Script ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!`
+        : `🎬 Downloaded FFmpeg Engine Setup Script for ${osLabel}!`,
+      type: 'success',
+      isVisible: true
+    });
+  };
+
+  const handleCheckWorkerPing = async () => {
+    setIsCheckingWorker(true);
+    try {
+      const res = await WorkerEngineService.checkHealthNow();
+      if (res.status === 'online') {
+        setToast({
+          message: isMm ? '🟢 Local PC FFmpeg Worker ချိတ်ဆက်မှု အောင်မြင်ပါသည် (Online)!' : '🟢 Local PC FFmpeg Worker is ONLINE!',
+          type: 'success',
+          isVisible: true
+        });
+      } else {
+        setToast({
+          message: isMm ? '🔴 Local Worker မတွေ့ပါ (ကွန်ပျူတာ ပိတ်ထားပါသလား သို့မဟုတ် Runner မဖွင့်ရသေးပါလား စစ်ဆေးပါ)' : '🔴 Local Worker is OFFLINE (PC shut down or runner stopped)',
+          type: 'error',
+          isVisible: true
+        });
+      }
+    } finally {
+      setIsCheckingWorker(false);
+    }
+  };
+
+  const formatWorkerUptime = (sec?: number) => {
+    if (!sec) return 'Just started';
+    const mins = Math.floor(sec / 60);
+    const hrs = Math.floor(mins / 60);
+    if (hrs > 0) return `${hrs}h ${mins % 60}m`;
+    return `${mins}m ${sec % 60}s`;
+  };
+
   useEffect(() => {
     const adminCode = localStorage.getItem('vbs_access_code') || '';
     const isOwner = adminCode === 'saw_vlogs_2026';
@@ -311,6 +390,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         stats[doc.id] = doc.data() as AdminKeyStats;
       });
       setAdminKeyStatsMap(stats);
+    }, (err) => {
+      console.warn('[VBS] AdminKeyStats snapshot error:', err);
     });
 
     return () => unsubscribe();
@@ -363,7 +444,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
       
       // Ensure session is synced on mount if already authenticated
-      const authUserId = getCurrentUserId();
+      const authUserId = getCurrentUserId() || adminCode;
       if (isAuthReady && authUserId && adminCode) {
         setDoc(doc(db, 'sessions', authUserId), {
           accessCode: adminCode,
@@ -382,6 +463,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   }, [isAuthReady]);
 
+  const handleSyncSessionNow = async () => {
+    const adminCode = localStorage.getItem('vbs_access_code') || 'saw_vlogs_2026';
+    const authUserId = getCurrentUserId() || adminCode;
+    try {
+      await setDoc(doc(db, 'sessions', authUserId), {
+        accessCode: adminCode,
+        createdAt: serverTimestamp()
+      });
+      setToast({ message: 'Admin Session Synced Successfully! 🛡️', type: 'success', isVisible: true });
+      setFetchError(null);
+      // Re-trigger listener by re-fetching
+      const q = query(collection(db, 'user_controls'), orderBy('updatedAt', 'desc'));
+      const snap = await getDocs(q);
+      const users = snap.docs.map(d => d.data() as VBSUserControl);
+      setVbsUsers(users);
+      localStorage.setItem('user_controls_fallback', JSON.stringify(users));
+    } catch (err: unknown) {
+      console.error('Session sync error:', err);
+      setToast({ message: 'Sync notice: ' + (err instanceof Error ? err.message : String(err)), type: 'info', isVisible: true });
+    }
+  };
+
   const handleAdminAuth = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setAuthError(null);
@@ -396,12 +499,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         localStorage.setItem('vbs_access_granted', 'true');
         localStorage.setItem('vbs_access_code', code);
         
-        const userId = getCurrentUserId();
+        const userId = getCurrentUserId() || code;
         if (userId) {
-          await setDoc(doc(db, 'sessions', userId), {
-            accessCode: code,
-            createdAt: serverTimestamp()
-          });
+          try {
+            await setDoc(doc(db, 'sessions', userId), {
+              accessCode: code,
+              createdAt: serverTimestamp()
+            });
+          } catch (syncErr) {
+            console.warn('Session doc write warning:', syncErr);
+          }
         }
         
         if (onAdminLogin) onAdminLogin(code);
@@ -486,7 +593,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       } else {
         setFetchError('Error loading users: ' + (err.message || 'Unknown error'));
       }
-      handleFirestoreError(error, OperationType.LIST, 'user_controls');
+      try {
+        handleFirestoreError(error, OperationType.LIST, 'user_controls');
+      } catch (e) {
+        console.warn('[VBS] Firestore user_controls error handled:', e);
+      }
     });
 
     return () => unsubscribe();
@@ -508,7 +619,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (err.message.includes('permission')) {
         setToast({ message: 'Permission Denied: Admin role required for globalRules', type: 'error', isVisible: true });
       }
-      handleFirestoreError(err, OperationType.LIST, 'globalRules');
+      try {
+        handleFirestoreError(err, OperationType.LIST, 'globalRules');
+      } catch (e) {
+        console.warn('[VBS] Firestore globalRules error handled:', e);
+      }
       setIsRulesLoading(false);
     });
 
@@ -819,6 +934,99 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  const handleSaveFont = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newFont.name?.trim() || !newFont.family?.trim() || !newFont.url?.trim()) return;
+
+    if (!getCurrentUserId()) {
+      setToast({ message: 'Auth Required', type: 'error', isVisible: true });
+      return;
+    }
+
+    setIsSavingFont(true);
+    try {
+      const fonts = globalSettings.fonts || [];
+      let updatedFonts: CustomFont[];
+
+      if (editingFontId) {
+        updatedFonts = fonts.map(f => 
+          f.id === editingFontId 
+            ? { ...f, ...newFont, id: f.id } as CustomFont 
+            : f
+        );
+        setToast({ message: 'Font updated!', type: 'success', isVisible: true });
+      } else {
+        const font: CustomFont = {
+          ...newFont,
+          id: `font_${Date.now()}`,
+          createdAt: new Date().toISOString(),
+        } as CustomFont;
+        updatedFonts = [font, ...fonts];
+        setToast({ message: 'Font added!', type: 'success', isVisible: true });
+      }
+
+      const updatedSettings = { ...globalSettings, fonts: updatedFonts };
+      setGlobalSettings(updatedSettings);
+      
+      await setDoc(doc(db, 'settings', 'global'), {
+        ...updatedSettings,
+        api_keys: updatedSettings.api_keys || [],
+        updatedAt: serverTimestamp()
+      });
+
+      setNewFont({
+        name: '',
+        family: '',
+        url: '',
+        isGoogleFont: false
+      });
+      setEditingFontId(null);
+    } catch (error) {
+      console.error("Failed to save font:", error);
+      setToast({ message: 'Failed to save font', type: 'error', isVisible: true });
+    } finally {
+      setIsSavingFont(false);
+    }
+  };
+
+  const handleDeleteFont = async (id: string) => {
+    openModal({
+      title: 'Delete Font',
+      message: 'Are you sure you want to delete this custom font?',
+      type: 'confirm',
+      confirmText: 'Delete',
+      onConfirm: async () => {
+        if (!getCurrentUserId()) {
+          setToast({ message: 'Auth Required', type: 'error', isVisible: true });
+          return;
+        }
+        try {
+          const fonts = globalSettings.fonts || [];
+          const updatedFonts = fonts.filter(f => f.id !== id);
+          
+          const updatedSettings = { ...globalSettings, fonts: updatedFonts };
+          setGlobalSettings(updatedSettings);
+          
+          await setDoc(doc(db, 'settings', 'global'), {
+            ...updatedSettings,
+            api_keys: updatedSettings.api_keys || [],
+            updatedAt: serverTimestamp()
+          });
+
+          setToast({ message: 'Font deleted', type: 'success', isVisible: true });
+        } catch (error) {
+          console.error("Failed to delete font:", error);
+          setToast({ message: 'Failed to delete font', type: 'error', isVisible: true });
+        }
+      }
+    });
+  };
+
+  const handleEditFont = (font: CustomFont) => {
+    setNewFont(font);
+    setEditingFontId(font.id);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
   const handleUpdatePassword = async (id: string) => {
     const user = vbsUsers.find(u => u.vbsId === id);
     openModal({
@@ -1243,6 +1451,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 >
                   <Megaphone size={14} /> {t('admin.tabAnnouncements') || 'Announcements'}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('fonts')}
+                  className={`px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center gap-1.5 sm:gap-2 whitespace-nowrap ${activeTab === 'fonts' ? 'bg-white dark:bg-slate-800 text-brand-purple shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                >
+                  <Type size={14} /> {t('admin.tabFonts') || 'Fonts'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('ffmpeg-worker')}
+                  className={`px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-xs font-bold transition-all flex items-center gap-1.5 sm:gap-2 whitespace-nowrap ${activeTab === 'ffmpeg-worker' ? 'bg-amber-400 text-black shadow-md font-black' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                >
+                  <Cpu size={14} className={activeTab === 'ffmpeg-worker' ? 'text-black' : 'text-amber-500'} />
+                  <span>FFmpeg Worker (Local/VPS)</span>
+                </button>
               </div>
             )}
             <button 
@@ -1256,6 +1479,234 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       </div>
 
+      {/* Quick Engine Status & 1-Click Setup Banner */}
+      <div className={`p-4 sm:p-5 rounded-2xl border transition-all flex flex-col md:flex-row items-center justify-between gap-4 shadow-xl ${
+        workerHealth.status === 'online'
+          ? 'bg-emerald-500/10 border-emerald-500/30'
+          : 'bg-amber-500/10 border-amber-500/30'
+      }`}>
+        <div className="flex items-center gap-3.5 w-full md:w-auto">
+          <div className={`p-3 rounded-2xl border shrink-0 shadow-lg ${
+            workerHealth.status === 'online'
+              ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+              : 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+          }`}>
+            <Laptop size={22} />
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <span className="font-extrabold text-sm sm:text-base text-slate-900 dark:text-white">
+                {isMm ? 'Dedicated FFmpeg Engine (Zero-Stutter Video)' : 'Dedicated FFmpeg Engine (Zero-Stutter Video)'}
+              </span>
+              <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border shadow-sm ${
+                workerHealth.status === 'online'
+                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                  : 'bg-rose-500/20 text-rose-400 border-rose-500/40'
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${workerHealth.status === 'online' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+                {workerHealth.status === 'online'
+                  ? (isMm ? 'Local PC: ONLINE 🟢' : 'Local PC: ONLINE 🟢')
+                  : (isMm ? 'Local PC: OFFLINE 🔴' : 'Local PC: OFFLINE 🔴')}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              {workerHealth.status === 'online'
+                ? (isMm 
+                    ? `သင့်ကွန်ပျူတာနှင့် ချိတ်ဆက်ထားပါသည် (${workerHealth.hostname || 'Local PC'} - Uptime: ${formatWorkerUptime(workerHealth.uptimeSeconds)}) - Video Export တိုင်း ချောမွေ့စွာ Render လုပ်နိုင်ပါပြီ`
+                    : `Connected to your computer (${workerHealth.hostname || 'Local PC'}) - Zero-stutter rendering is ready!`)
+                : (isMm 
+                    ? 'သင့် Computer ပေါ်တွင် Native FFmpeg ဖြင့် ၁၀၀% မထစ်ဘဲ Video Render လုပ်နိုင်ရန် အောက်ပါ Setup Script ကို ဒေါင်းလုဒ်ဆွဲပြီး 1-Click Run ပါ'
+                    : 'Download configured setup script to run the engine on your PC as an intermediary VPS.')}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap w-full md:w-auto shrink-0 justify-end">
+          <button
+            type="button"
+            onClick={() => handleDownloadEngineSetup('windows')}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-all shadow-md shadow-blue-500/20 active:scale-95"
+            title="Download Windows 1-Click Setup"
+          >
+            <Download size={14} />
+            <span>Windows (.bat)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleDownloadEngineSetup('mac')}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-md shadow-emerald-500/20 active:scale-95"
+            title="Download Mac/Linux 1-Click Setup"
+          >
+            <Download size={14} />
+            <span>Mac/Linux (.sh)</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleCheckWorkerPing}
+            disabled={isCheckingWorker}
+            className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-all border border-slate-200 dark:border-slate-700 active:scale-95"
+            title={isMm ? 'စစ်ဆေးမည်' : 'Check Ping'}
+          >
+            <RefreshCw size={14} className={isCheckingWorker ? 'animate-spin text-amber-400' : ''} />
+          </button>
+        </div>
+      </div>
+
+      {activeTab === 'fonts' && (
+        <div className="space-y-8">
+          <div className="premium-glass rounded-[32px] p-6 shadow-2xl border border-white/5">
+            <div className="flex items-center gap-3 mb-6">
+              <Type className="text-brand-purple" size={24} />
+              <h3 className="text-xl font-bold text-slate-900 dark:text-white">
+                {editingFontId ? 'Edit Custom Font' : 'Add New Custom Font'}
+              </h3>
+            </div>
+
+            <form onSubmit={handleSaveFont} className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Font Name (Display)</label>
+                <input
+                  type="text"
+                  value={newFont.name}
+                  onChange={(e) => setNewFont({ ...newFont, name: e.target.value })}
+                  placeholder="e.g. My Custom Myanmar Font"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3.5 text-sm text-slate-900 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                  required
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Font Family Name</label>
+                <input
+                  type="text"
+                  value={newFont.family}
+                  onChange={(e) => setNewFont({ ...newFont, family: e.target.value })}
+                  placeholder="e.g. 'MyCustomFont', sans-serif"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3.5 text-sm text-slate-900 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                  required
+                />
+              </div>
+
+              <div className="space-y-2 md:col-span-2">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Font URL (Google Fonts link or .ttf/.woff URL)</label>
+                <input
+                  type="text"
+                  value={newFont.url}
+                  onChange={(e) => setNewFont({ ...newFont, url: e.target.value })}
+                  placeholder="e.g. https://fonts.googleapis.com/css2?family=Roboto&display=swap"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3.5 text-sm text-slate-900 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                  required
+                />
+              </div>
+
+              <div className="flex items-center gap-3 md:col-span-2">
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="sr-only peer"
+                    checked={newFont.isGoogleFont}
+                    onChange={(e) => setNewFont({ ...newFont, isGoogleFont: e.target.checked })}
+                  />
+                  <div className="w-11 h-6 bg-slate-200 dark:bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-purple"></div>
+                  <span className="ms-3 text-sm font-medium text-slate-900 dark:text-slate-300">Is Google Font? (Check this if you are using a Google Fonts link)</span>
+                </label>
+              </div>
+
+              <div className="flex items-center gap-3 md:col-span-2 pt-2">
+                <button
+                  type="submit"
+                  disabled={isSavingFont}
+                  className="px-8 py-3.5 bg-brand-purple text-white rounded-2xl font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20 flex items-center gap-2"
+                >
+                  {isSavingFont ? <RefreshCw className="animate-spin" size={18} /> : <Plus size={18} />}
+                  {editingFontId ? 'Update Font' : 'Add Font'}
+                </button>
+                {editingFontId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingFontId(null);
+                      setNewFont({ name: '', family: '', url: '', isGoogleFont: false });
+                    }}
+                    className="px-8 py-3.5 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-2xl font-bold hover:bg-slate-300 dark:hover:bg-slate-700 transition-all"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
+            </form>
+          </div>
+
+          <div className="premium-glass rounded-[32px] p-6 shadow-2xl border border-white/5 overflow-hidden">
+            <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-6">Installed Custom Fonts</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="border-b border-slate-100 dark:border-slate-800/50">
+                    <th className="pb-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4">Display Name</th>
+                    <th className="pb-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4">Font Family</th>
+                    <th className="pb-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4">Type</th>
+                    <th className="pb-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/50">
+                  {(globalSettings.fonts || []).map((font) => (
+                    <tr key={font.id} className="group hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
+                      <td className="py-4 px-4">
+                        <span className="text-sm font-bold text-slate-900 dark:text-white" style={{ fontFamily: font.family }}>
+                          {font.name}
+                        </span>
+                      </td>
+                      <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400 font-mono">
+                        {font.family}
+                      </td>
+                      <td className="py-4 px-4">
+                        <span className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase ${font.isGoogleFont ? 'bg-blue-500/10 text-blue-500' : 'bg-amber-500/10 text-amber-500'}`}>
+                          {font.isGoogleFont ? 'Google Font' : 'Custom URL'}
+                        </span>
+                      </td>
+                      <td className="py-4 px-4 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => handleEditFont(font)}
+                            className="p-2 hover:bg-brand-purple/10 text-brand-purple rounded-lg transition-colors"
+                          >
+                            <Edit3 size={16} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteFont(font.id)}
+                            className="p-2 hover:bg-rose-500/10 text-rose-500 rounded-lg transition-colors"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {(!globalSettings.fonts || globalSettings.fonts.length === 0) && (
+                    <tr>
+                      <td colSpan={4} className="py-10 text-center text-slate-400 text-sm italic">
+                        No custom fonts installed yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+      {activeTab === 'ffmpeg-worker' && (
+        <FfmpegWorkerManager
+          onToast={(msg, type) =>
+            setToast({
+              message: msg,
+              type: type === 'info' ? 'success' : (type || 'success'),
+              isVisible: true
+            })
+          }
+        />
+      )}
       {activeTab === 'users' && !configOnly && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         {/* Create Form */}
@@ -1270,12 +1721,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 {!isSessionSynced && (
                    <p className="text-[10px] opacity-80 mt-1">Waiting for session sync... (ခေတ္တစောင့်ဆိုင်းပေးပါ...)</p>
                 )}
-                <button 
-                  onClick={() => window.location.reload()}
-                  className="mt-2 text-[10px] font-black uppercase tracking-widest hover:underline"
-                >
-                  Retry / Reload
-                </button>
+                <div className="flex items-center gap-2.5 mt-3">
+                  <button 
+                    type="button"
+                    onClick={handleSyncSessionNow}
+                    className="px-3.5 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-bold transition-all shadow-md active:scale-95"
+                  >
+                    Sync Admin Session Now 🛡️
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => window.location.reload()}
+                    className="text-[10px] font-black uppercase tracking-widest hover:underline text-slate-400"
+                  >
+                    Retry / Reload
+                  </button>
+                </div>
               </div>
             )}
             
@@ -1648,18 +2109,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   Current Status: <span className="text-brand-purple uppercase">{isSessionSynced ? 'Synced' : 'Syncing...'}</span>
                                 </p>
                               </div>
-                              <div className="flex gap-4">
+                              <div className="flex flex-wrap justify-center gap-3">
                                  <button 
+                                   type="button"
+                                   onClick={handleSyncSessionNow}
+                                   className="px-6 py-2.5 bg-brand-purple hover:bg-brand-purple/90 text-white rounded-full text-xs font-bold transition-all shadow-lg active:scale-95"
+                                 >
+                                   Sync Session Now 🛡️
+                                 </button>
+                                 <button 
+                                   type="button"
                                    onClick={() => window.location.reload()}
-                                   className="px-6 py-2 bg-rose-500 text-white rounded-full text-xs font-bold hover:bg-rose-600 transition-all"
+                                   className="px-6 py-2.5 bg-slate-800 text-slate-300 rounded-full text-xs font-bold hover:bg-slate-700 transition-all border border-slate-700 active:scale-95"
                                  >
                                    Reload App
                                  </button>
-                                 {!isSessionSynced && (
-                                   <div className="px-6 py-2 bg-slate-100 dark:bg-white/5 text-slate-500 rounded-full text-xs font-bold animate-pulse">
-                                     Syncing Session...
-                                   </div>
-                                 )}
                               </div>
                             </div>
                           ) : (
@@ -1676,13 +2140,177 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             )}
           </div>
-
         </div>
       </div>
       )}
 
       {activeTab === 'system' && !configOnly && (
         <div className="max-w-4xl mx-auto w-full space-y-8">
+          {/* 0. FFmpeg Dedicated Local Engine Setup */}
+          <div className="premium-glass rounded-[32px] p-6 sm:p-8 shadow-2xl transition-all duration-300 border border-amber-400/20 bg-gradient-to-br from-amber-500/[0.04] via-slate-900/60 to-purple-500/[0.04] relative overflow-hidden">
+            <div className={`absolute top-0 right-0 w-80 h-80 rounded-full blur-[90px] -z-10 pointer-events-none ${workerHealth.status === 'online' ? 'bg-emerald-500/15' : 'bg-rose-500/15'}`} />
+
+            {/* Header & Status */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-6 border-b border-white/10">
+              <div className="flex items-start gap-4">
+                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-lg border ${
+                  workerHealth.status === 'online'
+                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400 shadow-emerald-500/20'
+                    : 'bg-rose-500/20 border-rose-500/40 text-rose-400 shadow-rose-500/20'
+                }`}>
+                  <Laptop size={24} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <h3 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
+                      {isMm ? 'Dedicated FFmpeg Engine Setup (Local PC / VPS)' : 'Dedicated FFmpeg Engine Setup (Local PC / VPS)'}
+                    </h3>
+                    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider border shadow-sm ${
+                      workerHealth.status === 'online'
+                        ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                        : 'bg-rose-500/20 text-rose-400 border-rose-500/40'
+                    }`}>
+                      <span className={`w-2 h-2 rounded-full ${workerHealth.status === 'online' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+                      {workerHealth.status === 'online'
+                        ? (isMm ? 'ONLINE (ကွန်ပျူတာ ချိတ်ဆက်ထားသည်)' : 'ONLINE (PC Connected)')
+                        : (isMm ? 'OFFLINE (ကွန်ပျူတာ ပိတ်ထားသည်)' : 'OFFLINE (PC shut down)')}
+                    </span>
+                  </div>
+                  <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-2xl leading-relaxed">
+                    {isMm
+                      ? 'သင့် Computer သို့မဟုတ် VPS Server ပေါ်တွင် Native FFmpeg ဖြင့် ဗီဒီယိုကို Frame တိုင်း တိကျစွာ Render လုပ်ပေးသည့် ကြားခံ Engine ဖြစ်ပါသည်။ ကွန်ပျူတာဖွင့်ထားပါက Online ဖြစ်နေမည်ဖြစ်ပြီး ပိတ်ထားပါက Offline ဟု အလိုအလျောက် ပြသပေးပါသည်။'
+                      : 'Pre-configured setup scripts generated specifically with your current environment credentials. Runs native FFmpeg on your local PC or VPS for 100% Zero-Stutter high-speed video exports.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleCheckWorkerPing}
+                  disabled={isCheckingWorker}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-white text-xs font-bold border border-white/10 transition-all active:scale-95 disabled:opacity-50"
+                >
+                  <RefreshCw size={14} className={isCheckingWorker ? 'animate-spin text-amber-400' : ''} />
+                  <span>{isMm ? 'Connection စစ်ဆေးမည်' : 'Check Status'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('ffmpeg-worker')}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-black text-xs font-black transition-all active:scale-95 shadow-md shadow-amber-400/20"
+                >
+                  <Cpu size={14} />
+                  <span>{isMm ? 'Full Worker Settings' : 'Worker Panel'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Real-time Diagnostics Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 my-6">
+              <div className="p-3.5 rounded-2xl bg-slate-900/40 border border-white/5 space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Target Host</span>
+                <p className="text-xs sm:text-sm font-mono font-bold text-amber-300 truncate" title={typeof window !== 'undefined' ? window.location.origin : ''}>
+                  {typeof window !== 'undefined' ? window.location.origin : ''}
+                </p>
+              </div>
+              <div className="p-3.5 rounded-2xl bg-slate-900/40 border border-white/5 space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Port</span>
+                <p className="text-xs sm:text-sm font-mono font-bold text-white">5005 (Dedicated)</p>
+              </div>
+              <div className="p-3.5 rounded-2xl bg-slate-900/40 border border-white/5 space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">FFmpeg Engine</span>
+                <p className="text-xs sm:text-sm font-bold text-slate-200 truncate">
+                  {workerHealth.status === 'online' ? (workerHealth.ffmpegAvailable ? 'Native FFmpeg Ready 🟢' : 'Needs FFmpeg in PATH') : 'Offline (Runner not active)'}
+                </p>
+              </div>
+              <div className="p-3.5 rounded-2xl bg-slate-900/40 border border-white/5 space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Uptime</span>
+                <p className="text-xs sm:text-sm font-bold text-slate-200">
+                  {workerHealth.status === 'online' ? formatWorkerUptime(workerHealth.uptimeSeconds) : '0m'}
+                </p>
+              </div>
+            </div>
+
+            {/* 1-Click Download Action Buttons */}
+            <div className="space-y-3 pt-2">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-black uppercase tracking-widest text-amber-400 flex items-center gap-2">
+                  <Download size={14} />
+                  <span>{isMm ? 'Download Engine Setup (သင့် Computer ပေါ်တွင် Run ရန် Script များ)' : 'Download Engine Setup Scripts (Configured with Your Current Credentials)'}</span>
+                </h4>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Windows .bat Download */}
+                <button
+                  type="button"
+                  onClick={() => handleDownloadEngineSetup('windows')}
+                  className="flex items-center justify-between p-4 rounded-2xl bg-gradient-to-r from-blue-600/20 to-blue-500/10 hover:from-blue-600/30 hover:to-blue-500/20 border border-blue-500/30 text-white transition-all group active:scale-98 text-left shadow-lg"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 rounded-xl bg-blue-500 text-white font-black shadow-md shadow-blue-500/30 group-hover:scale-105 transition-transform">
+                      <Download size={20} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-extrabold text-sm sm:text-base text-white">Download Engine Setup (.bat)</span>
+                        <span className="px-2 py-0.5 rounded text-[9px] font-black uppercase bg-blue-500/30 text-blue-300 border border-blue-500/40">Windows</span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {isMm ? 'Windows အတွက် Double-click နှိပ်ရုံဖြင့် Node.js/FFmpeg စစ်ပြီး အလိုအလျောက် စတင်ပါမည်' : 'Automated setup for Windows. Installs dependencies and launches worker on port 5005.'}
+                      </p>
+                    </div>
+                  </div>
+                </button>
+
+                {/* Mac / Linux .sh Download */}
+                <button
+                  type="button"
+                  onClick={() => handleDownloadEngineSetup('mac')}
+                  className="flex items-center justify-between p-4 rounded-2xl bg-gradient-to-r from-emerald-600/20 to-emerald-500/10 hover:from-emerald-600/30 hover:to-emerald-500/20 border border-emerald-500/30 text-white transition-all group active:scale-98 text-left shadow-lg"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 rounded-xl bg-emerald-500 text-white font-black shadow-md shadow-emerald-500/30 group-hover:scale-105 transition-transform">
+                      <Download size={20} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-extrabold text-sm sm:text-base text-white">Download Engine Setup (.sh)</span>
+                        <span className="px-2 py-0.5 rounded text-[9px] font-black uppercase bg-emerald-500/30 text-emerald-300 border border-emerald-500/40">Mac & Linux</span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {isMm ? 'Mac နှင့် Linux အတွက် Terminal bash ဖြင့် အလွယ်တကူ run နိုင်သော setup script ဖြစ်ပါသည်' : 'Automated setup for macOS & Linux with Homebrew/Apt dependency verification.'}
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Instructions & Explanation */}
+            <div className="mt-5 p-4 rounded-2xl bg-amber-400/10 border border-amber-400/20 text-xs text-amber-200/90 leading-relaxed space-y-1.5">
+              <div className="flex items-center gap-2 font-bold text-amber-300">
+                <Info size={15} className="shrink-0" />
+                <span>{isMm ? '💡 Computer ကို ကြားခံ VPS အဖြစ် အသုံးပြုခြင်း လမ်းညွှန်ချက်:' : '💡 Using Your PC as an Intermediary VPS Server:'}</span>
+              </div>
+              <p className="text-slate-300 pl-5">
+                {isMm
+                  ? '၁။ အပေါ်က Download Engine Setup (.bat သို့မဟုတ် .sh) ကို ဒေါင်းလုဒ်ဆွဲပြီး သင့် Computer တွင် ဖွင့်ထားပါ။'
+                  : '1. Download the Engine Setup file (.bat for Windows or .sh for Mac/Linux) and launch it on your PC.'}
+              </p>
+              <p className="text-slate-300 pl-5">
+                {isMm
+                  ? '၂။ ကွန်ပျူတာ ဖွင့်ထားပြီး Worker run နေချိန်တွင် စနစ်က 🟢 ONLINE ဟု အလိုအလျောက် ပြသမည်ဖြစ်ပြီး ကွန်ပျူတာ ပိတ်ထားပါက 🔴 OFFLINE ဟု ပြပေးပါမည်။'
+                  : '2. While your computer is running the worker, status shows 🟢 ONLINE. When you turn off the computer, it automatically shows 🔴 OFFLINE.'}
+              </p>
+              <p className="text-slate-300 pl-5">
+                {isMm
+                  ? '၃။ Video Export ထုတ်သည့်အခါ သင့် PC ပေါ်ရှိ FFmpeg ဖြင့် တိုက်ရိုက် Process လုပ်ပေးသဖြင့် Browser ကဲ့သို့ Frame Dropping လုံးဝမဖြစ်တော့ဘဲ ၁၀၀% မထစ်သော HD Video ကို မြန်ဆန်စွာ ရရှိပါမည်။ နောင်တွင် VPS ဝယ်ယူပါကလည်း ဤအတိုင်း VPS ပေါ်တွင် ဆက်လက် Run နိုင်ပါသည်။'
+                  : '3. Video rendering utilizes native FFmpeg with zero frame drops. In the future, you can run this exact script on any VPS server.'}
+              </p>
+            </div>
+          </div>
+
           {/* Admin Master Settings - Hidden Section */}
           {vbsUsers.some(u => u.role === 'admin' && u.vbsId === auth.currentUser?.uid) && (
             <div className="premium-glass rounded-[32px] p-6 sm:p-8 shadow-2xl transition-all duration-300 border border-brand-purple/20 bg-brand-purple/5">
@@ -2449,117 +3077,117 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       )}
     </div>
 
-      {/* Activity Logs Modal */}
-      <AnimatePresence>
-        {selectedUserLogs && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setSelectedUserLogs(null)}
-              className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
-            />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-2xl bg-white dark:bg-slate-900 rounded-[32px] shadow-2xl border border-slate-200 dark:border-white/10 overflow-hidden flex flex-col max-h-[80vh]"
-            >
-              <div className="p-6 border-b border-slate-200 dark:border-white/5 flex items-center justify-between bg-slate-50/50 dark:bg-white/[0.02]">
-                <div className="flex items-center gap-4">
-                  <div className="p-3 bg-brand-purple/10 rounded-2xl text-brand-purple">
-                    <History size={24} />
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">လုပ်ဆောင်ချက်မှတ်တမ်းများ</h3>
-                    <p className="text-xs text-slate-500 font-medium font-mono uppercase tracking-wider mt-1">User ID: {selectedUserLogs}</p>
-                  </div>
+    {/* Activity Logs Modal */}
+    <AnimatePresence>
+      {selectedUserLogs && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setSelectedUserLogs(null)}
+            className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
+          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+            className="relative w-full max-w-2xl bg-white dark:bg-slate-900 rounded-[32px] shadow-2xl border border-slate-200 dark:border-white/10 overflow-hidden flex flex-col max-h-[80vh]"
+          >
+            <div className="p-6 border-b border-slate-200 dark:border-white/5 flex items-center justify-between bg-slate-50/50 dark:bg-white/[0.02]">
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-brand-purple/10 rounded-2xl text-brand-purple">
+                  <History size={24} />
                 </div>
-                <button 
-                  onClick={() => setSelectedUserLogs(null)}
-                  className="p-2 hover:bg-slate-200 dark:hover:bg-white/10 rounded-xl transition-all text-slate-500"
-                >
-                  <X size={20} />
-                </button>
+                <div>
+                  <h3 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">လုပ်ဆောင်ချက်မှတ်တမ်းများ</h3>
+                  <p className="text-xs text-slate-500 font-medium font-mono uppercase tracking-wider mt-1">User ID: {selectedUserLogs}</p>
+                </div>
               </div>
+              <button 
+                onClick={() => setSelectedUserLogs(null)}
+                className="p-2 hover:bg-slate-200 dark:hover:bg-white/10 rounded-xl transition-all text-slate-500"
+              >
+                <X size={20} />
+              </button>
+            </div>
 
-              <div className="flex-1 overflow-y-auto p-6 custom-scrollbar space-y-4">
-                {isLogsLoading ? (
-                   <div className="flex flex-col items-center justify-center py-20 gap-4">
-                     <RefreshCw size={32} className="text-brand-purple animate-spin" />
-                     <p className="text-sm text-slate-500 font-bold uppercase tracking-widest animate-pulse">Loading Logs...</p>
-                   </div>
-                ) : activityLogs.length === 0 ? (
-                   <div className="text-center py-20 bg-slate-50 dark:bg-white/5 rounded-3xl border border-dashed border-slate-200 dark:border-slate-800">
-                     <p className="text-slate-500 italic">မှတ်တမ်းမရှိသေးပါ။ (No logs found for this user.)</p>
-                   </div>
-                ) : (
-                  <div className="space-y-3">
-                    {activityLogs.map((log) => (
-                      <div key={log.id} className="p-4 bg-slate-50 dark:bg-white/5 rounded-2xl border border-slate-200 dark:border-white/10 flex items-start gap-4 hover:border-brand-purple/30 transition-all group">
-                        <div className={`p-2 rounded-xl shrink-0 ${
-                          log.type === 'login' ? 'bg-blue-500/10 text-blue-500' :
-                          log.type === 'tts' ? 'bg-brand-purple/10 text-brand-purple' :
-                          log.type === 'transcription' ? 'bg-amber-500/10 text-amber-500' :
-                          'bg-emerald-500/10 text-emerald-500'
-                        }`}>
-                          {log.type === 'login' ? <LogIn size={16} /> :
-                           log.type === 'tts' ? <Mic2 size={16} /> :
-                           log.type === 'transcription' ? <FileVideo size={16} /> :
-                           <CheckCircle2 size={16} />}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between gap-4 mb-1">
-                            <span className="text-xs font-bold uppercase tracking-widest text-slate-400">
-                              {log.type}
-                            </span>
-                            <span className="text-[10px] text-slate-500 font-medium">
-                              {formatDate(log.createdAt)}
-                            </span>
-                          </div>
-                          <p className="text-sm text-slate-700 dark:text-slate-300 font-medium leading-relaxed">
-                            {log.details}
-                          </p>
-                        </div>
+            <div className="flex-1 overflow-y-auto p-6 custom-scrollbar space-y-4">
+              {isLogsLoading ? (
+                 <div className="flex flex-col items-center justify-center py-20 gap-4">
+                   <RefreshCw size={32} className="text-brand-purple animate-spin" />
+                   <p className="text-sm text-slate-500 font-bold uppercase tracking-widest animate-pulse">Loading Logs...</p>
+                 </div>
+              ) : activityLogs.length === 0 ? (
+                 <div className="text-center py-20 bg-slate-50 dark:bg-white/5 rounded-3xl border border-dashed border-slate-200 dark:border-slate-800">
+                   <p className="text-slate-500 italic">မှတ်တမ်းမရှိသေးပါ။ (No logs found for this user.)</p>
+                 </div>
+              ) : (
+                <div className="space-y-3">
+                  {activityLogs.map((log) => (
+                    <div key={log.id} className="p-4 bg-slate-50 dark:bg-white/5 rounded-2xl border border-slate-200 dark:border-white/10 flex items-start gap-4 hover:border-brand-purple/30 transition-all group">
+                      <div className={`p-2 rounded-xl shrink-0 ${
+                        log.type === 'login' ? 'bg-blue-500/10 text-blue-500' :
+                        log.type === 'tts' ? 'bg-brand-purple/10 text-brand-purple' :
+                        log.type === 'transcription' ? 'bg-amber-500/10 text-amber-500' :
+                        'bg-emerald-500/10 text-emerald-500'
+                      }`}>
+                        {log.type === 'login' ? <LogIn size={16} /> :
+                         log.type === 'tts' ? <Mic2 size={16} /> :
+                         log.type === 'transcription' ? <FileVideo size={16} /> :
+                         <CheckCircle2 size={16} />}
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              
-              <div className="p-6 border-t border-slate-200 dark:border-white/5 bg-slate-50/50 dark:bg-white/[0.02] flex justify-end">
-                <button
-                  onClick={() => setSelectedUserLogs(null)}
-                  className="px-6 py-2.5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-xl font-bold text-sm hover:opacity-90 transition-all shadow-lg"
-                >
-                  Close
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-4 mb-1">
+                          <span className="text-xs font-bold uppercase tracking-widest text-slate-400">
+                            {log.type}
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-medium">
+                            {formatDate(log.createdAt)}
+                          </span>
+                        </div>
+                        <p className="text-sm text-slate-700 dark:text-slate-300 font-medium leading-relaxed">
+                          {log.details}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            
+            <div className="p-6 border-t border-slate-200 dark:border-white/5 bg-slate-50/50 dark:bg-white/[0.02] flex justify-end">
+              <button
+                onClick={() => setSelectedUserLogs(null)}
+                className="px-6 py-2.5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-xl font-bold text-sm hover:opacity-90 transition-all shadow-lg"
+              >
+                Close
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
 
-      <Toast 
-        message={toast.message}
-        type={toast.type}
-        isVisible={toast.isVisible}
-        onClose={() => setToast(prev => ({ ...prev, isVisible: false }))}
-      />
-      <Modal
-        isOpen={modal.isOpen}
-        onClose={() => setModal({ ...modal, isOpen: false })}
-        onConfirm={modal.onConfirm}
-        title={modal.title}
-        message={modal.message}
-        type={modal.type}
-        confirmText={modal.confirmText}
-        cancelText={modal.cancelText}
-        placeholder={modal.placeholder}
-        defaultValue={modal.defaultValue}
-        inputType={modal.inputType}
-      />
-    </>
-  );
+    <Toast 
+      message={toast.message}
+      type={toast.type}
+      isVisible={toast.isVisible}
+      onClose={() => setToast(prev => ({ ...prev, isVisible: false }))}
+    />
+    <Modal
+      isOpen={modal.isOpen}
+      onClose={() => setModal({ ...modal, isOpen: false })}
+      onConfirm={modal.onConfirm}
+      title={modal.title}
+      message={modal.message}
+      type={modal.type}
+      confirmText={modal.confirmText}
+      cancelText={modal.cancelText}
+      placeholder={modal.placeholder}
+      defaultValue={modal.defaultValue}
+      inputType={modal.inputType}
+    />
+  </>
+);
 };

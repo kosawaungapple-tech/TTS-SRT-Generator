@@ -174,7 +174,12 @@ export const CustomVoiceProfile: React.FC<CustomVoiceProfileProps> = ({ onProfil
           </div>
           {audioUrl && (
             <div className="flex-1 max-w-[200px]">
-              <audio src={audioUrl} controls className="h-8 w-full" />
+              <audio 
+                src={audioUrl} 
+                controls 
+                className="h-8 w-full" 
+                onError={() => {}}
+              />
             </div>
           )}
         </div>

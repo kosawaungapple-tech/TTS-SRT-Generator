@@ -24,7 +24,8 @@ import {
   ArrowRight,
   Play,
   RotateCcw,
-  Volume2
+  Volume2,
+  Film
 } from 'lucide-react';
 import { GeminiTTSService } from '../services/geminiService';
 import { assemblyAiService, AssemblyAITranscriptResponse } from '../services/assemblyAiService';
@@ -44,6 +45,7 @@ interface VideoTranscriberProps {
   userControl: VBSUserControl | null;
   onNavigateToSettings?: () => void;
   onProcessingStateChange?: (isProcessing: boolean) => void;
+  onSendToVideoEditor?: (media: { videoFile?: File; videoUrl?: string; fileName?: string; srtContent?: string }) => void;
 }
 
 interface SrtCue {
@@ -107,7 +109,8 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
   isAdmin,
   userControl,
   onNavigateToSettings,
-  onProcessingStateChange
+  onProcessingStateChange,
+  onSendToVideoEditor
 }) => {
   const { language, t } = useLanguage();
   const isMm = language === 'mm';
@@ -992,6 +995,26 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
                     <span>Voice Studio</span>
                   </button>
 
+                  {/* Open in Video Editor Studio */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onSendToVideoEditor) {
+                        onSendToVideoEditor({
+                          videoFile: assemblyMediaFile || undefined,
+                          videoUrl: mediaFileUrl || undefined,
+                          fileName: assemblyMediaFile?.name || 'transcribed_video.mp4',
+                          srtContent: translatedBurmeseSrt || assemblyResult?.srt || undefined
+                        });
+                      }
+                    }}
+                    className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 font-bold text-xs border border-amber-400/40 shadow-sm transition-all active:scale-95"
+                    title="Open video and subtitles in Video Editor Studio"
+                  >
+                    <Film size={14} />
+                    <span>{isMm ? 'Video Editor 🎬' : 'Video Editor 🎬'}</span>
+                  </button>
+
                   {/* Download Text Transcript / Recap */}
                   <button
                     type="button"
@@ -1019,6 +1042,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
                           playsInline
                           onTimeUpdate={(e) => setPlaybackTime(e.currentTarget.currentTime)}
                           onLoadedMetadata={(e) => setMediaDuration(e.currentTarget.duration)}
+                          onError={() => {}}
                         />
                         {/* Floating Subtitle Overlay on Video */}
                         {activeCue && (
@@ -1080,6 +1104,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
                         controls
                         onTimeUpdate={(e) => setPlaybackTime(e.currentTarget.currentTime)}
                         onLoadedMetadata={(e) => setMediaDuration(e.currentTarget.duration)}
+                        onError={() => {}}
                       />
                       {/* Active Subtitle Display for Audio */}
                       {activeCue ? (

@@ -222,16 +222,11 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
     
     const blob = new Blob([data], { type: mimeType });
     const url = URL.createObjectURL(blob);
-    const audio = new Audio();
-    audio.src = url;
+    const audio = new Audio(url);
     audio.playbackRate = 1.0; 
     
-    audio.onerror = (e) => {
-      console.error("[DEBUG] Fallback Audio Player Error:", e);
-      // Log more details if available
-      if (audio.error) {
-        console.error(`[DEBUG] Audio Error Code: ${audio.error.code}, Message: ${audio.error.message}`);
-      }
+    audio.onerror = () => {
+      console.error("[DEBUG] Fallback Audio Player Error");
       showToast("Audio playback error", "error");
     };
 

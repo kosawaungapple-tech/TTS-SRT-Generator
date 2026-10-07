@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, Check, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Clipboard, Mic2, Play, Info, Sparkles, X, Calendar, Layers, Pause, RotateCcw, BookOpen, Eye, EyeOff, Zap } from 'lucide-react';
+import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, Check, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Clipboard, Mic2, Play, Info, Sparkles, X, Calendar, Layers, Pause, RotateCcw, BookOpen, Eye, EyeOff, Zap, Film, Crosshair } from 'lucide-react';
 import { WelcomePage } from './components/WelcomePage';
 import { Header } from './components/Header';
 import { ApiKeyModal } from './components/ApiKeyModal';
@@ -10,6 +10,7 @@ import { OutputPreview } from './components/OutputPreview';
 import { AdminDashboard } from './components/AdminDashboard';
 import { VideoTranscriber } from './components/VideoTranscriber';
 import { ThumbnailCreator } from './components/ThumbnailCreator';
+import { VideoEditorStudio, VideoEditorSharedMedia } from './components/VideoEditorStudio';
 import { PrivacyPolicy } from './components/PrivacyPolicy';
 import { TermsOfService } from './components/TermsOfService';
 import { AnnouncementPanel } from './components/AnnouncementPanel';
@@ -27,7 +28,7 @@ import { formatMyanmarDuration, renderProcessedAudio, pcmToWav } from './utils/a
 import { generateOptimizedSubtitles } from './utils/subtitleUtils';
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId } from './firebase';
 
-type Tab = 'generate' | 'translator' | 'transcriber' | 'thumbnail' | 'history' | 'tools' | 'admin' | 'vbs-admin';
+type Tab = 'generate' | 'translator' | 'transcriber' | 'video-editor' | 'thumbnail' | 'history' | 'tools' | 'admin' | 'vbs-admin';
 
 export default function App() {
   const { language, t } = useLanguage();
@@ -66,6 +67,9 @@ export default function App() {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [isTranscriberProcessing, setIsTranscriberProcessing] = useState(false);
   const [isAudiobookProcessing, setIsAudiobookProcessing] = useState(false);
+  const [isVideoEditorProcessing, setIsVideoEditorProcessing] = useState(false);
+  const [videoEditorInitialData, setVideoEditorInitialData] = useState<VideoEditorSharedMedia | null>(null);
+  const [subtitlesSubTab, setSubtitlesSubTab] = useState<'transcriber' | 'video-editor'>('transcriber');
   const [profile, setProfile] = useState<VBSUserControl | null>(null);
   const [vbsId, setVbsId] = useState<string | null>(localStorage.getItem('VBS_USER_ID'));
   const [userControl, setUserControl] = useState<VBSUserControl | null>(null);
@@ -126,6 +130,39 @@ export default function App() {
       setVbsId(newId);
     }
   }, [vbsId]);
+
+  // Font Injection System
+  useEffect(() => {
+    if (!globalSettings.fonts || globalSettings.fonts.length === 0) return;
+
+    const fontContainerId = 'vbs-custom-fonts-container';
+    let container = document.getElementById(fontContainerId);
+    if (!container) {
+      container = document.createElement('div');
+      container.id = fontContainerId;
+      document.head.appendChild(container);
+    }
+    container.innerHTML = ''; // Clear previous injections
+
+    globalSettings.fonts.forEach(font => {
+      if (font.isGoogleFont) {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = font.url;
+        container?.appendChild(link);
+      } else {
+        const style = document.createElement('style');
+        style.textContent = `
+          @font-face {
+            font-family: '${font.family}';
+            src: url('${font.url}');
+            font-display: swap;
+          }
+        `;
+        container?.appendChild(style);
+      }
+    });
+  }, [globalSettings.fonts]);
 
   // Use this for global notifications or debug
   useEffect(() => {
@@ -331,6 +368,8 @@ export default function App() {
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [isBatchPaused, setIsBatchPaused] = useState(false);
   const [historyStatusFilter, setHistoryStatusFilter] = useState<'all' | 'queued' | 'processing' | 'completed' | 'failed'>('all');
+  const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState(true);
+  const [activeProcessingBatchId, setActiveProcessingBatchId] = useState<string | null>(null);
   const isBatchProcessingRef = useRef(false);
   const isBatchPausedRef = useRef(false);
   const isBatchCancelledRef = useRef(false);
@@ -521,21 +560,24 @@ export default function App() {
   useEffect(() => {
     // We allow session sync for both real users AND anonymous users who have granted access
     // This is because the "Access Code" is the primary login method in this app
-    if (isAccessGranted && isAuthReady && auth.currentUser && accessCode) {
+    const code = accessCode || localStorage.getItem('vbs_access_code') || '';
+    const isOwner = code === 'saw_vlogs_2026';
+
+    if ((isAccessGranted || isOwner) && isAuthReady && code) {
       setIsSessionSynced(true);
 
       const syncSession = async () => {
-        const authUserId = getCurrentUserId();
+        const authUserId = getCurrentUserId() || code;
         if (!authUserId) return;
 
         try {
           await setDoc(doc(db, 'sessions', authUserId), {
-            accessCode: accessCode,
+            accessCode: code,
             createdAt: serverTimestamp()
           });
-          console.log('[VBS] Session synced in background for:', accessCode);
+          console.log('[VBS] Session synced in background for:', code);
         } catch (e) {
-          console.warn('[VBS] Background session sync failed:', e);
+          console.warn('[VBS] Background session sync warning:', e);
         }
       };
       syncSession();
@@ -967,6 +1009,48 @@ export default function App() {
     );
   }, [history, historySearch, historyStatusFilter]);
 
+  // Active batch item currently being processed
+  const currentProcessingItem = useMemo(() => {
+    if (activeProcessingBatchId) {
+      const found = history.find(i => i.id === activeProcessingBatchId);
+      if (found) return found;
+    }
+    return history.find(i => i.status === 'processing') || null;
+  }, [history, activeProcessingBatchId]);
+
+  // Center viewport on a specific history item
+  const centerOnHistoryItem = useCallback((itemId: string, smooth = true) => {
+    const el = document.getElementById(`history-item-${itemId}`);
+    if (el) {
+      const prefersReducedMotion = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      el.scrollIntoView({
+        behavior: smooth && !prefersReducedMotion ? 'smooth' : 'auto',
+        block: 'center',
+        inline: 'nearest'
+      });
+      return true;
+    }
+    return false;
+  }, []);
+
+  // Auto-scroll effect: centers viewport on the currently processing batch item
+  useEffect(() => {
+    if (!isAutoScrollEnabled || activeTab !== 'history' || !currentProcessingItem) {
+      return;
+    }
+
+    // If currently filtered to completed/failed, switch to 'all' so the processing item is visible in DOM
+    if (historyStatusFilter === 'completed' || historyStatusFilter === 'failed') {
+      setHistoryStatusFilter('all');
+    }
+
+    const timer = setTimeout(() => {
+      centerOnHistoryItem(currentProcessingItem.id, true);
+    }, 120);
+
+    return () => clearTimeout(timer);
+  }, [currentProcessingItem?.id, activeTab, isAutoScrollEnabled, historyStatusFilter, centerOnHistoryItem]);
+
   const handleGenerate = async () => {
     if (!text.trim()) {
       setError('Please enter some text to generate voiceover.');
@@ -1390,6 +1474,7 @@ export default function App() {
           break;
         }
 
+        setActiveProcessingBatchId(nextItem.id);
         updateHistoryItem(nextItem.id, { status: 'processing', error: undefined });
 
         const effectiveKey = getEffectiveApiKey();
@@ -1439,6 +1524,7 @@ export default function App() {
     } finally {
       isBatchProcessingRef.current = false;
       setIsBatchProcessing(false);
+      setActiveProcessingBatchId(null);
     }
   }, [getEffectiveApiKey, updateHistoryItem, executeSingleTTSItem, accessCode, isAccessGranted, isAuthReady, globalSettings.total_generations]);
 
@@ -1505,6 +1591,8 @@ export default function App() {
     }
 
     showToast(`Added ${newItems.length} items to batch queue!`, 'success');
+    setHistoryStatusFilter('all');
+    setIsAutoScrollEnabled(true);
     setActiveTab('history');
 
     isBatchCancelledRef.current = false;
@@ -1525,6 +1613,7 @@ export default function App() {
   }, [updateHistoryItem, startBatchQueue]);
 
   const handleCancelQueuedItem = useCallback((id: string) => {
+    setActiveProcessingBatchId(prev => (prev === id ? null : prev));
     setHistory(prev => prev.filter(i => i.id !== id));
     if (isAccessGranted && isAuthReady && auth.currentUser && !auth.currentUser.isAnonymous) {
       deleteDoc(doc(db, 'history', id)).catch(() => {});
@@ -1547,6 +1636,7 @@ export default function App() {
 
   const handleCancelAllQueued = useCallback(() => {
     isBatchCancelledRef.current = true;
+    setActiveProcessingBatchId(null);
     setHistory(prev => prev.filter(i => i.status !== 'queued'));
     showToast('Cancelled remaining queued items', 'info');
   }, [showToast]);
@@ -1719,6 +1809,12 @@ export default function App() {
   }, [isLoading, result, activeTab]);
 
   const handleTabSwitch = useCallback((targetTab: Tab) => {
+    if (targetTab === 'video-editor') {
+      setActiveTab('transcriber');
+      setSubtitlesSubTab('video-editor');
+      return;
+    }
+
     if (targetTab === activeTab) return;
 
     const currentTabHasProcess = 
@@ -2062,7 +2158,7 @@ export default function App() {
                 label={t('nav.transcriber')}
                 tooltip={isPremium ? t('tooltips.premiumActive') : t('tooltips.transcriber')}
                 locked={!isPremium}
-                isProcessing={isTranscriberProcessing}
+                isProcessing={isTranscriberProcessing || isVideoEditorProcessing}
               />
               <NavTab
                 id="thumbnail"
@@ -2320,15 +2416,15 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Tab 2: Transcriber (Video / Audio SRT Studio) */}
+              {/* Tab 2: AI Subtitles & Video Studio (Transcriber & Video Editor) */}
               <div
                 id="tab-panel-transcriber"
                 role="tabpanel"
                 aria-hidden={activeTab !== 'transcriber'}
                 className={activeTab === 'transcriber' ? 'block' : 'hidden'}
               >
-                <div className="max-w-4xl mx-auto">
-                  {!isPremium ? (
+                {!isPremium ? (
+                  <div className="max-w-4xl mx-auto">
                     <div className="glass-card rounded-[32px] p-12 text-center space-y-6 max-w-2xl mx-auto border border-white/5">
                       <div className="w-20 h-20 bg-rose-500/10 text-rose-500 rounded-3xl flex items-center justify-center mx-auto mb-4 border border-rose-500/20">
                         <Lock size={40} />
@@ -2336,12 +2432,12 @@ export default function App() {
                       <h3 className="text-2xl font-bold text-slate-900 dark:text-white">
                         {isExpired ? "သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ" : "ဤသည်မှာ Premium Feature ဖြစ်ပါသည်။"}
                       </h3>
-                        <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
-                          {isExpired 
-                            ? "သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ။ အသုံးပြုလိုပါက Admin ထံ ဆက်သွယ်၍ သက်တမ်းတိုးပါ။" 
-                            : "အသုံးပြုလိုပါက Admin ထံသို့ ခွင့်ပြုချက်တောင်းခံပါ။"
-                          }
-                        </p>
+                      <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
+                        {isExpired 
+                          ? "သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ။ အသုံးပြုလိုပါက Admin ထံ ဆက်သွယ်၍ သက်တမ်းတိုးပါ။" 
+                          : "အသုံးပြုလိုပါက Admin ထံသို့ ခွင့်ပြုချက်တောင်းခံပါ။"
+                        }
+                      </p>
                       <div className="pt-4">
                         <button 
                           onClick={() => handleTabSwitch('tools')}
@@ -2351,25 +2447,95 @@ export default function App() {
                         </button>
                       </div>
                     </div>
-                  ) : (
-                    <VideoTranscriber 
-                      onTranscriptionComplete={(transcribedText) => {
-                        setText(transcribedText);
-                        handleTabSwitch('generate');
-                        setTimeout(() => {
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {/* Sub-Tabs under AI Subtitles: 1. AI Subtitles (SRT) | 2. Video Editor & Mirror Studio */}
+                    <div className="flex items-center justify-center gap-2 max-w-xl mx-auto bg-black/50 p-1.5 rounded-2xl border border-white/10 backdrop-blur-xl shadow-2xl">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSubtitlesSubTab('transcriber');
                           window.scrollTo({ top: 0, behavior: 'smooth' });
-                        }, 100);
-                      }}
-                      getApiKey={getEffectiveApiKey}
-                      showToast={showToast}
-                      openModal={openModal}
-                      isAdmin={isVbsAdmin}
-                      userControl={userControl}
-                      onNavigateToSettings={() => handleTabSwitch('tools')}
-                      onProcessingStateChange={setIsTranscriberProcessing}
-                    />
-                  )}
-                </div>
+                        }}
+                        className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                          subtitlesSubTab === 'transcriber'
+                            ? 'bg-amber-400 text-black shadow-lg shadow-amber-400/20 scale-[1.02]'
+                            : 'text-slate-400 hover:text-white hover:bg-white/5'
+                        }`}
+                      >
+                        <FileText size={16} />
+                        <span>{language === 'mm' ? 'AI စာတန်းထိုး (SRT Subtitles)' : 'AI Subtitles (SRT)'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSubtitlesSubTab('video-editor');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs sm:text-sm font-bold transition-all relative ${
+                          subtitlesSubTab === 'video-editor'
+                            ? 'bg-amber-400 text-black shadow-lg shadow-amber-400/20 scale-[1.02]'
+                            : 'text-slate-400 hover:text-white hover:bg-white/5'
+                        }`}
+                      >
+                        <Film size={16} />
+                        <span>{language === 'mm' ? 'Video Editor & Mirror 🎬' : 'Video Editor & Mirror 🎬'}</span>
+                        {videoEditorInitialData && (
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse" />
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Content View: Keep both mounted to preserve transcription state and media buffers */}
+                    <div className={subtitlesSubTab === 'transcriber' ? 'block max-w-4xl mx-auto' : 'hidden'}>
+                      <VideoTranscriber 
+                        onTranscriptionComplete={(transcribedText) => {
+                          setText(transcribedText);
+                          handleTabSwitch('generate');
+                          setTimeout(() => {
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }, 100);
+                        }}
+                        getApiKey={getEffectiveApiKey}
+                        showToast={showToast}
+                        openModal={openModal}
+                        isAdmin={isVbsAdmin}
+                        userControl={userControl}
+                        onNavigateToSettings={() => handleTabSwitch('tools')}
+                        onProcessingStateChange={setIsTranscriberProcessing}
+                        onSendToVideoEditor={(media) => {
+                          setVideoEditorInitialData(media);
+                          setSubtitlesSubTab('video-editor');
+                          showToast(
+                            language === 'mm' 
+                              ? 'ဗီဒီယိုနှင့် စာတန်းထိုးများကို Video Editor သို့ ပို့ဆောင်ပြီးပါပြီ' 
+                              : 'Imported media into Video Editor Studio', 
+                            'success'
+                          );
+                          setTimeout(() => {
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }, 100);
+                        }}
+                      />
+                    </div>
+
+                    <div className={subtitlesSubTab === 'video-editor' ? 'block w-full' : 'hidden'}>
+                      <VideoEditorStudio
+                        sharedMedia={videoEditorInitialData}
+                        ttsAudioResult={result}
+                        showToast={showToast}
+                        openModal={openModal}
+                        isAdmin={isVbsAdmin}
+                        isPremium={isPremium}
+                        userControl={userControl}
+                        onProcessingStateChange={setIsVideoEditorProcessing}
+                        customFonts={globalSettings.fonts}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Tab 3: Story Audiobook Studio / Thumbnail */}
@@ -2388,6 +2554,7 @@ export default function App() {
                    userControl={userControl}
                    onNavigateToSettings={() => handleTabSwitch('tools')}
                    onProcessingStateChange={setIsAudiobookProcessing}
+                   customFonts={globalSettings.fonts}
                  />
               </div>
 
@@ -2513,7 +2680,44 @@ export default function App() {
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            {/* Auto-Scroll Toggle Button */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextVal = !isAutoScrollEnabled;
+                                setIsAutoScrollEnabled(nextVal);
+                                if (nextVal && currentProcessingItem) {
+                                  centerOnHistoryItem(currentProcessingItem.id, true);
+                                }
+                              }}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${
+                                isAutoScrollEnabled
+                                  ? 'bg-brand-purple/20 text-brand-purple border-brand-purple/40 hover:bg-brand-purple/30 shadow-sm'
+                                  : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10 hover:text-slate-200'
+                              }`}
+                              title={isAutoScrollEnabled ? t('history.autoScrollOn') : t('history.autoScrollOff')}
+                            >
+                              <Crosshair size={13} className={isAutoScrollEnabled && isBatchProcessing ? 'animate-pulse text-brand-purple' : ''} />
+                              <span>{isAutoScrollEnabled ? t('history.autoScrollOn') : t('history.autoScrollOff')}</span>
+                            </button>
+
+                            {/* Focus Current Active Item */}
+                            {currentProcessingItem && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setHistoryStatusFilter('all');
+                                  centerOnHistoryItem(currentProcessingItem.id, true);
+                                }}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30 text-xs font-bold transition-all shadow-sm active:scale-95 animate-pulse"
+                                title={t('history.focusActive')}
+                              >
+                                <Crosshair size={13} />
+                                <span>{t('history.focusActive')}</span>
+                              </button>
+                            )}
+
                             {batchStats.hasActiveQueue && (
                               <button
                                 type="button"
@@ -2597,9 +2801,11 @@ export default function App() {
                           return (
                             <div 
                               key={item.id} 
-                              className={`group bg-white/40 dark:bg-slate-900/40 border rounded-[24px] p-6 sm:p-8 transition-all hover:shadow-xl hover:-translate-y-1 ${
+                              id={`history-item-${item.id}`}
+                              data-batch-processing={isProcessingItem ? 'true' : 'false'}
+                              className={`group bg-white/40 dark:bg-slate-900/40 border rounded-[24px] p-6 sm:p-8 transition-all hover:shadow-xl hover:-translate-y-1 relative ${
                                 isProcessingItem 
-                                  ? 'border-brand-purple shadow-lg shadow-brand-purple/10 bg-brand-purple/5'
+                                  ? 'border-brand-purple shadow-2xl shadow-brand-purple/20 bg-brand-purple/10 ring-2 ring-brand-purple/60 ring-offset-2 ring-offset-slate-900 dark:ring-offset-black'
                                   : isFailedItem
                                   ? 'border-rose-500/40 bg-rose-500/5'
                                   : isQueuedItem
@@ -2612,10 +2818,18 @@ export default function App() {
                                   <div className="flex flex-wrap items-center gap-3">
                                     {/* Status Badge */}
                                     {isProcessingItem && (
-                                      <span className="flex items-center gap-1.5 px-3 py-1 bg-brand-purple/20 text-brand-purple border border-brand-purple/40 rounded-full text-[10px] font-bold uppercase tracking-wider animate-pulse">
-                                        <RefreshCw size={11} className="animate-spin" />
-                                        {t('history.statusProcessing')}
-                                      </span>
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="flex items-center gap-1.5 px-3 py-1 bg-brand-purple/20 text-brand-purple border border-brand-purple/40 rounded-full text-[10px] font-bold uppercase tracking-wider animate-pulse shadow-sm shadow-brand-purple/20">
+                                          <RefreshCw size={11} className="animate-spin" />
+                                          {t('history.statusProcessing')}
+                                        </span>
+                                        {isAutoScrollEnabled && (
+                                          <span className="flex items-center gap-1 px-2.5 py-0.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-bold uppercase tracking-wider">
+                                            <Crosshair size={10} className="text-emerald-400" />
+                                            {t('history.autoCenteredBadge')}
+                                          </span>
+                                        )}
+                                      </div>
                                     )}
                                     {isQueuedItem && (
                                       <span className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-full text-[10px] font-bold uppercase tracking-wider">
@@ -2740,9 +2954,20 @@ export default function App() {
                                   )}
 
                                   {isProcessingItem && (
-                                    <div className="flex items-center gap-1.5 px-4 py-2 bg-brand-purple/15 text-brand-purple rounded-xl border border-brand-purple/30">
-                                      <RefreshCw size={14} className="animate-spin" />
-                                      <span className="text-xs font-bold">Rendering...</span>
+                                    <div className="flex items-center gap-2">
+                                      <button 
+                                        type="button"
+                                        onClick={() => centerOnHistoryItem(item.id, true)}
+                                        className="flex items-center gap-1.5 px-3 py-2 bg-brand-purple/20 hover:bg-brand-purple text-brand-purple hover:text-white rounded-xl text-xs font-bold transition-all border border-brand-purple/30 shadow-sm active:scale-95"
+                                        title={t('history.focusActive')}
+                                      >
+                                        <Crosshair size={13} />
+                                        <span className="hidden sm:inline">{t('history.focusActive')}</span>
+                                      </button>
+                                      <div className="flex items-center gap-1.5 px-4 py-2 bg-brand-purple/15 text-brand-purple rounded-xl border border-brand-purple/30">
+                                        <RefreshCw size={14} className="animate-spin" />
+                                        <span className="text-xs font-bold">Rendering...</span>
+                                      </div>
                                     </div>
                                   )}
 
@@ -2762,6 +2987,60 @@ export default function App() {
                     )}
                   </div>
                 </div>
+
+                {/* Floating Real-Time Batch Focus Pill */}
+                {activeTab === 'history' && currentProcessingItem && (
+                  <aside
+                    aria-label="Active batch item status"
+                    className="fixed bottom-6 right-6 z-40 max-w-sm sm:max-w-md bg-slate-900/95 dark:bg-black/95 backdrop-blur-xl border border-brand-purple/40 rounded-2xl p-3 sm:p-4 shadow-2xl shadow-brand-purple/30 text-white flex items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom-4 duration-300"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="relative shrink-0">
+                        <div className="w-3.5 h-3.5 rounded-full bg-brand-purple animate-ping" />
+                        <div className="absolute inset-0 w-3.5 h-3.5 rounded-full bg-brand-purple" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-bold uppercase tracking-wider text-brand-purple flex items-center gap-1.5">
+                          <RefreshCw size={11} className="animate-spin" />
+                          <span>{t('history.statusProcessing')}</span>
+                          {isAutoScrollEnabled && (
+                            <span className="text-[10px] text-emerald-400 font-semibold lowercase">
+                              ({t('history.autoCenteredBadge')})
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-300 font-medium truncate max-w-[170px] sm:max-w-[220px]">
+                          {currentProcessingItem.text}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHistoryStatusFilter('all');
+                          centerOnHistoryItem(currentProcessingItem.id, true);
+                        }}
+                        className="px-3 py-1.5 bg-brand-purple hover:bg-brand-purple/90 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 flex items-center gap-1.5"
+                      >
+                        <Crosshair size={12} />
+                        <span>{t('history.focusActive')}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsAutoScrollEnabled(prev => !prev)}
+                        className={`p-1.5 rounded-xl border text-xs font-bold transition-all ${
+                          isAutoScrollEnabled
+                            ? 'bg-brand-purple/20 border-brand-purple/40 text-brand-purple hover:bg-brand-purple/30'
+                            : 'bg-white/5 border-white/10 text-slate-400 hover:text-white'
+                        }`}
+                        title={isAutoScrollEnabled ? t('history.autoScrollOn') : t('history.autoScrollOff')}
+                      >
+                        <Crosshair size={14} className={isAutoScrollEnabled ? 'text-brand-purple' : 'text-slate-500'} />
+                      </button>
+                    </div>
+                  </aside>
+                )}
               </div>
 
               {/* Tab 5: Settings / Tools (Kept alive in background) */}

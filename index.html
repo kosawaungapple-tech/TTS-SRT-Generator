@@ -3,8 +3,30 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>VlogsBySaw TTS-Recap</title>
+    <title>Remix Remix Remix SRTScript 30.09.2026 VBS: Professional Myanmar TTS &amp; Narration Engine</title>
+    <meta name="description" content="A high-fidelity narration tool for Myanmar voiceovers using Gemini 2.5 Flash. Features cinematic voice quality and precise phonetic mapping." />
+    <meta property="og:title" content="Remix Remix Remix SRTScript 30.09.2026 VBS: Professional Myanmar TTS &amp; Narration Engine" />
+    <meta property="og:description" content="A high-fidelity narration tool for Myanmar voiceovers using Gemini 2.5 Flash. Features cinematic voice quality and precise phonetic mapping." />
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <script>
+      // Suppress Vite HMR WebSocket connection errors in AI Studio iframe environment
+      window.addEventListener('error', function(event) {
+        var msg = event.message || '';
+        var src = (event.filename || '') + (event.error ? event.error.stack : '');
+        if (msg.indexOf('WebSocket') !== -1 || src.indexOf('@vite/client') !== -1 || msg.indexOf('createWebSocketModuleRunnerTransport') !== -1) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return true;
+        }
+      }, true);
+      window.addEventListener('unhandledrejection', function(event) {
+        var reason = event.reason ? (event.reason.message || event.reason.stack || String(event.reason)) : '';
+        if (reason.indexOf('WebSocket') !== -1 || reason.indexOf('@vite/client') !== -1 || reason.indexOf('createWebSocketModuleRunnerTransport') !== -1) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      });
+    </script>
   </head>
   <body>
     <div id="root"></div>

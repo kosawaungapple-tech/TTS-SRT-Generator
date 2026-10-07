@@ -30,7 +30,7 @@ import {
 import { GeminiTTSService } from '../services/geminiService';
 import { ambienceSynthesizer, AMBIENCE_TRACKS, AmbienceType } from '../utils/ambienceSynthesizer';
 import { useLanguage } from '../contexts/LanguageContext';
-import { AudioResult, VBSUserControl, TTSConfig, ModalConfig } from '../types';
+import { AudioResult, VBSUserControl, TTSConfig, ModalConfig, CustomFont } from '../types';
 import { formatMyanmarDuration } from '../utils/audioUtils';
 
 interface StoryAudiobookStudioProps {
@@ -42,6 +42,7 @@ interface StoryAudiobookStudioProps {
   userControl?: VBSUserControl | null;
   onNavigateToSettings?: () => void;
   onProcessingStateChange?: (isProcessing: boolean) => void;
+  customFonts?: CustomFont[];
 }
 
 interface Chapter {
@@ -132,7 +133,8 @@ export const StoryAudiobookStudio: React.FC<StoryAudiobookStudioProps> = ({
   isPremium,
   userControl,
   onNavigateToSettings,
-  onProcessingStateChange
+  onProcessingStateChange,
+  customFonts = []
 }) => {
   const { language, t } = useLanguage();
   const isMm = language === 'mm';
@@ -215,6 +217,7 @@ export const StoryAudiobookStudio: React.FC<StoryAudiobookStudioProps> = ({
   const [coverTitle, setCoverTitle] = useState(project.title);
   const [coverChapterText, setCoverChapterText] = useState(`အခန်း (${activeChapter.number})`);
   const [coverBadgeText, setCoverBadgeText] = useState('VlogsBySaw အသံစာအုပ်');
+  const [coverFontFamily, setCoverFontFamily] = useState<string>('"Noto Sans Myanmar", sans-serif');
 
   // Track any active processing and notify parent tab
   const isAnyProcessing = isGeneratingAudio || isExportingMaster || isAiGenerating;
@@ -817,7 +820,7 @@ CRITICAL REQUIREMENT: Do NOT include ANY text, words, letters, logos, typography
       // 1. Top Badges (Genre & Badge Text)
       ctx.save();
       const badgeText = coverBadgeText || 'VlogsBySaw အသံစာအုပ်';
-      ctx.font = 'bold 36px "Inter", "Noto Sans Myanmar", sans-serif';
+      ctx.font = `bold 36px "Inter", ${coverFontFamily}`;
       const badgeWidth = ctx.measureText(badgeText).width + 50;
       const badgeX = 50;
       const badgeY = 50;
@@ -832,7 +835,7 @@ CRITICAL REQUIREMENT: Do NOT include ANY text, words, letters, logos, typography
       // 2. Chapter Badge
       if (coverChapterText.trim()) {
         ctx.save();
-        ctx.font = 'bold 42px "Noto Sans Myanmar", sans-serif';
+        ctx.font = `bold 42px ${coverFontFamily}`;
         const chWidth = ctx.measureText(coverChapterText).width + 60;
         const chX = canvas.width - chWidth - 50;
         const chY = 50;
@@ -853,7 +856,7 @@ CRITICAL REQUIREMENT: Do NOT include ANY text, words, letters, logos, typography
       const titleFontSize = coverPlatform === 'shorts' ? 84 : 76;
       ctx.save();
       ctx.textAlign = 'center';
-      ctx.font = `900 ${titleFontSize}px "Noto Sans Myanmar", sans-serif`;
+      ctx.font = `900 ${titleFontSize}px ${coverFontFamily}`;
 
       const titleX = canvas.width / 2;
       const titleY = canvas.height - (coverPlatform === 'shorts' ? 260 : 160);
@@ -888,7 +891,7 @@ CRITICAL REQUIREMENT: Do NOT include ANY text, words, letters, logos, typography
 
       // 4. Author Name Subtitle
       const authorText = `ရေးသားသူ / ဇာတ်ကြောင်းပြောသူ - ${project.author || 'VlogsBySaw'}`;
-      ctx.font = '600 38px "Noto Sans Myanmar", sans-serif';
+      ctx.font = `600 38px ${coverFontFamily}`;
       ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
       ctx.shadowBlur = 10;
       ctx.shadowColor = '#000000';
@@ -1063,13 +1066,14 @@ CRITICAL REQUIREMENT: Do NOT include ANY text, words, letters, logos, typography
       </div>
 
       {/* Hidden Audio Element for Chapter Audio Playback */}
-      {activeChapter.audioResult && (
+      {Boolean(activeChapter.audioResult?.audioUrl) && (
         <audio
           ref={audioElementRef}
-          src={activeChapter.audioResult.audioUrl}
+          src={activeChapter.audioResult!.audioUrl}
           onTimeUpdate={(e) => setAudioCurrentTime((e.target as HTMLAudioElement).currentTime)}
           onLoadedMetadata={(e) => setAudioDuration((e.target as HTMLAudioElement).duration)}
           onEnded={() => setIsPlayingAudio(false)}
+          onError={() => {}}
         />
       )}
 
@@ -1896,6 +1900,28 @@ CRITICAL REQUIREMENT: Do NOT include ANY text, words, letters, logos, typography
                     className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">စာလုံး စတိုင် (Font Style)</label>
+                <select
+                  value={coverFontFamily}
+                  onChange={(e) => setCoverFontFamily(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-400"
+                >
+                  <optgroup label="System Fonts">
+                    <option value='"Noto Sans Myanmar", sans-serif'>Noto Sans MM (Default)</option>
+                    <option value='"Pyidaungsu", serif'>Pyidaungsu</option>
+                    <option value='"Myanmar3", sans-serif'>Myanmar3</option>
+                  </optgroup>
+                  {customFonts.length > 0 && (
+                    <optgroup label="Custom Installed Fonts">
+                      {customFonts.map(f => (
+                        <option key={f.id} value={`"${f.family}"`}>{f.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
               </div>
 
               {/* Style Presets */}

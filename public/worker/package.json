@@ -1,0 +1,7 @@
+{
+  "name": "vbs-ffmpeg-worker",
+  "version": "1.0.0",
+  "description": "Dedicated Local PC / VPS FFmpeg Worker for VlogsBySaw",
+  "type": "commonjs",
+  "main": "vbs-ffmpeg-worker.js"
+}

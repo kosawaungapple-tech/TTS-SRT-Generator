@@ -51,6 +51,22 @@ async function startServer() {
   app.use(express.json({ limit: "500mb" }));
   app.use(express.urlencoded({ limit: "500mb", extended: true }));
   app.use("/output", express.static("public/output"));
+  app.use("/worker", express.static("public/worker"));
+
+  // Worker Script Download Routes
+  app.get("/api/worker/download/:type", (req, res) => {
+    const { type } = req.params;
+    let filename = 'vbs-ffmpeg-worker.js';
+    if (type === 'bat' || type === 'windows') filename = 'run-worker-windows.bat';
+    if (type === 'sh' || type === 'mac' || type === 'linux') filename = 'run-worker-mac-linux.sh';
+
+    const filePath = path.join('public/worker', filename);
+    if (fs.existsSync(filePath)) {
+      res.download(filePath, filename);
+    } else {
+      res.status(404).send('File not found');
+    }
+  });
 
   // API routes
   app.get("/api/health", (req, res) => {
@@ -322,17 +338,34 @@ async function startServer() {
         console.log('[VBS Video] Input video has no audio or probe failed');
       }
 
+      const srtContent = req.body.srtContent || "";
+      const hasSubtitles = Boolean(srtContent && typeof srtContent === "string" && srtContent.trim());
+      const trimStart = parseFloat(req.body.trimStart || "0");
+      const trimEnd = parseFloat(req.body.trimEnd || "0");
+
       // Check if we need any video filters
       const needsVideoProcessing = 
         activeFeatureNames.includes("flip") || 
+        activeFeatureNames.includes("hflip") ||
+        activeFeatureNames.includes("vflip") ||
+        activeFeatureNames.includes("flipHorizontal") ||
+        activeFeatureNames.includes("flipVertical") ||
         activeFeatureNames.includes("crop") ||
         activeFeatureNames.includes("colorGrade") ||
         activeFeatureNames.includes("burnIn") ||
-        aspectRatio !== "16:9" ||
+        hasSubtitles ||
+        (aspectRatio !== "16:9" && aspectRatio !== "original") ||
         videoSpeed !== 1.0 ||
-        logoInputPath;
+        Boolean(logoInputPath);
 
       const command = ffmpeg(inputPath);
+      
+      if (trimStart > 0) {
+        command.setStartTime(trimStart);
+      }
+      if (trimEnd > trimStart) {
+        command.setDuration(trimEnd - trimStart);
+      }
       
       if (audioInputPath) {
         command.input(audioInputPath);
@@ -349,7 +382,12 @@ async function startServer() {
         // --- VIDEO FILTERS ---
         const vFilters: string[] = [];
         
-        if (activeFeatureNames.includes("flip")) vFilters.push("hflip");
+        if (activeFeatureNames.includes("flip") || activeFeatureNames.includes("hflip") || activeFeatureNames.includes("flipHorizontal")) {
+          vFilters.push("hflip");
+        }
+        if (activeFeatureNames.includes("vflip") || activeFeatureNames.includes("flipVertical")) {
+          vFilters.push("vflip");
+        }
         
         if (activeFeatureNames.includes("crop")) {
           vFilters.push("crop=iw*0.97:ih*0.97:(iw-iw*0.97)/2:(ih-ih*0.97)/2");
@@ -359,26 +397,38 @@ async function startServer() {
           vFilters.push("eq=contrast=1.1:saturation=1.2:brightness=-0.05");
         }
         
-        if (aspectRatio === "9:16") {
-          vFilters.push("crop=ih*9/16:ih:(iw-ih*9/16)/2:0");
-        } else if (aspectRatio === "1:1") {
-          vFilters.push("crop=ih:ih:(iw-ih)/2:0");
+        if (aspectRatio !== "original" && aspectRatio !== "16:9") {
+          const resolutions: Record<string, string> = {
+            "9:16": "1080:1920",
+            "1:1": "1080:1080",
+            "4:5": "1080:1350",
+            "4:3": "1440:1080",
+            "21:9": "2560:1080"
+          };
+          const targetResString = resolutions[aspectRatio];
+          if (targetResString) {
+            const [tw, th] = targetResString.split(':');
+            vFilters.push(`scale=${tw}:${th}:force_original_aspect_ratio=decrease,pad=${tw}:${th}:(ow-iw)/2:(oh-ih)/2:black,setsar=1`);
+          }
         }
 
         if (videoSpeed !== 1.0) {
           vFilters.push(`setpts=PTS/${videoSpeed}`);
         }
 
-        const resolutions: Record<string, string> = {
-          "16:9": "1920:1080",
-          "9:16": "1080:1920",
-          "1:1": "1080:1080"
-        };
-        const targetResString = resolutions[aspectRatio] || "1920:1080";
-        const [tw, th] = targetResString.split(':');
-        vFilters.push(`scale=${tw}:${th}:force_original_aspect_ratio=decrease,pad=${tw}:${th}:(ow-iw)/2:(oh-ih)/2,setsar=1`);
+        // Handle burning in Subtitles (Single Text or Full .SRT Content)
+        let tempSrtPath: string | null = null;
 
-        if (activeFeatureNames.includes("burnIn") && subtitleText) {
+        if (hasSubtitles) {
+          try {
+            tempSrtPath = path.join('/tmp', `sub_${Date.now()}_${Math.random().toString(36).substring(7)}.srt`);
+            fs.writeFileSync(tempSrtPath, srtContent, 'utf-8');
+            const escapedSrtPath = tempSrtPath.replace(/'/g, "'\\\\''").replace(/:/g, "\\:");
+            vFilters.push(`subtitles='${escapedSrtPath}':force_style='FontName=Noto Sans Myanmar,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3,Outline=2.5,MarginV=40'`);
+          } catch (srtErr) {
+            console.error('[VBS Video] Failed to write temporary SRT file:', srtErr);
+          }
+        } else if (activeFeatureNames.includes("burnIn") && subtitleText) {
           const fontSizeMap: Record<string, number> = { 'small': 30, 'medium': 45, 'large': 60 };
           const fontSize = fontSizeMap[subtitleSize] || 45;
           const fontPath = '/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf';
@@ -435,7 +485,8 @@ async function startServer() {
         '-ar', '44100',
         '-ac', '2',
         '-pix_fmt', 'yuv420p',
-        '-preset', 'ultrafast',
+        '-preset', 'fast',
+        '-crf', '19',
         '-movflags', '+faststart',
         '-f', 'mp4'
       ];
@@ -823,7 +874,10 @@ async function startServer() {
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { 
+        middlewareMode: true,
+        hmr: false
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);

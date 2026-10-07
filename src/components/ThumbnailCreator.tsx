@@ -1,6 +1,6 @@
 import React from 'react';
 import { StoryAudiobookStudio } from './StoryAudiobookStudio';
-import { VBSUserControl, ModalConfig } from '../types';
+import { VBSUserControl, ModalConfig, CustomFont } from '../types';
 
 interface ThumbnailTabProps {
   showToast: (message: string, type: 'success' | 'error') => void;
@@ -11,6 +11,7 @@ interface ThumbnailTabProps {
   userControl?: VBSUserControl | null;
   onNavigateToSettings?: () => void;
   onProcessingStateChange?: (isProcessing: boolean) => void;
+  customFonts?: CustomFont[];
 }
 
 export const ThumbnailCreator: React.FC<ThumbnailTabProps> = (props) => {

@@ -41,6 +41,15 @@ export interface Announcement {
   scrollSpeed?: 'slow' | 'normal' | 'fast';
 }
 
+export interface CustomFont {
+  id: string;
+  name: string;
+  family: string;
+  url: string; // URL to the font file or Google Fonts link
+  isGoogleFont?: boolean;
+  createdAt?: unknown;
+}
+
 export interface GlobalSettings {
   global_system_key?: string;
   api_keys?: string[]; // List of rotated API keys
@@ -62,6 +71,7 @@ export interface GlobalSettings {
   tts_cost?: number;
   rewrite_cost?: number;
   announcements?: Announcement[];
+  fonts?: CustomFont[];
 }
 
 export interface CreditSettings {
