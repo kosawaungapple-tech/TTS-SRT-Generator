@@ -32,6 +32,7 @@ import { ambienceSynthesizer, AMBIENCE_TRACKS, AmbienceType } from '../utils/amb
 import { useLanguage } from '../contexts/LanguageContext';
 import { AudioResult, VBSUserControl, TTSConfig, ModalConfig, CustomFont } from '../types';
 import { formatMyanmarDuration } from '../utils/audioUtils';
+import { generateSRT, downloadSrtFile } from '../utils/subtitleUtils';
 
 interface StoryAudiobookStudioProps {
   showToast: (message: string, type: 'success' | 'error') => void;
@@ -218,6 +219,21 @@ export const StoryAudiobookStudio: React.FC<StoryAudiobookStudioProps> = ({
   const [coverChapterText, setCoverChapterText] = useState(`အခန်း (${activeChapter.number})`);
   const [coverBadgeText, setCoverBadgeText] = useState('VlogsBySaw အသံစာအုပ်');
   const [coverFontFamily, setCoverFontFamily] = useState<string>('"Noto Sans Myanmar", sans-serif');
+
+  const allMergedFonts = useMemo(() => {
+    let userFonts: CustomFont[] = [];
+    try {
+      const stored = localStorage.getItem('vbs_user_custom_fonts');
+      if (stored) userFonts = JSON.parse(stored);
+    } catch {}
+    const list = [...(customFonts || [])];
+    userFonts.forEach(uf => {
+      if (!list.some(f => f.id === uf.id || f.family === uf.family)) {
+        list.push(uf);
+      }
+    });
+    return list;
+  }, [customFonts]);
 
   // Track any active processing and notify parent tab
   const isAnyProcessing = isGeneratingAudio || isExportingMaster || isAiGenerating;
@@ -581,16 +597,8 @@ export const StoryAudiobookStudio: React.FC<StoryAudiobookStudioProps> = ({
   const handleDownloadSrt = () => {
     if (!activeChapter.audioResult?.subtitles) return;
     try {
-      let srtContent = '';
-      activeChapter.audioResult.subtitles.forEach((sub, i) => {
-        srtContent += `${i + 1}\n${sub.startTime} --> ${sub.endTime}\n${sub.text}\n\n`;
-      });
-      const blob = new Blob([srtContent], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${project.title || 'Audiobook'}_Ch${activeChapter.number}.srt`;
-      link.click();
+      const srtContent = generateSRT(activeChapter.audioResult.subtitles);
+      downloadSrtFile(srtContent, `${project.title || 'Audiobook'}_Ch${activeChapter.number}.srt`);
       showToast('SRT စာတန်းထိုးဖိုင်ကို ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ 📝', 'success');
     } catch {
       showToast('SRT ဒေါင်းလုဒ် မအောင်မြင်ပါ', 'error');
@@ -1914,10 +1922,10 @@ CRITICAL REQUIREMENT: Do NOT include ANY text, words, letters, logos, typography
                     <option value='"Pyidaungsu", serif'>Pyidaungsu</option>
                     <option value='"Myanmar3", sans-serif'>Myanmar3</option>
                   </optgroup>
-                  {customFonts.length > 0 && (
-                    <optgroup label="Custom Installed Fonts">
-                      {customFonts.map(f => (
-                        <option key={f.id} value={`"${f.family}"`}>{f.name}</option>
+                  {allMergedFonts.length > 0 && (
+                    <optgroup label="Custom / Installed Fonts">
+                      {allMergedFonts.map(f => (
+                        <option key={f.id} value={`"${f.family}", sans-serif`}>{f.name}</option>
                       ))}
                     </optgroup>
                   )}

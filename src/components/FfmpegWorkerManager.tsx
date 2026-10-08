@@ -332,12 +332,42 @@ export const FfmpegWorkerManager: React.FC<FfmpegWorkerManagerProps> = ({
           </div>
         </div>
 
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setWorkerUrl('http://localhost:5005')}
+            className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-white text-xs font-bold border border-white/10 transition-colors"
+          >
+            💻 Local PC (localhost:5005)
+          </button>
+          {health.lanIps && health.lanIps.length > 0 ? (
+            health.lanIps.map(ip => (
+              <button
+                key={ip}
+                type="button"
+                onClick={() => setWorkerUrl(`http://${ip}:5005`)}
+                className="px-3 py-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 text-xs font-bold border border-blue-500/20 transition-colors"
+              >
+                📱 Phone/Tablet Wi-Fi ({ip}:5005)
+              </button>
+            ))
+          ) : (
+            <button
+              type="button"
+              onClick={() => setWorkerUrl('http://192.168.1.100:5005')}
+              className="px-3 py-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 text-xs font-bold border border-blue-500/20 transition-colors"
+            >
+              📱 Phone/Tablet (192.168.x.x:5005)
+            </button>
+          )}
+        </div>
+
         <div className="flex flex-col sm:flex-row items-center gap-3">
           <input
             type="text"
             value={workerUrl}
             onChange={(e) => setWorkerUrl(e.target.value)}
-            placeholder="http://localhost:5005"
+            placeholder="http://localhost:5005 or http://192.168.1.XX:5005"
             className="w-full bg-slate-900 border border-white/10 rounded-xl px-4 py-3 text-sm text-white font-mono focus:outline-none focus:ring-2 focus:ring-amber-400/50"
           />
           <button
@@ -348,6 +378,39 @@ export const FfmpegWorkerManager: React.FC<FfmpegWorkerManagerProps> = ({
             {isMm ? 'သိမ်းဆည်းပြီး စမ်းသပ်မည်' : 'Save & Connect'}
           </button>
         </div>
+
+        {health.lanIps && health.lanIps.length > 0 && (
+          <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/20 space-y-2 text-xs text-blue-200">
+            <div className="flex items-center justify-between">
+              <span className="font-bold flex items-center gap-1.5">
+                📱 {isMm ? 'အခြား Device များ (ဖုန်း/တက်ဘလက်) မှ ချိတ်ဆက်ရန် Wi-Fi IP များ (နှိပ်၍ အသုံးပြုနိုင်ပါသည်):' : 'Click to connect from Phone / Tablet on same Wi-Fi:'}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2 pt-1 font-mono">
+              {health.lanIps.map(ip => (
+                <button
+                  key={ip}
+                  type="button"
+                  onClick={() => {
+                    const target = `http://${ip}:5005`;
+                    setWorkerUrl(target);
+                    WorkerEngineService.setWorkerUrl(target);
+                    if (onToast) onToast(isMm ? `Worker URL ကို ${target} သို့ ပြောင်းလဲချိတ်ဆက်လိုက်ပါပြီ!` : `Set Worker URL to ${target}`, 'success');
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg bg-black/60 hover:bg-blue-600/30 text-white border border-blue-500/40 hover:border-blue-400 transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 text-xs"
+                >
+                  <span>🔗 http://{ip}:5005</span>
+                  <span className="text-[10px] text-blue-300 font-sans">({isMm ? 'ချိတ်မည်' : 'Connect'})</span>
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-slate-300 leading-relaxed pt-1">
+              {isMm
+                ? '💡 ဖုန်း/တက်ဘလက်တွင် HTTPS ဖြင့် အသုံးပြုနေပါကလည်း Built-in Smart Server Proxy က Mixed-Content ကန့်သတ်ချက်ကို အလိုအလျောက် ဖြေရှင်းပေးမည်ဖြစ်ပြီး သင့် PC Worker မှ 100% Zero-Stutter Render လုပ်ပေးပါမည်။'
+                : '💡 Cross-Device Smart Proxy automatically routes renders from phone/tablet without Mixed-Content issues.'}
+            </p>
+          </div>
+        )}
 
         {/* Helpful Tips in Burmese */}
         <div className="p-4 rounded-2xl bg-amber-400/10 border border-amber-400/20 space-y-2 text-xs text-amber-200 leading-relaxed">

@@ -20,12 +20,12 @@ import { GeminiTTSService } from './services/geminiService';
 import { apiChannelManager, isPlausibleApiKey } from './services/apiChannelManager';
 import { assemblyAiService } from './services/assemblyAiService';
 import { logActivity } from './services/activityService';
-import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, SystemConfig, VBSUserControl, Announcement } from './types';
+import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, SystemConfig, VBSUserControl, Announcement, CustomFont } from './types';
 import { DEFAULT_RULES } from './constants';
 import { useLanguage } from './contexts/LanguageContext';
 import { formatDate } from './utils/dateUtils';
 import { formatMyanmarDuration, renderProcessedAudio, pcmToWav } from './utils/audioUtils';
-import { generateOptimizedSubtitles } from './utils/subtitleUtils';
+import { generateOptimizedSubtitles, generateSRT, createSrtBlob } from './utils/subtitleUtils';
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId } from './firebase';
 
 type Tab = 'generate' | 'translator' | 'transcriber' | 'video-editor' | 'thumbnail' | 'history' | 'tools' | 'admin' | 'vbs-admin';
@@ -133,7 +133,16 @@ export default function App() {
 
   // Font Injection System
   useEffect(() => {
-    if (!globalSettings.fonts || globalSettings.fonts.length === 0) return;
+    let userFonts: CustomFont[] = [];
+    try {
+      const stored = localStorage.getItem('vbs_user_custom_fonts');
+      if (stored) userFonts = JSON.parse(stored);
+    } catch (e) {
+      console.warn("Failed to parse user custom fonts:", e);
+    }
+
+    const allFonts = [...(globalSettings.fonts || []), ...userFonts];
+    if (allFonts.length === 0) return;
 
     const fontContainerId = 'vbs-custom-fonts-container';
     let container = document.getElementById(fontContainerId);
@@ -144,7 +153,7 @@ export default function App() {
     }
     container.innerHTML = ''; // Clear previous injections
 
-    globalSettings.fonts.forEach(font => {
+    allFonts.forEach(font => {
       if (font.isGoogleFont) {
         const link = document.createElement('link');
         link.rel = 'stylesheet';
@@ -160,6 +169,14 @@ export default function App() {
           }
         `;
         container?.appendChild(style);
+        try {
+          const fontFace = new FontFace(font.family, `url(${font.url})`);
+          fontFace.load().then(loaded => {
+            document.fonts.add(loaded);
+          }).catch(() => {});
+        } catch {
+          // ignore
+        }
       }
     });
   }, [globalSettings.fonts]);
@@ -168,7 +185,7 @@ export default function App() {
   useEffect(() => {
     // Requirement 3: Allow fetch for both real users AND anonymous users with access granted
     // This ensures the Transcribe button works for users logged in via Access Code
-    const canFetch = vbsId && isAuthReady && auth.currentUser && (isAccessGranted || !auth.currentUser.isAnonymous);
+    const canFetch = vbsId && isAuthReady && (isAccessGranted || (auth.currentUser && !auth.currentUser.isAnonymous));
     
     if (canFetch) {
       const unsubscribe = onSnapshot(doc(db, 'user_controls', vbsId), (docSnap) => {
@@ -206,10 +223,10 @@ export default function App() {
         }
       });
       return () => unsubscribe();
-    } else if (vbsId && isAuthReady && auth.currentUser) {
+    } else if (vbsId && isAuthReady) {
       console.log('[VBS] Auth ready, waiting for session sync if needed...');
     }
-  }, [vbsId, isAuthReady, auth.currentUser, isSessionSynced]);
+  }, [vbsId, isAuthReady, auth.currentUser, isSessionSynced, isAccessGranted]);
 
   // Re-process audio when sliders change for an existing result
   useEffect(() => {
@@ -250,7 +267,7 @@ export default function App() {
             duration: finalDuration,
             baseDuration: finalDuration,
             subtitles: generateOptimizedSubtitles(text, finalDuration),
-            srtContent: generateOptimizedSubtitles(text, finalDuration).map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join(''),
+            srtContent: generateSRT(generateOptimizedSubtitles(text, finalDuration)),
             speed: config.speed,
             pitch: config.pitch,
             volume: config.volume
@@ -1161,7 +1178,7 @@ export default function App() {
           duration: finalDuration,
           baseDuration: finalDuration, 
           subtitles: generateOptimizedSubtitles(text, finalDuration),
-          srtContent: generateOptimizedSubtitles(text, finalDuration).map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join(''),
+          srtContent: generateSRT(generateOptimizedSubtitles(text, finalDuration)),
           speed: config.speed,
           pitch: config.pitch,
           volume: config.volume,
@@ -1319,9 +1336,8 @@ export default function App() {
       content = await response.text();
     }
     
-    // Ensure Windows line endings (CRLF) and pure text/plain without BOM
-    const sanitizedContent = content.replace(/\r?\n/g, '\r\n');
-    const blob = new Blob([sanitizedContent], { type: 'text/plain;charset=utf-8' });
+    // Ensure Windows line endings (CRLF) and UTF-8 with BOM (\uFEFF) for 100% CapCut compatibility
+    const blob = createSrtBlob(content);
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -1419,7 +1435,7 @@ export default function App() {
     const finalBase64 = await base64Promise;
 
     const subtitles = generateOptimizedSubtitles(item.text, finalDuration);
-    const srtContent = subtitles.map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join('');
+    const srtContent = generateSRT(subtitles);
 
     let audioStorageUrl: string | undefined = undefined;
     let srtStorageUrl: string | undefined = undefined;

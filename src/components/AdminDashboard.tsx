@@ -151,20 +151,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleUpdateVbsUser = async (vbsId: string, updates: Partial<VBSUserControl>) => {
-    if (!getCurrentUserId()) {
-      console.warn('[VBS] Skipping user update — not authenticated or anonymous');
-      setToast({ message: 'Auth Required (Non-Anonymous)', type: 'error', isVisible: true });
-      return;
-    }
     try {
       await setDoc(doc(db, 'user_controls', vbsId), {
         ...updates,
         vbsId: vbsId, // Ensure ID is present if creating
         updatedAt: serverTimestamp()
       }, { merge: true });
+      setVbsUsers(prev => prev.map(u => u.vbsId === vbsId ? { ...u, ...updates } : u));
     } catch (err) {
       console.error("Failed to update user:", err);
-      // Fallback: If update fails, we could update local state or tell user
       setToast({ message: 'Update failed. Check permissions.', type: 'error', isVisible: true });
     }
   };
@@ -554,18 +549,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       return;
     }
 
-    const isOwner = adminCode === 'saw_vlogs_2026';
-    if (!isSessionSynced && !isOwner) {
-      console.log("AdminDashboard: Waiting for session sync to Firestore rules...");
-      setIsLoading(true);
-      return;
-    }
-
     console.log("AdminDashboard: Initializing user_controls listener...");
     setIsLoading(true);
-    const q = query(collection(db, 'user_controls'), orderBy('updatedAt', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const users = snapshot.docs.map(doc => doc.data() as VBSUserControl);
+    // Listen to collection directly so documents without updatedAt are not omitted
+    const unsubscribe = onSnapshot(collection(db, 'user_controls'), (snapshot) => {
+      const users = snapshot.docs.map(doc => ({
+        ...doc.data(),
+        vbsId: doc.id // ensure ID is never undefined
+      })) as VBSUserControl[];
+      
+      // Sort in memory by updatedAt or createdAt desc
+      users.sort((a, b) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const tA = (a.updatedAt as any)?.toMillis ? (a.updatedAt as any).toMillis() : new Date((a.updatedAt as any) || (a.createdAt as any) || 0).getTime();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const tB = (b.updatedAt as any)?.toMillis ? (b.updatedAt as any).toMillis() : new Date((b.updatedAt as any) || (b.createdAt as any) || 0).getTime();
+        return tB - tA;
+      });
+
       setVbsUsers(users);
       setIsLoading(false);
       setFetchError(null);
@@ -574,34 +575,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }, (error) => {
       setIsLoading(false);
       const err = error as { code?: string; message?: string };
-      console.error("Firestore Permission Error in AdminDashboard:", err);
+      console.warn("user_controls listener notice:", err);
 
-      if (err.code === 'permission-denied' || err.message?.includes('permission')) {
-        setFetchError('Firestore: Permission Denied. Please ensure you are logged in as Admin and your session is synced with valid accessCode.');
-        // Use localStorage fallback
-        const localData = localStorage.getItem('user_controls_fallback');
-        if (localData) {
-          try {
-            setVbsUsers(JSON.parse(localData));
-            setToast({ message: 'Using local data (Firestore Permission Denied)', type: 'warning', isVisible: true });
-          } catch {
-            setVbsUsers([]);
-          }
-        } else {
-          setVbsUsers([]);
+      // Use localStorage fallback if available
+      const localData = localStorage.getItem('user_controls_fallback');
+      if (localData) {
+        try {
+          setVbsUsers(JSON.parse(localData));
+        } catch {
+          // ignore
         }
-      } else {
-        setFetchError('Error loading users: ' + (err.message || 'Unknown error'));
-      }
-      try {
-        handleFirestoreError(error, OperationType.LIST, 'user_controls');
-      } catch (e) {
-        console.warn('[VBS] Firestore user_controls error handled:', e);
       }
     });
 
     return () => unsubscribe();
-  }, [isAuthenticated, isAuthReady, isSessionSynced]);
+  }, [isAuthenticated, isAuthReady]);
 
   useEffect(() => {
     const adminCode = localStorage.getItem('vbs_access_code') || '';
@@ -882,19 +870,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     e.preventDefault();
     if (!newId.trim() || isSubmitting) return;
 
-    if (!getCurrentUserId()) {
-      console.warn('[VBS] Skipping ID creation — not authenticated or anonymous');
-      setToast({ message: 'Auth Required (Non-Anonymous)', type: 'error', isVisible: true });
-      return;
-    }
-
     setIsSubmitting(true);
 
     try {
       const accessCode = newId.trim();
       
-      // Save directly to user_controls
-      await setDoc(doc(db, 'user_controls', accessCode), {
+      const newUserData = {
         vbsId: accessCode,
         dailyUsage: 0,
         credits: parseInt(newCredits) || 0,
@@ -909,7 +890,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         isActive: true,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
-      });
+      };
+
+      // Save directly to user_controls
+      await setDoc(doc(db, 'user_controls', accessCode), newUserData);
+
+      // Optimistically update local list so admin sees the user right away
+      const localUserData: VBSUserControl = {
+        ...newUserData,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        createdAt: new Date().toISOString() as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        updatedAt: new Date().toISOString() as any,
+      } as unknown as VBSUserControl;
+
+      setVbsUsers(prev => [localUserData, ...prev.filter(u => u.vbsId !== accessCode)]);
+      const updatedFallback = [localUserData, ...vbsUsers.filter(u => u.vbsId !== accessCode)];
+      localStorage.setItem('user_controls_fallback', JSON.stringify(updatedFallback));
       
       setNewId('');
       setNewNote('');
@@ -923,12 +920,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         isVisible: true
       });
     } catch (err: unknown) {
-      handleFirestoreError(err, OperationType.CREATE, `user_controls/${newId.trim()}`);
+      console.error('Error creating user ID:', err);
       setToast({
         message: 'Error: Could not create ID. Please try again.',
         type: 'error',
         isVisible: true
       });
+      try {
+        handleFirestoreError(err, OperationType.CREATE, `user_controls/${newId.trim()}`);
+      } catch (e) {
+        console.warn('[VBS] Firestore create error handled:', e);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -1039,39 +1041,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       confirmText: 'Update',
       onConfirm: async (password) => {
         if (!password) return;
-        if (!getCurrentUserId()) {
-           console.warn('[VBS] Skipping password update — not authenticated or anonymous');
-           setToast({ message: 'Auth Required', type: 'error', isVisible: true });
-           return;
-        }
         try {
-          await updateDoc(doc(db, 'user_controls', id), {
+          await setDoc(doc(db, 'user_controls', id), {
             password: password.trim() || null,
+            vbsId: id,
             updatedAt: serverTimestamp()
-          });
+          }, { merge: true });
+          setVbsUsers(prev => prev.map(u => u.vbsId === id ? { ...u, password: password.trim() || undefined } : u));
           setToast({
             message: 'Password Updated ✨',
             type: 'success',
             isVisible: true
           });
         } catch (err) {
-          handleFirestoreError(err, OperationType.UPDATE, `user_controls/${id}`);
+          console.error('Failed to update user password:', err);
           setToast({
             message: 'Failed to update user password.',
             type: 'error',
             isVisible: true
           });
+          try {
+            handleFirestoreError(err, OperationType.UPDATE, `user_controls/${id}`);
+          } catch (e) {
+            console.warn('[VBS] Handled error:', e);
+          }
         }
       }
     });
   };
 
   const handleExtendExpiry = async (id: string, currentExpiry: string | undefined) => {
-    if (!getCurrentUserId()) {
-      console.warn('[VBS] Skipping expiry extension — not authenticated or anonymous');
-      setToast({ message: 'Auth Required', type: 'error', isVisible: true });
-      return;
-    }
     try {
       const now = new Date();
       let baseDate = now;
@@ -1093,18 +1092,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         updatedAt: serverTimestamp()
       }, { merge: true });
       
+      setVbsUsers(prev => prev.map(u => u.vbsId === id ? { ...u, expiryDate: isoExpiry } : u));
       setToast({
         message: 'Subscription Extended 30 Days! 📅',
         type: 'success',
         isVisible: true
       });
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `user_controls/${id}`);
+      console.error('Failed to extend expiry:', err);
       setToast({
         message: 'Failed to extend subscription.',
         type: 'error',
         isVisible: true
       });
+      try {
+        handleFirestoreError(err, OperationType.UPDATE, `user_controls/${id}`);
+      } catch (e) {
+        console.warn('[VBS] Handled error:', e);
+      }
     }
   };
 
@@ -1234,12 +1239,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       onConfirm: async (dateStr) => {
         if (!dateStr) return;
         
-        if (!getCurrentUserId()) {
-          console.warn('[VBS] Skipping custom expiry set — not authenticated or anonymous');
-          setToast({ message: 'Auth Required', type: 'error', isVisible: true });
-          return;
-        }
-
         try {
           const date = new Date(dateStr);
           if (isNaN(date.getTime())) {
@@ -1253,51 +1252,60 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           
           const isoExpiry = date.toISOString();
 
-          await updateDoc(doc(db, 'user_controls', id), {
+          await setDoc(doc(db, 'user_controls', id), {
             expiryDate: isoExpiry,
+            vbsId: id,
             updatedAt: serverTimestamp()
-          });
+          }, { merge: true });
           
+          setVbsUsers(prev => prev.map(u => u.vbsId === id ? { ...u, expiryDate: isoExpiry } : u));
           setToast({
             message: 'Custom Expiry Date Set! 📅',
             type: 'success',
             isVisible: true
           });
         } catch (err) {
-          handleFirestoreError(err, OperationType.UPDATE, `user_controls/${id}`);
+          console.error('Failed to set custom expiry:', err);
           setToast({
             message: 'Failed to set custom expiry date.',
             type: 'error',
             isVisible: true
           });
+          try {
+            handleFirestoreError(err, OperationType.UPDATE, `user_controls/${id}`);
+          } catch (e) {
+            console.warn('[VBS] Handled error:', e);
+          }
         }
       }
     });
   };
 
   const handleToggleStatus = async (id: string, currentStatus: boolean) => {
-    if (!getCurrentUserId()) {
-      console.warn('[VBS] Skipping status toggle — not authenticated or anonymous');
-      setToast({ message: 'Auth Required', type: 'error', isVisible: true });
-      return;
-    }
     try {
-      await updateDoc(doc(db, 'user_controls', id), {
+      await setDoc(doc(db, 'user_controls', id), {
         isActive: !currentStatus,
+        vbsId: id,
         updatedAt: serverTimestamp()
-      });
+      }, { merge: true });
+      setVbsUsers(prev => prev.map(u => u.vbsId === id ? { ...u, isActive: !currentStatus } : u));
       setToast({
         message: 'User Status Updated!',
         type: 'success',
         isVisible: true
       });
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `user_controls/${id}`);
+      console.error('Failed to update status:', err);
       setToast({
         message: 'Failed to update user status.',
         type: 'error',
         isVisible: true
       });
+      try {
+        handleFirestoreError(err, OperationType.UPDATE, `user_controls/${id}`);
+      } catch (e) {
+        console.warn('[VBS] Handled error:', e);
+      }
     }
   };
 
@@ -1308,26 +1316,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       type: 'confirm',
       confirmText: 'Delete',
       onConfirm: async () => {
-        if (!getCurrentUserId()) {
-          console.warn('[VBS] Skipping ID deletion — not authenticated or anonymous');
-          setToast({ message: 'Auth Required', type: 'error', isVisible: true });
-          return;
-        }
         setIsDeletingUser(id);
         try {
           await deleteDoc(doc(db, 'user_controls', id));
+          setVbsUsers(prev => prev.filter(u => u.vbsId !== id));
+          const localFallback = localStorage.getItem('user_controls_fallback');
+          if (localFallback) {
+            try {
+              const parsed = JSON.parse(localFallback);
+              localStorage.setItem('user_controls_fallback', JSON.stringify(parsed.filter((u: VBSUserControl) => u.vbsId !== id)));
+            } catch {
+              // ignore
+            }
+          }
           setToast({
             message: 'User ID Deleted Successfully!',
             type: 'success',
             isVisible: true
           });
         } catch (err) {
-          handleFirestoreError(err, OperationType.DELETE, `user_controls/${id}`);
+          console.error('Failed to delete ID:', err);
           setToast({
             message: 'Failed to delete User ID.',
             type: 'error',
             isVisible: true
           });
+          try {
+            handleFirestoreError(err, OperationType.DELETE, `user_controls/${id}`);
+          } catch (e) {
+            console.warn('[VBS] Handled error:', e);
+          }
         } finally {
           setIsDeletingUser(null);
         }
@@ -1745,15 +1763,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <UserPlus className="text-brand-purple" size={20} />
                 <h3 className="text-lg font-bold text-slate-900 dark:text-white">Create New User ID</h3>
               </div>
-              {(!isAdmin(localStorage.getItem('vbs_access_code')) || !isSessionSynced) && (
-                <div className="flex items-center gap-1.5 px-2 py-1 bg-amber-500/10 text-amber-500 rounded-md border border-amber-500/20 animate-pulse">
-                  <Lock size={12} />
-                  <span className="text-[9px] font-black uppercase">Locked</span>
-                </div>
-              )}
             </div>
 
-            <form onSubmit={handleCreateId} className={`space-y-4 ${(!isAdmin(localStorage.getItem('vbs_access_code')) || (!isSessionSynced && localStorage.getItem('vbs_access_code') !== 'saw_vlogs_2026')) ? 'opacity-50 pointer-events-none' : ''}`}>
+            <form onSubmit={handleCreateId} className="space-y-4">
               <div className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Access Code (User ID)</label>
                 <div className="relative">

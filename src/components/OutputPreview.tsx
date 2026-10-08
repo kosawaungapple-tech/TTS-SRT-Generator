@@ -19,7 +19,7 @@ import {
 import { AudioResult } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { formatTime, formatMyanmarDuration, pcmToWav, detectSilence, trimAudioBuffer, audioBufferToWav, convertWavToMp3 } from '../utils/audioUtils';
-import { generateSRT, generateASS, generateLRC, shiftSubtitles } from '../utils/subtitleUtils';
+import { generateSRT, generateASS, generateLRC, shiftSubtitles, createSrtBlob } from '../utils/subtitleUtils';
 
 interface OutputPreviewProps {
   result: AudioResult | null;
@@ -723,12 +723,11 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
     console.log(`[DEBUG] Subtitle File: ${fileName}`);
     
     // Strict formatting for compatibility
-    // CRLF line endings (\r\n) as requested for SRT files
+    // CRLF line endings (\r\n) and UTF-8 with BOM (\uFEFF) for 100% CapCut recognition
     const sanitizedContent = content.replace(/\r?\n/g, '\r\n');
-    
-    // Use text/srt as requested by user for better CapCut recognition. 
-    // Standard SRT is UTF-8 without BOM.
-    const blob = new Blob([sanitizedContent], { type: 'text/srt;charset=utf-8' });
+    const blob = fileName.toLowerCase().endsWith('.srt')
+      ? createSrtBlob(sanitizedContent)
+      : new Blob(['\uFEFF' + sanitizedContent], { type: 'text/plain;charset=utf-8' });
     
     console.log(`[DEBUG] Subtitle File Size: ${blob.size} bytes`);
 

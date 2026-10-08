@@ -1,122 +1,271 @@
 import { SRTSubtitle } from "../types";
-import { formatTime } from "./audioUtils";
 
 /**
- * Advanced Myanmar Subtitle Chunker
- * Rules: 
- * 1. Max 35 characters per line
- * 2. Max 2 lines per block
- * 3. Max duration per block: 3.5 seconds
- * 4. Split at ။, ၊, or space
+ * Normalizes any timestamp or seconds number to strict CapCut SubRip format:
+ * HH:MM:SS,mmm (e.g. 00:00:01,250)
  */
+export function normalizeSrtTimestamp(time: string | number): string {
+  if (typeof time === 'number') {
+    const sec = Math.max(0, isNaN(time) ? 0 : time);
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = Math.floor(sec % 60);
+    const ms = Math.floor((sec % 1) * 1000);
+    const pad = (n: number, z = 2) => String(n).padStart(z, '0');
+    return `${pad(h)}:${pad(m)}:${pad(s)},${pad(ms, 3)}`;
+  }
 
-export function generateOptimizedSubtitles(text: string, totalDuration: number): SRTSubtitle[] {
-  const blocks: string[] = [];
-  
-  // 1. Initial split by major punctuation to keep sentences together where possible
-  const segments = text.split(/([။၊])/g);
-  let currentBlockText = "";
-  
-  for (let i = 0; i < segments.length; i++) {
-    const part = segments[i];
-    if (!part) continue;
-    
-    // If it's punctuation, attach to previous text
-    if (part === "။" || part === "၊") {
-      if (blocks.length > 0) {
-        blocks[blocks.length - 1] += part;
-      } else {
-        currentBlockText += part;
-      }
+  if (!time || typeof time !== 'string') return "00:00:00,000";
+
+  const clean = time.trim().replace(/\./g, ',');
+  const parts = clean.split(',');
+  const hms = parts[0] || '00:00:00';
+  const msRaw = parts[1] || '000';
+  const ms = msRaw.padEnd(3, '0').slice(0, 3);
+
+  const hmsParts = hms.split(':').map(Number);
+  let h = 0, m = 0, s = 0;
+  if (hmsParts.length === 3) {
+    [h, m, s] = hmsParts;
+  } else if (hmsParts.length === 2) {
+    [m, s] = hmsParts;
+  } else if (hmsParts.length === 1) {
+    s = hmsParts[0];
+  }
+
+  const pad = (n: number, z = 2) => String(Math.floor(isNaN(n) ? 0 : n)).padStart(z, '0');
+  return `${pad(h)}:${pad(m)}:${pad(s)},${ms}`;
+}
+
+/**
+ * Splits Myanmar and general text into syllables/words safely.
+ * Never breaks a Myanmar syllable in the middle of stacked consonants or combining diacritics.
+ */
+export function splitMyanmarWordsOrSyllables(text: string): string[] {
+  if (!text) return [];
+
+  // Split initially on spaces or major punctuation while keeping them
+  const rawTokens = text.split(/(\s+|[၊။!?])/g).filter(Boolean);
+  const result: string[] = [];
+
+  for (const token of rawTokens) {
+    // If token has reasonable length or is whitespace/punct, keep as is
+    if (token.length <= 26 || /^\s+$/.test(token) || /^[၊။!?]$/.test(token)) {
+      result.push(token);
       continue;
     }
 
-    // Split part into words/chunks by space
-    const words = part.split(/\s+/);
-    for (const word of words) {
-      if (!word) continue;
-      
-      // Check if adding this word exceeds limits (rough check for block size)
-      // We aim for roughly 70 chars per 2-line block (35 * 2)
-      if ((currentBlockText + " " + word).length > 60) {
-        if (currentBlockText) blocks.push(currentBlockText.trim());
-        currentBlockText = word;
+    // Break long unbroken Myanmar text at safe syllable boundaries
+    let cur = '';
+    for (let i = 0; i < token.length; i++) {
+      const char = token[i];
+      const code = char.charCodeAt(0);
+      const prevChar = i > 0 ? token[i - 1] : '';
+      const prevCode = prevChar ? prevChar.charCodeAt(0) : 0;
+
+      // Base consonants (U+1000 - U+1021), independent vowels (U+1022 - U+102A), digits (U+1040 - U+1049)
+      const isBaseChar = (code >= 0x1000 && code <= 0x102A) || (code >= 0x1040 && code <= 0x1049);
+      const prevIsVirama = prevCode === 0x1039; // Stacked consonant killer
+
+      // Safe syllable boundary if current char is base and previous char wasn't a stacked virama
+      if (isBaseChar && !prevIsVirama && cur.length >= 14) {
+        result.push(cur);
+        cur = char;
       } else {
-        currentBlockText += (currentBlockText ? " " : "") + word;
+        cur += char;
       }
     }
+    if (cur) result.push(cur);
   }
-  
-  if (currentBlockText) blocks.push(currentBlockText.trim());
 
-  // 2. Refine blocks into 2-line structure with 35 char lines
-  const refinedBlocks: string[][] = []; // [line1, line2][]
-  
-  for (const block of blocks) {
-    const lines: string[] = [];
-    const words = block.split(/\s+/);
-    let currentLine = "";
+  return result;
+}
 
-    for (const word of words) {
-      if ((currentLine + " " + word).trim().length > 35) {
-        if (currentLine) lines.push(currentLine.trim());
-        currentLine = word;
+/**
+ * Wraps a single block of text into 1 or 2 balanced lines without exceeding maxLineChars.
+ * Prevents "တစ်ကြောင်းထဲနဲ့ အများကြီးဖြစ်နေခြင်း" (single line with too much text).
+ */
+export function wrapTextIntoLines(text: string, maxLineChars = 32, maxLines = 2): string[] {
+  const clean = text.trim();
+  if (!clean) return [];
+  if (clean.length <= maxLineChars && !clean.includes('\n')) {
+    return [clean];
+  }
+
+  // If already contains newlines, respect them but ensure each line is capped
+  if (clean.includes('\n')) {
+    const rawLines = clean.split('\n').map(l => l.trim()).filter(Boolean);
+    const wrapped: string[] = [];
+    for (const rLine of rawLines) {
+      if (rLine.length <= maxLineChars) {
+        wrapped.push(rLine);
       } else {
-        currentLine += (currentLine ? " " : "") + word;
+        wrapped.push(...wrapTextIntoLines(rLine, maxLineChars, maxLines));
       }
     }
-    if (currentLine) lines.push(currentLine.trim());
+    return wrapped.slice(0, maxLines);
+  }
 
-    // Group lines into 2-line blocks
-    for (let i = 0; i < lines.length; i += 2) {
-      const pair = [lines[i]];
-      if (lines[i+1]) pair.push(lines[i+1]);
-      refinedBlocks.push(pair);
+  // Tokenize
+  const tokens = splitMyanmarWordsOrSyllables(clean);
+  const lines: string[] = [];
+  let currentLine = '';
+
+  for (const token of tokens) {
+    const isSpace = /^\s+$/.test(token);
+    const candidate = currentLine + token;
+
+    if (candidate.trim().length > maxLineChars) {
+      if (currentLine.trim()) {
+        lines.push(currentLine.trim());
+      }
+      currentLine = isSpace ? '' : token;
+    } else {
+      currentLine += token;
     }
   }
 
-  // 3. Split blocks so no block exceeds recommended reading speed or character limit (~55 chars)
-  const maxCharsPerBlock = 55;
-  const finalBlocks: string[][] = [];
+  if (currentLine.trim()) {
+    lines.push(currentLine.trim());
+  }
 
-  for (const pair of refinedBlocks) {
-    const combined = pair.join(" ");
-    if (combined.length > maxCharsPerBlock) {
-      // Split into single line blocks
-      for (const line of pair) {
-        if (line.length > maxCharsPerBlock) {
-          const words = line.split(/\s+/);
-          let current = "";
-          for (const w of words) {
-            if ((current + " " + w).trim().length > 35) {
-              if (current) finalBlocks.push([current.trim()]);
-              current = w;
-            } else {
-              current += (current ? " " : "") + w;
-            }
-          }
-          if (current) finalBlocks.push([current.trim()]);
-        } else {
-          finalBlocks.push([line]);
-        }
+  // If we have more than maxLines, merge or balance
+  if (lines.length > maxLines) {
+    // If it's 2 lines requested and we have 2-3, balance them into 2 lines
+    const half = Math.ceil(clean.length / 2);
+    let splitIdx = half;
+
+    // Search nearest space or syllable boundary near half
+    for (let delta = 0; delta < Math.floor(clean.length / 3); delta++) {
+      const right = half + delta;
+      const left = half - delta;
+      if (clean[right] === ' ' || clean[right] === '၊') {
+        splitIdx = right + 1;
+        break;
+      }
+      if (clean[left] === ' ' || clean[left] === '၊') {
+        splitIdx = left + 1;
+        break;
+      }
+    }
+
+    const line1 = clean.substring(0, splitIdx).trim();
+    const line2 = clean.substring(splitIdx).trim();
+    if (line1 && line2) {
+      return [line1, line2];
+    }
+  }
+
+  return lines.slice(0, maxLines);
+}
+
+/**
+ * Splits a long sentence into 1 or more subtitle cue blocks.
+ * Each cue block has at most 2 lines, and no line exceeds maxLineChars (default 32).
+ */
+export function splitSentenceIntoCueBlocks(sentence: string, maxCharsPerCue = 56, maxLineChars = 32): string[][] {
+  const clean = sentence.trim();
+  if (!clean) return [];
+
+  if (clean.length <= maxCharsPerCue) {
+    const lines = wrapTextIntoLines(clean, maxLineChars, 2);
+    return [lines];
+  }
+
+  // Break sentence into sub-chunks at commas, spaces, or syllables
+  const tokens = splitMyanmarWordsOrSyllables(clean);
+  const blocks: string[][] = [];
+  let curChunk = '';
+
+  for (const token of tokens) {
+    const candidate = curChunk + token;
+    if (candidate.trim().length > maxCharsPerCue) {
+      if (curChunk.trim()) {
+        const lines = wrapTextIntoLines(curChunk.trim(), maxLineChars, 2);
+        blocks.push(lines);
+      }
+      curChunk = /^\s+$/.test(token) ? '' : token;
+    } else {
+      curChunk += token;
+    }
+  }
+
+  if (curChunk.trim()) {
+    const lines = wrapTextIntoLines(curChunk.trim(), maxLineChars, 2);
+    blocks.push(lines);
+  }
+
+  return blocks;
+}
+
+/**
+ * Advanced Myanmar & Multi-Language Subtitle Chunker
+ * Rules:
+ * 1. Max 32-34 characters per line
+ * 2. Max 2 lines per block
+ * 3. Proportional timing based on characters + pause weights
+ * 4. Never creates an oversized single line
+ */
+export function generateOptimizedSubtitles(text: string, totalDuration: number): SRTSubtitle[] {
+  if (!text || text.trim().length === 0) return [];
+
+  // 1. Initial split by major sentence delimiters (။, \n, !, ?)
+  const rawSentences = text
+    .split(/([။!?\n]+)/g)
+    .filter(Boolean);
+
+  const unifiedSentences: string[] = [];
+  for (let i = 0; i < rawSentences.length; i++) {
+    const part = rawSentences[i].trim();
+    if (!part) continue;
+
+    if (/[။!?\n]+/.test(part)) {
+      if (unifiedSentences.length > 0) {
+        unifiedSentences[unifiedSentences.length - 1] += ' ' + part.replace(/\n+/g, ' ');
+      } else {
+        unifiedSentences.push(part);
       }
     } else {
-      finalBlocks.push(pair);
+      unifiedSentences.push(part);
+    }
+  }
+
+  // 2. Break sentences into clean 1-to-2 line blocks (max 54 chars per cue, max 32 chars per line)
+  const finalBlocks: string[][] = [];
+
+  for (const sentence of unifiedSentences) {
+    // If sentence contains commas, also split clauses if long
+    if (sentence.includes('၊') && sentence.length > 50) {
+      const clauses = sentence.split(/(၊)/g).filter(Boolean);
+      let curClause = '';
+      for (const cl of clauses) {
+        if (cl === '၊') {
+          curClause += '၊';
+          if (curClause.length >= 35) {
+            finalBlocks.push(...splitSentenceIntoCueBlocks(curClause, 54, 32));
+            curClause = '';
+          }
+        } else {
+          curClause += cl;
+        }
+      }
+      if (curClause.trim()) {
+        finalBlocks.push(...splitSentenceIntoCueBlocks(curClause, 54, 32));
+      }
+    } else {
+      finalBlocks.push(...splitSentenceIntoCueBlocks(sentence, 54, 32));
     }
   }
 
   if (finalBlocks.length === 0) return [];
 
-  // 4. Calculate speech & pause weights for proportional, drift-free timing
-  // In Myanmar language:
-  // "။" indicates a sentence end pause (~0.4s - 0.5s)
-  // "၊" indicates a clause pause (~0.2s - 0.3s)
+  // 3. Calculate speech & pause weights for proportional, drift-free timing
   const weights: number[] = finalBlocks.map((lines) => {
-    const text = lines.join(" ");
-    let weight = Math.max(8, text.length);
-    if (text.includes("။")) weight += 10; // pause bonus
-    if (text.includes("၊")) weight += 5;
-    if (text.includes("...")) weight += 8;
+    const blockText = lines.join(" ");
+    let weight = Math.max(10, blockText.length);
+    if (blockText.includes("။")) weight += 12; // sentence end pause
+    if (blockText.includes("၊")) weight += 6;  // clause pause
+    if (blockText.includes("...")) weight += 8;
     return weight;
   });
 
@@ -125,15 +274,17 @@ export function generateOptimizedSubtitles(text: string, totalDuration: number):
   let currentTime = 0;
 
   finalBlocks.forEach((lines, index) => {
-    const blockText = lines.join("\r\n");
+    // Clean each line and join with \r\n
+    const cleanLines = lines.map(l => l.trim()).filter(Boolean);
+    const blockText = cleanLines.join("\r\n");
     const blockDuration = totalDuration * (weights[index] / Math.max(1, totalWeight));
     const isLast = index === finalBlocks.length - 1;
     const nextTime = isLast ? totalDuration : currentTime + blockDuration;
 
     subtitles.push({
       index: index + 1,
-      startTime: formatTime(currentTime),
-      endTime: formatTime(nextTime),
+      startTime: normalizeSrtTimestamp(currentTime),
+      endTime: normalizeSrtTimestamp(nextTime),
       text: blockText
     });
 
@@ -157,11 +308,13 @@ export function generateSubtitlesFromTimestamps(text: string, totalDuration: num
     const content = match[4].trim();
 
     if (content) {
+      // Ensure content is nicely wrapped if long
+      const wrapped = wrapTextIntoLines(content, 32, 2).join('\r\n');
       subtitles.push({
         index: index++,
-        startTime: formatTime(startTimeInSeconds),
-        endTime: "", // Will be filled next
-        text: content
+        startTime: normalizeSrtTimestamp(startTimeInSeconds),
+        endTime: "",
+        text: wrapped || content
       });
     }
   }
@@ -169,62 +322,122 @@ export function generateSubtitlesFromTimestamps(text: string, totalDuration: num
   // Set end times
   for (let i = 0; i < subtitles.length; i++) {
     if (i < subtitles.length - 1) {
-       subtitles[i].endTime = subtitles[i + 1].startTime;
+      subtitles[i].endTime = subtitles[i + 1].startTime;
     } else {
-       subtitles[i].endTime = formatTime(totalDuration);
+      subtitles[i].endTime = normalizeSrtTimestamp(totalDuration);
     }
-    
-    // Safety check: if end time < start time (due to malformed input)
+
     const start = parseTimestampToSeconds(subtitles[i].startTime);
     const end = parseTimestampToSeconds(subtitles[i].endTime);
     if (end <= start) {
-      subtitles[i].endTime = formatTime(start + 2); // Default 2s duration
+      subtitles[i].endTime = normalizeSrtTimestamp(start + 2);
     }
-    
-    // Max duration cap to prevent overlap issues
+
     if (end > start + 7) {
-      subtitles[i].endTime = formatTime(start + 7);
+      subtitles[i].endTime = normalizeSrtTimestamp(start + 7);
     }
   }
 
   return subtitles;
 }
 
+/**
+ * Generates 100% CapCut & NLE-compatible SubRip (.SRT) text.
+ * Strict rules enforced:
+ * 1. Sequential integer index (1, 2, 3...)
+ * 2. Strict timestamp format: HH:MM:SS,mmm --> HH:MM:SS,mmm
+ * 3. CRLF (\r\n) line breaks
+ * 4. Exactly one empty line (\r\n\r\n) between blocks
+ * 5. Strips empty cues and internal blank lines that break CapCut parser
+ * 6. Guarantees end > start
+ */
 export function generateSRT(subtitles: SRTSubtitle[]): string {
   if (!subtitles || subtitles.length === 0) return "";
-  
-  return subtitles
-    .filter(s => s.text && s.text.trim().length > 0)
-    .map(s => {
-      // Ensure strict format: Index\r\nTime --> Time\r\nText\r\n
-      // Index must be an integer, HH:MM:SS,mmm format for times
-      // Comma separator for milliseconds is standard for SubRip
-      // CapCut is very strict about HH:MM:SS,mmm format
-      const startTime = s.startTime.replace(/\./g, ',');
-      const endTime = s.endTime.replace(/\./g, ',');
-      // Force CRLF for the text lines inside the block
-      const text = s.text.trim().replace(/\r?\n/g, '\r\n');
-      return `${s.index}\r\n${startTime} --> ${endTime}\r\n${text}\r\n`;
-    })
-    .join('\r\n'); // Ensures exactly one blank line between blocks as requested by CapCut
+
+  const validSubs = subtitles.filter(s => s && s.text && s.text.trim().length > 0);
+  if (validSubs.length === 0) return "";
+
+  const blocks: string[] = [];
+
+  validSubs.forEach((s) => {
+    let startSec = parseTimestampToSeconds(s.startTime);
+    let endSec = parseTimestampToSeconds(s.endTime);
+    if (isNaN(startSec) || startSec < 0) startSec = 0;
+    if (isNaN(endSec) || endSec <= startSec) {
+      endSec = startSec + 1.5;
+    }
+
+    const startFormatted = normalizeSrtTimestamp(startSec);
+    const endFormatted = normalizeSrtTimestamp(endSec);
+
+    // Clean text lines: normalize line breaks, remove blank lines inside cue
+    const textLines = s.text
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .split('\n')
+      .map(l => l.trim())
+      .filter(l => l.length > 0);
+
+    if (textLines.length === 0) return;
+
+    const blockIndex = blocks.length + 1;
+    const blockContent = `${blockIndex}\r\n${startFormatted} --> ${endFormatted}\r\n${textLines.join('\r\n')}`;
+    blocks.push(blockContent);
+  });
+
+  if (blocks.length === 0) return "";
+
+  // CapCut requires sequential blocks separated by CRLF blank line, plus trailing CRLF
+  return blocks.join('\r\n\r\n') + '\r\n\r\n';
+}
+
+/**
+ * Creates a CapCut-ready Blob with UTF-8 BOM (\uFEFF) and MIME type text/plain;charset=utf-8.
+ * UTF-8 BOM is required by Windows/CapCut Desktop to read Myanmar Unicode without decoding corruption.
+ * text/plain MIME type prevents mobile browsers from appending .txt or failing CapCut file intent.
+ */
+export function createSrtBlob(srtContent: string): Blob {
+  const normalized = srtContent.replace(/\r?\n/g, '\r\n');
+  const withBom = normalized.startsWith('\uFEFF') ? normalized : `\uFEFF${normalized}`;
+  return new Blob([withBom], { type: 'text/plain;charset=utf-8' });
+}
+
+/**
+ * Universal browser file download helper for CapCut-compatible SRT.
+ */
+export function downloadSrtFile(srtContent: string, fileName: string): void {
+  if (!srtContent || srtContent.trim().length === 0) return;
+  const safeName = fileName.toLowerCase().endsWith('.srt') ? fileName : `${fileName}.srt`;
+  const blob = createSrtBlob(srtContent);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.style.display = 'none';
+  link.href = url;
+  link.download = safeName;
+  document.body.appendChild(link);
+  link.click();
+  setTimeout(() => {
+    if (document.body.contains(link)) {
+      document.body.removeChild(link);
+    }
+    URL.revokeObjectURL(url);
+  }, 200);
 }
 
 export function generateASS(subtitles: SRTSubtitle[]): string {
   const header = `[Script Info]\r\nScriptType: v4.00+\r\nCollisions: Normal\r\nPlayResX: 1280\r\nPlayResY: 720\r\n\r\n[V4+ Styles]\r\nFormat: Name, Fontname, Fontsize, PrimaryColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV\r\nStyle: Default,Arial,40,&H00FFFFFF,0,0,1,2,0,2,10,10,10\r\n\r\n[Events]\r\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\r\n`;
-  
+
   const formatASSTime = (timeStr: string) => {
-    // Input is HH:MM:SS,mmm
-    const [hms, ms] = timeStr.split(',');
+    const clean = normalizeSrtTimestamp(timeStr);
+    const [hms, ms] = clean.split(',');
     const [h, m, s] = hms.split(':');
     const centiseconds = Math.floor(parseInt(ms) / 10).toString().padStart(2, '0');
-    // ASS format often drops leading zero on hours if it's 0, but H:MM:SS.CC is standard
     return `${parseInt(h)}:${m}:${s}.${centiseconds}`;
   };
 
   const lines = subtitles.map(s => {
     const startTime = formatASSTime(s.startTime);
     const endTime = formatASSTime(s.endTime);
-    // Remove \r\n from text for ASS and replace with \N
     const cleanText = s.text.replace(/\r\n/g, '\\N').replace(/\n/g, '\\N').trim();
     return `Dialogue: 0,${startTime},${endTime},Default,,0,0,0,,${cleanText}`;
   });
@@ -234,8 +447,8 @@ export function generateASS(subtitles: SRTSubtitle[]): string {
 
 export function generateLRC(subtitles: SRTSubtitle[]): string {
   const formatLRCTime = (timeStr: string) => {
-    // Input is HH:MM:SS,mmm
-    const [hms, ms] = timeStr.split(',');
+    const clean = normalizeSrtTimestamp(timeStr);
+    const [hms, ms] = clean.split(',');
     const [h, m, s] = hms.split(':');
     const totalMinutes = parseInt(h) * 60 + parseInt(m);
     const centiseconds = Math.floor(parseInt(ms) / 10).toString().padStart(2, '0');
@@ -256,10 +469,10 @@ export function parseTimestampToSeconds(timestamp: string): number {
   const parts = hms.split(':').map(Number);
   if (parts.length === 3) {
     const [h, m, s] = parts;
-    return h * 3600 + m * 60 + s + (Number(ms) / 1000);
+    return (h || 0) * 3600 + (m || 0) * 60 + (s || 0) + (Number(ms) / 1000);
   } else if (parts.length === 2) {
     const [m, s] = parts;
-    return m * 60 + s + (Number(ms) / 1000);
+    return (m || 0) * 60 + (s || 0) + (Number(ms) / 1000);
   }
   return 0;
 }
@@ -293,13 +506,13 @@ export function shiftSrtContent(srtText: string, offsetSeconds: number): string 
       const newStart = Math.max(0, origStart + offsetSeconds);
       const newEnd = Math.max(newStart + 0.1, origEnd + offsetSeconds);
 
-      lines[timeLineIdx] = `${formatTime(newStart).replace(/\./g, ',')} --> ${formatTime(newEnd).replace(/\./g, ',')}`;
+      lines[timeLineIdx] = `${normalizeSrtTimestamp(newStart)} --> ${normalizeSrtTimestamp(newEnd)}`;
       lines[0] = String(shiftedBlocks.length + 1);
       shiftedBlocks.push(lines.join('\r\n'));
     }
   }
 
-  return shiftedBlocks.join('\r\n\r\n') + '\r\n';
+  return shiftedBlocks.join('\r\n\r\n') + '\r\n\r\n';
 }
 
 /**
@@ -312,7 +525,7 @@ export function shiftSubtitles(
   maxDuration?: number
 ): SRTSubtitle[] {
   if (offsetSeconds <= 0 && !maxDuration) return subtitles;
-  
+
   let validIndex = 1;
   const result: SRTSubtitle[] = [];
 
@@ -320,7 +533,6 @@ export function shiftSubtitles(
     const origStart = parseTimestampToSeconds(sub.startTime);
     const origEnd = parseTimestampToSeconds(sub.endTime);
 
-    // If subtitle ended before trim point, skip
     if (origEnd <= offsetSeconds) continue;
 
     const shiftedStart = Math.max(0, origStart - offsetSeconds);
@@ -333,8 +545,8 @@ export function shiftSubtitles(
     if (finalEnd > shiftedStart) {
       result.push({
         index: validIndex++,
-        startTime: formatTime(shiftedStart),
-        endTime: formatTime(finalEnd),
+        startTime: normalizeSrtTimestamp(shiftedStart),
+        endTime: normalizeSrtTimestamp(finalEnd),
         text: sub.text
       });
     }

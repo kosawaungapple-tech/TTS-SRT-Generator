@@ -73,6 +73,25 @@ async function startServer() {
     res.json({ status: "ok", message: "Server is healthy", timestamp: new Date().toISOString() });
   });
 
+  // Worker Health Proxy Endpoint (enables phones/tablets on HTTPS/remote to ping LAN/VPS worker)
+  app.get("/api/worker/health", async (req, res) => {
+    const targetUrl = (req.query.url as string) || "http://localhost:5005";
+    const cleanUrl = targetUrl.trim().replace(/\/+$/, "");
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+      const response = await fetch(`${cleanUrl}/health`, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (response.ok) {
+        const data = await response.json();
+        return res.json({ ...data, proxied: true });
+      }
+      return res.status(response.status).json({ status: "offline", error: `HTTP ${response.status}` });
+    } catch (err: unknown) {
+      return res.json({ status: "offline", error: err instanceof Error ? err.message : "Unreachable" });
+    }
+  });
+
   // AssemblyAI Audio/Video Upload Endpoint
   app.post("/api/assemblyai/upload", upload.single("file"), async (req: express.Request, res: express.Response) => {
     const file = req.file;
@@ -279,7 +298,8 @@ async function startServer() {
   app.post("/api/video/process", upload.fields([
     { name: 'video', maxCount: 1 },
     { name: 'audio', maxCount: 1 },
-    { name: 'logo', maxCount: 1 }
+    { name: 'logo', maxCount: 1 },
+    { name: 'fontFile', maxCount: 1 }
   ]), async (req: express.Request, res: express.Response) => {
     console.log('[VBS Video] Processing request received');
     console.log('[VBS Video] Files:', req.files);
@@ -298,6 +318,7 @@ async function startServer() {
       const videoFile = files?.['video']?.[0];
       const audioFile = files?.['audio']?.[0];
       const logoFile = files?.['logo']?.[0];
+      const fontFile = files?.['fontFile']?.[0];
 
       if (!videoFile) {
         console.warn('[VBS Video] No video file received in request');
@@ -313,6 +334,44 @@ async function startServer() {
       const subtitleText = req.body.subtitleText || "";
       const subtitleSize = req.body.subtitleSize || "medium";
       const pitchShift = parseFloat(req.body.pitchShift || "0");
+
+      // Custom Font and Style Settings
+      const fontFamily = (req.body.fontFamily || "").replace(/['"]/g, '').split(',')[0].trim();
+      const fontColor = req.body.fontColor || "#FFFFFF";
+      const strokeColor = req.body.strokeColor || "#000000";
+      const fontSizeNum = parseInt(req.body.fontSize) || 24;
+
+      const hexToAss = (hex: string, fallback: string) => {
+        if (!hex || typeof hex !== 'string') return fallback;
+        const clean = hex.replace('#', '').trim();
+        if (clean.length === 6) {
+          const r = clean.substring(0, 2);
+          const g = clean.substring(2, 4);
+          const b = clean.substring(4, 6);
+          return `&H00${b}${g}${r}`.toUpperCase();
+        }
+        return fallback;
+      };
+
+      const assPrimary = hexToAss(fontColor, '&H00FFFFFF');
+      const assOutline = hexToAss(strokeColor, '&H00000000');
+
+      let customFontTempPath: string | null = null;
+      let fontDirForAss: string | null = null;
+
+      if (fontFile && fs.existsSync(fontFile.path)) {
+        const ext = path.extname(fontFile.originalname || '') || '.ttf';
+        const fontNameBase = (fontFamily || 'CustomFont').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const fontDir = path.join('/tmp', `fonts_${Date.now()}`);
+        try {
+          if (!fs.existsSync(fontDir)) fs.mkdirSync(fontDir, { recursive: true });
+          customFontTempPath = path.join(fontDir, `${fontNameBase}${ext}`);
+          fs.copyFileSync(fontFile.path, customFontTempPath);
+          fontDirForAss = fontDir;
+        } catch (e) {
+          console.warn('[VBS Video] Could not stage custom font:', e);
+        }
+      }
 
       // Movie Recap specific params
       const videoSpeed = parseFloat(req.body.videoSpeed || "1.0");
@@ -424,17 +483,19 @@ async function startServer() {
             tempSrtPath = path.join('/tmp', `sub_${Date.now()}_${Math.random().toString(36).substring(7)}.srt`);
             fs.writeFileSync(tempSrtPath, srtContent, 'utf-8');
             const escapedSrtPath = tempSrtPath.replace(/'/g, "'\\\\''").replace(/:/g, "\\:");
-            vFilters.push(`subtitles='${escapedSrtPath}':force_style='FontName=Noto Sans Myanmar,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3,Outline=2.5,MarginV=40'`);
+            const fontNamePart = fontFamily ? `FontName=${fontFamily},` : (fontFile ? '' : 'FontName=Noto Sans Myanmar,');
+            const fontsDirPart = fontDirForAss ? `:fontsdir='${fontDirForAss}'` : '';
+            vFilters.push(`subtitles='${escapedSrtPath}'${fontsDirPart}:force_style='${fontNamePart}FontSize=${fontSizeNum},PrimaryColour=${assPrimary},OutlineColour=${assOutline},BorderStyle=3,Outline=2.5,MarginV=40'`);
           } catch (srtErr) {
             console.error('[VBS Video] Failed to write temporary SRT file:', srtErr);
           }
         } else if (activeFeatureNames.includes("burnIn") && subtitleText) {
           const fontSizeMap: Record<string, number> = { 'small': 30, 'medium': 45, 'large': 60 };
-          const fontSize = fontSizeMap[subtitleSize] || 45;
-          const fontPath = '/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf';
-          const fontArg = fs.existsSync(fontPath) ? `:fontfile='${fontPath}'` : '';
+          const fontSize = fontSizeNum || fontSizeMap[subtitleSize] || 45;
+          const chosenFontPath = customFontTempPath || fontFile?.path || '/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf';
+          const fontArg = fs.existsSync(chosenFontPath) ? `:fontfile='${chosenFontPath.replace(/'/g, "'\\\\''")}'` : '';
           const escapedText = subtitleText.replace(/'/g, "'\\\\''").replace(/:/g, "\\:");
-          vFilters.push(`drawtext=text='${escapedText}':fontcolor=white:fontsize=${fontSize}:shadowcolor=black:shadowx=2:shadowy=2:x=(w-text_w)/2:y=h-(h*0.15)${fontArg}`);
+          vFilters.push(`drawtext=text='${escapedText}':fontcolor=${fontColor || 'white'}:fontsize=${fontSize}:shadowcolor=black:shadowx=2:shadowy=2:x=(w-text_w)/2:y=h-(h*0.15)${fontArg}`);
         }
 
         if (vFilters.length > 0) {
@@ -526,6 +587,15 @@ async function startServer() {
             if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
             if (audioInputPath && fs.existsSync(audioInputPath)) fs.unlinkSync(audioInputPath);
             if (logoInputPath && fs.existsSync(logoInputPath)) fs.unlinkSync(logoInputPath);
+            if (customFontTempPath && fs.existsSync(customFontTempPath)) {
+              try { fs.unlinkSync(customFontTempPath); } catch {}
+            }
+            if (fontDirForAss && fs.existsSync(fontDirForAss)) {
+              try { fs.rmdirSync(fontDirForAss); } catch {}
+            }
+            if (fontFile && fs.existsSync(fontFile.path)) {
+              try { fs.unlinkSync(fontFile.path); } catch {}
+            }
             
             res.json({ 
               success: true, 
@@ -542,6 +612,15 @@ async function startServer() {
           if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
           if (audioInputPath && fs.existsSync(audioInputPath)) fs.unlinkSync(audioInputPath);
           if (logoInputPath && fs.existsSync(logoInputPath)) fs.unlinkSync(logoInputPath);
+          if (customFontTempPath && fs.existsSync(customFontTempPath)) {
+            try { fs.unlinkSync(customFontTempPath); } catch {}
+          }
+          if (fontDirForAss && fs.existsSync(fontDirForAss)) {
+            try { fs.rmdirSync(fontDirForAss); } catch {}
+          }
+          if (fontFile && fs.existsSync(fontFile.path)) {
+            try { fs.unlinkSync(fontFile.path); } catch {}
+          }
           if (fs.existsSync(tempOutputPath)) fs.unlinkSync(tempOutputPath);
           res.status(500).json({ success: false, error: "FFmpeg execution failed: " + err.message });
         })
@@ -555,12 +634,90 @@ async function startServer() {
       if (files?.['video']?.[0]?.path && fs.existsSync(files['video'][0].path)) fs.unlinkSync(files['video'][0].path);
       if (files?.['audio']?.[0]?.path && fs.existsSync(files['audio'][0].path)) fs.unlinkSync(files['audio'][0].path);
       if (files?.['logo']?.[0]?.path && fs.existsSync(files['logo'][0].path)) fs.unlinkSync(files['logo'][0].path);
+      if (files?.['fontFile']?.[0]?.path && fs.existsSync(files['fontFile'][0].path)) fs.unlinkSync(files['fontFile'][0].path);
       
       res.status(500).json({ 
         success: false, 
         error: "Server Error: " + errorMessage
       });
     }
+  });
+
+  // Cross-Device Worker Proxy Endpoint
+  // Allows mobile phones, tablets, or other PCs (especially on HTTPS) to utilize the PC / VPS FFmpeg worker
+  // without mixed-content restrictions, and provides seamless Server FFmpeg fallback!
+  app.post("/api/worker/process", upload.fields([
+    { name: 'video', maxCount: 1 },
+    { name: 'audio', maxCount: 1 },
+    { name: 'logo', maxCount: 1 },
+    { name: 'fontFile', maxCount: 1 }
+  ]), async (req: express.Request, res: express.Response) => {
+    const targetUrl = (req.query.url as string) || (req.body.workerUrl as string);
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+    const videoFile = files?.['video']?.[0];
+
+    if (!videoFile) {
+      return res.status(400).json({ success: false, error: "No video file received" });
+    }
+
+    if (targetUrl && targetUrl.trim()) {
+      const cleanUrl = targetUrl.trim().replace(/\/+$/, '');
+      try {
+        console.log(`[Worker Proxy] Forwarding render job to: ${cleanUrl}/process`);
+        const forwardFormData = new FormData();
+        const videoBuffer = fs.readFileSync(videoFile.path);
+        forwardFormData.append('video', new Blob([videoBuffer]), videoFile.originalname || 'video.mp4');
+
+        if (files?.['audio']?.[0]) {
+          const audioBuf = fs.readFileSync(files['audio'][0].path);
+          forwardFormData.append('audio', new Blob([audioBuf]), files['audio'][0].originalname || 'audio.mp3');
+        }
+        if (files?.['logo']?.[0]) {
+          const logoBuf = fs.readFileSync(files['logo'][0].path);
+          forwardFormData.append('logo', new Blob([logoBuf]), files['logo'][0].originalname || 'logo.png');
+        }
+        if (files?.['fontFile']?.[0]) {
+          const fontBuf = fs.readFileSync(files['fontFile'][0].path);
+          forwardFormData.append('fontFile', new Blob([fontBuf]), files['fontFile'][0].originalname || 'font.ttf');
+        }
+
+        for (const [key, val] of Object.entries(req.body)) {
+          if (typeof val === 'string') {
+            forwardFormData.append(key, val);
+          }
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 300000); // 5 min timeout
+        const workerResponse = await fetch(`${cleanUrl}/process`, {
+          method: 'POST',
+          body: forwardFormData,
+          signal: controller.signal
+        });
+        clearTimeout(timeout);
+
+        if (workerResponse.ok) {
+          const workerData = await workerResponse.json();
+          if (workerData.success) {
+            for (const fileList of Object.values(files)) {
+              for (const f of fileList) {
+                try { if (fs.existsSync(f.path)) fs.unlinkSync(f.path); } catch {}
+              }
+            }
+            return res.json({ ...workerData, proxied: true });
+          }
+        }
+        console.warn(`[Worker Proxy] Worker response unsuccessful, proceeding with server FFmpeg fallback`);
+      } catch (proxyErr) {
+        console.warn(`[Worker Proxy] Forwarding to ${cleanUrl} failed; fallback to server FFmpeg:`, proxyErr);
+      }
+    }
+
+    // Direct Server Render Fallback: forward to internal /api/video/process
+    // Re-route to the server processor directly
+    const videoUrlRedirect = '/api/video/process';
+    // Since req has already parsed multipart, call the process route via internal forwarding or re-invoke
+    return res.redirect(307, videoUrlRedirect);
   });
 
   // Helper function to recursively convert server-side Buffer objects to Base64 strings for serialization

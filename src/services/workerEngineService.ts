@@ -12,6 +12,8 @@ export interface WorkerHealthInfo {
   ffmpegVersion?: string;
   platform?: string;
   hostname?: string;
+  lanIps?: string[];
+  isProxied?: boolean;
   uptimeSeconds?: number;
   lastChecked?: number;
   error?: string;
@@ -65,9 +67,10 @@ export class WorkerEngineService {
     const url = this.getWorkerUrl();
     const endpoint = `${url}/health`;
 
+    // 1. Try Direct fetch first
     try {
       const controller = new AbortController();
-      const timeoutId = window.setTimeout(() => controller.abort(), 2500);
+      const timeoutId = window.setTimeout(() => controller.abort(), 2000);
 
       const resp = await fetch(endpoint, {
         method: 'GET',
@@ -86,25 +89,51 @@ export class WorkerEngineService {
           ffmpegVersion: data.ffmpegVersion,
           platform: data.platform,
           hostname: data.hostname,
+          lanIps: data.lanIps || [],
+          isProxied: false,
           uptimeSeconds: data.uptimeSeconds,
           lastChecked: Date.now()
         };
-      } else {
-        this.currentHealth = {
-          status: 'offline',
-          lastChecked: Date.now(),
-          error: `HTTP ${resp.status}`
-        };
+        this.notify();
+        return this.currentHealth;
       }
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : 'Unreachable';
-      this.currentHealth = {
-        status: 'offline',
-        lastChecked: Date.now(),
-        error: errMsg
-      };
+    } catch {
+      // Direct connection failed (may be mixed-content on mobile HTTPS or private network blocked).
+      // Fall through to server proxy check.
     }
 
+    // 2. Try Server Proxy check (crucial for mobile/tablet accessing remote/local worker)
+    try {
+      const proxyResp = await fetch(`/api/worker/health?url=${encodeURIComponent(url)}`);
+      if (proxyResp.ok) {
+        const data = await proxyResp.json();
+        if (data.status === 'online') {
+          this.currentHealth = {
+            status: 'online',
+            engine: data.engine || 'vbs-ffmpeg-worker',
+            version: data.version,
+            ffmpegAvailable: data.ffmpegAvailable,
+            ffmpegVersion: data.ffmpegVersion,
+            platform: data.platform,
+            hostname: data.hostname,
+            lanIps: data.lanIps || [],
+            isProxied: true,
+            uptimeSeconds: data.uptimeSeconds,
+            lastChecked: Date.now()
+          };
+          this.notify();
+          return this.currentHealth;
+        }
+      }
+    } catch {
+      // Proxy also failed
+    }
+
+    this.currentHealth = {
+      status: 'offline',
+      lastChecked: Date.now(),
+      error: 'Unreachable'
+    };
     this.notify();
     return this.currentHealth;
   }
@@ -122,29 +151,73 @@ export class WorkerEngineService {
 
   /**
    * Send video processing job to the Local PC / VPS FFmpeg Worker
+   * with automatic Server FFmpeg fallback for other devices.
    */
   public static async processVideo(
     formData: FormData,
     onProgress?: (text: string) => void
   ): Promise<{ success: boolean; downloadUrl: string; filename?: string }> {
     const url = this.getWorkerUrl();
-    if (onProgress) onProgress('Local PC FFmpeg Engine သို့ ဒေတာပေးပို့နေသည်...');
+    if (onProgress) onProgress('FFmpeg Worker Engine သို့ ချိတ်ဆက်ပေးပို့နေသည်...');
 
-    const response = await fetch(`${url}/process`, {
+    // 1. Try Direct Worker Post (Works when browser can directly reach worker, e.g. on localhost or same HTTP network)
+    const isHttpsOrigin = typeof window !== 'undefined' && window.location.protocol === 'https:';
+    const isHttpWorker = url.startsWith('http://');
+
+    // Only try direct if not in mixed-content block scenario (HTTPS page to HTTP private IP)
+    if (!isHttpsOrigin || !isHttpWorker) {
+      try {
+        const response = await fetch(`${url}/process`, {
+          method: 'POST',
+          body: formData
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.downloadUrl) {
+            return data;
+          }
+        }
+      } catch (directErr) {
+        console.warn('[VBS Worker] Direct worker post failed (trying Server Proxy):', directErr);
+      }
+    }
+
+    // 2. Try Server Worker Proxy (Enables phones/tablets/other devices on HTTPS to render via LAN/VPS worker without mixed-content error)
+    try {
+      if (onProgress) onProgress('Cross-Device Worker Proxy ဖြင့် ချိတ်ဆက် Render လုပ်နေပါသည်...');
+      const proxyResp = await fetch(`/api/worker/process?url=${encodeURIComponent(url)}`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (proxyResp.ok) {
+        const data = await proxyResp.json();
+        if (data.success && data.downloadUrl) {
+          return data;
+        }
+      }
+    } catch (proxyErr) {
+      console.warn('[VBS Worker] Server worker proxy failed (falling back to Server Native FFmpeg):', proxyErr);
+    }
+
+    // 3. Fallback to Server FFmpeg Engine
+    if (onProgress) onProgress('Server Native FFmpeg Engine ဖြင့် Zero-Stutter ဆက်လက် Render လုပ်နေပါသည်...');
+    const serverResp = await fetch('/api/video/process', {
       method: 'POST',
       body: formData
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Local PC Worker failed (HTTP ${response.status}): ${errText.slice(0, 200)}`);
+    if (!serverResp.ok) {
+      const errText = await serverResp.text();
+      throw new Error(`Video processing failed (HTTP ${serverResp.status}): ${errText.slice(0, 200)}`);
     }
 
-    const data = await response.json();
-    if (!data.success || !data.downloadUrl) {
-      throw new Error(data.error || 'Local PC Worker returned unknown error');
+    const serverData = await serverResp.json();
+    if (!serverData.success || !serverData.downloadUrl) {
+      throw new Error(serverData.error || 'Server processing returned unknown error');
     }
 
-    return data;
+    return serverData;
   }
 }

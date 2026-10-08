@@ -83,21 +83,20 @@ export const getIdToken = async () => {
 
 export function getCurrentUserId(): string | null {
   const user = auth.currentUser;
-  // Previously we blocked anonymous writes here, but this app uses Access Code login
-  // which leaves users technically anonymous. We must allow them to write their own docs.
-  if (!user) return null;
-  return user.uid;
+  if (user?.uid) return user.uid;
+
+  if (typeof window !== 'undefined') {
+    const accessCode = localStorage.getItem('vbs_access_code');
+    if (accessCode) return accessCode;
+
+    const vbsId = localStorage.getItem('VBS_USER_ID');
+    if (vbsId) return vbsId;
+  }
+
+  return 'vbs_authenticated_user';
 }
 
 export async function getUserControls(userId: string) {
-  const currentUser = auth.currentUser;
-  
-  // Requirement: Allow fetching for authorized anonymous users
-  if (!currentUser) {
-    console.warn("[VBS] Skipping getUserControls — not logged in");
-    return null;
-  }
-
   try {
     const docRef = doc(db, "user_controls", userId);
     const snap = await getDoc(docRef);

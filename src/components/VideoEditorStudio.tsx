@@ -36,13 +36,27 @@ import {
   ChevronDown,
   Sliders,
   Cpu,
-  Laptop
+  Laptop,
+  Mic,
+  Copy,
+  Zap,
+  WrapText
 } from 'lucide-react';
 import { WorkerEngineService, WorkerHealthInfo } from '../services/workerEngineService';
 import { FfmpegWorkerManager } from './FfmpegWorkerManager';
 import { useLanguage } from '../contexts/LanguageContext';
 import { SRTSubtitle, AudioResult, VBSUserControl, ModalConfig, CustomFont } from '../types';
 import { formatTime } from '../utils/audioUtils';
+import { 
+  generateSRT, 
+  normalizeSrtTimestamp, 
+  downloadSrtFile, 
+  wrapTextIntoLines, 
+  splitSentenceIntoCueBlocks 
+} from '../utils/subtitleUtils';
+import { GeminiTTSService } from '../services/geminiService';
+import { apiChannelManager } from '../services/apiChannelManager';
+import { VOICE_OPTIONS } from '../constants';
 
 export interface VideoEditorSharedMedia {
   videoFile?: File | null;
@@ -66,8 +80,16 @@ interface VideoEditorStudioProps {
 
 export type AspectRatioType = '16:9' | '9:16' | '1:1' | '4:5' | '4:3' | '21:9' | 'original';
 export type FramingMode = 'blurred-fit' | 'letterbox' | 'cover' | 'contain';
-export type InspectorTab = 'subtitles' | 'mirror' | 'color' | 'ratio' | 'audio' | 'anticopyright' | 'trim' | 'watermark';
+export type InspectorTab = 'recap' | 'subtitles' | 'mirror' | 'color' | 'ratio' | 'audio' | 'anticopyright' | 'trim' | 'watermark';
 export type MirrorPresetMode = 'none' | 'flip-h' | 'flip-v' | 'flip-hv' | 'split-h' | 'split-v' | 'quad';
+
+export interface RecapHighlight {
+  id: string;
+  title: string;
+  start: number;
+  end: number;
+  description: string;
+}
 
 interface SubtitleCue {
   id: string;
@@ -100,14 +122,25 @@ function parseSrtText(srtText: string): SubtitleCue[] {
         const endStr = parts[1].trim();
         const startSec = timeToSeconds(startStr);
         const endSec = timeToSeconds(endStr);
+
+        // Auto-wrap any long line exceeding 34 chars into balanced 2-line format
+        const cleanLines: string[] = [];
+        textLines.forEach(l => {
+          if (l.length > 34) {
+            cleanLines.push(...wrapTextIntoLines(l, 32, 2));
+          } else {
+            cleanLines.push(l);
+          }
+        });
+
         cues.push({
           id: `cue-${idx}-${Date.now()}`,
           index: idx + 1,
           startSeconds: startSec,
           endSeconds: endSec,
-          startStr,
-          endStr,
-          text: textLines.join('\n')
+          startStr: normalizeSrtTimestamp(startSec),
+          endStr: normalizeSrtTimestamp(endSec),
+          text: cleanLines.join('\n')
         });
       }
     }
@@ -127,19 +160,14 @@ function timeToSeconds(t: string): number {
 }
 
 function secondsToSrtTime(sec: number): string {
-  const clamped = Math.max(0, sec);
-  const h = Math.floor(clamped / 3600);
-  const m = Math.floor((clamped % 3600) / 60);
-  const s = Math.floor(clamped % 60);
-  const ms = Math.floor((clamped % 1) * 1000);
-  const pad = (n: number, z = 2) => String(n).padStart(z, '0');
-  return `${pad(h)}:${pad(m)}:${pad(s)},${pad(ms, 3)}`;
+  return normalizeSrtTimestamp(sec);
 }
 
 export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
   sharedMedia,
   ttsAudioResult,
   showToast,
+  isAdmin = false,
   onProcessingStateChange,
   customFonts = []
 }) => {
@@ -189,6 +217,62 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
   const [subtitlesEnabled, setSubtitlesEnabled] = useState<boolean>(true);
   const [subFontSize, setSubFontSize] = useState<number>(28);
   const [subFontFamily, setSubFontFamily] = useState<string>('"Noto Sans Myanmar", "Pyidaungsu", "Inter", sans-serif');
+  const [userCustomFonts, setUserCustomFonts] = useState<CustomFont[]>(() => {
+    try {
+      const stored = localStorage.getItem('vbs_user_custom_fonts');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [isFontModalOpen, setIsFontModalOpen] = useState<boolean>(false);
+  const [fontModalTab, setFontModalTab] = useState<'file' | 'url'>('file');
+  const [newFontName, setNewFontName] = useState<string>('');
+  const [newFontUrl, setNewFontUrl] = useState<string>('');
+  const [newFontFile, setNewFontFile] = useState<File | null>(null);
+  const [isFontGoogle, setIsFontGoogle] = useState<boolean>(false);
+  const [isAddingFont, setIsAddingFont] = useState<boolean>(false);
+
+  const allAvailableFonts = useMemo(() => {
+    const list: CustomFont[] = [...userCustomFonts];
+    (customFonts || []).forEach(cf => {
+      if (!list.some(f => f.id === cf.id || f.family === cf.family)) {
+        list.push(cf);
+      }
+    });
+    return list;
+  }, [userCustomFonts, customFonts]);
+
+  useEffect(() => {
+    userCustomFonts.forEach(font => {
+      if (font.url) {
+        if (font.isGoogleFont) {
+          const link = document.createElement('link');
+          link.rel = 'stylesheet';
+          link.href = font.url;
+          document.head.appendChild(link);
+        } else {
+          try {
+            const fontFace = new FontFace(font.family, `url(${font.url})`);
+            fontFace.load().then(loaded => {
+              document.fonts.add(loaded);
+            }).catch(() => {});
+          } catch {
+            // ignore
+          }
+          const style = document.createElement('style');
+          style.textContent = `
+            @font-face {
+              font-family: '${font.family}';
+              src: url('${font.url}');
+              font-display: swap;
+            }
+          `;
+          document.head.appendChild(style);
+        }
+      }
+    });
+  }, [userCustomFonts]);
   const [subFontColor, setSubFontColor] = useState<string>('#FFFFFF');
   const [subStrokeColor, setSubStrokeColor] = useState<string>('#000000');
   const [subStrokeWidth, setSubStrokeWidth] = useState<number>(4);
@@ -282,6 +366,24 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
   const [isFullSrtModalOpen, setIsFullSrtModalOpen] = useState<boolean>(false);
   const [fullSrtDraftText, setFullSrtDraftText] = useState<string>('');
   const [isSubtitleStylingCollapsed, setIsSubtitleStylingCollapsed] = useState<boolean>(true);
+
+  // ==========================================
+  // 10. Pro Auto Recap Suite (အော်တို ရီကပ် ဖန်တီးစနစ်)
+  // ==========================================
+  const [recapScript, setRecapScript] = useState<string>('');
+  const [isGeneratingRecapScript, setIsGeneratingRecapScript] = useState<boolean>(false);
+  const [recapSource, setRecapSource] = useState<'subtitles' | 'prompt'>('subtitles');
+  const [recapPrompt, setRecapPrompt] = useState<string>('');
+  const [recapStyle, setRecapStyle] = useState<string>('cinematic');
+  const [recapDuration, setRecapDuration] = useState<string>('medium');
+  const [recapTargetLanguage, setRecapTargetLanguage] = useState<'mm' | 'en'>('mm');
+  const [isGeneratingRecapVoiceover, setIsGeneratingRecapVoiceover] = useState<boolean>(false);
+  const [recapVoice, setRecapVoice] = useState<string>('aoede');
+  const [recapVoiceSpeed, setRecapVoiceSpeed] = useState<number>(1.05);
+  const [recapAutoDucking, setRecapAutoDucking] = useState<boolean>(true);
+  const [recapHighlights, setRecapHighlights] = useState<RecapHighlight[]>([]);
+  const [isAnalyzingHighlights, setIsAnalyzingHighlights] = useState<boolean>(false);
+  const [recapRetryNotice, setRecapRetryNotice] = useState<string | null>(null);
 
   // Fast Offscreen Canvas for Blur Optimization
   const blurCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -643,7 +745,20 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
       targetCtx.textAlign = 'center';
       targetCtx.textBaseline = 'middle';
 
-      const lines = activeCue.text.split('\n');
+      // Auto-wrap lines that are too wide for the video frame or contain long unbroken text
+      const rawLines = activeCue.text.split('\n');
+      const maxAllowedWidth = canvasW * 0.86;
+      const lines: string[] = [];
+      rawLines.forEach(l => {
+        const trimmed = l.trim();
+        if (!trimmed) return;
+        if (targetCtx.measureText(trimmed).width <= maxAllowedWidth && trimmed.length <= 36) {
+          lines.push(trimmed);
+        } else {
+          lines.push(...wrapTextIntoLines(trimmed, 30, 2));
+        }
+      });
+      if (lines.length === 0) lines.push(activeCue.text);
       const lineHeight = scaledFontSize * 1.35;
       const totalTextHeight = lines.length * lineHeight;
       const posY = (canvasH * (subPositionY / 100));
@@ -925,28 +1040,316 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
     }
   };
 
-  // Export Subtitle File (.srt)
-  const handleExportSrt = () => {
-    if (cues.length === 0) {
-      showToast('No subtitles to export', 'error');
+  // ==========================================
+  // Auto Recap Handlers & Logic (Pro Movie & Video Recap Suite)
+  // ==========================================
+  const getGeminiInstance = useCallback(() => {
+    const useManaged = isAdmin || apiChannelManager.getSettings().useAdminKeys;
+    const activeKey = apiChannelManager.getActiveKey();
+    return new GeminiTTSService(useManaged ? '' : (activeKey || ''), isAdmin);
+  }, [isAdmin]);
+
+  const recapScriptStats = useMemo(() => {
+    if (!recapScript) return { words: 0, chars: 0, estTime: '00:00' };
+    const words = recapScript.trim().split(/\s+/).filter(Boolean).length;
+    const chars = recapScript.length;
+    const estSec = Math.round((words / 130) * 60);
+    const m = Math.floor(estSec / 60);
+    const s = estSec % 60;
+    return {
+      words,
+      chars,
+      estTime: `${m}:${String(s).padStart(2, '0')}`
+    };
+  }, [recapScript]);
+
+  // 1. Auto Recap Script Generator
+  const handleGenerateRecapScript = async () => {
+    let sourceContent = '';
+    if (recapSource === 'subtitles') {
+      if (cues.length > 0) {
+        sourceContent = cues.map(c => `[${c.startStr}] ${c.text}`).join('\n');
+      } else if (sharedMedia?.srtContent) {
+        sourceContent = sharedMedia.srtContent;
+      }
+    } else {
+      sourceContent = recapPrompt.trim();
+    }
+
+    if (!sourceContent && cues.length === 0 && !recapPrompt.trim()) {
+      showToast(
+        isMm
+          ? 'ကျေးဇူးပြု၍ စာတန်းထိုး (Subtitles) ထည့်ပါ သို့မဟုတ် ရီကပ်လုပ်လိုသော ဇာတ်လမ်းအကြောင်းအရာကို ရေးထည့်ပါ'
+          : 'Please load subtitles or write a synopsis/plot prompt for recap generation',
+        'error'
+      );
       return;
     }
-    const srtLines: string[] = [];
-    cues.forEach((cue, i) => {
-      const adjStart = secondsToSrtTime(cue.startSeconds + subTimingOffset);
-      const adjEnd = secondsToSrtTime(cue.endSeconds + subTimingOffset);
-      srtLines.push(`${i + 1}`);
-      srtLines.push(`${adjStart} --> ${adjEnd}`);
-      srtLines.push(cue.text);
-      srtLines.push('');
+
+    if (!sourceContent) {
+      sourceContent = recapPrompt.trim();
+    }
+
+    setIsGeneratingRecapScript(true);
+    setRecapRetryNotice(null);
+
+    const styleMap: Record<string, string> = {
+      cinematic: 'ရုပ်ရှင်ဇာတ်ကားပြော ရသစုံ ပုံစံ (Cinematic Movie Recap with suspense, character hooks and high emotion)',
+      tiktok: 'TikTok / Reels အမြန်သွက်လက် 60s ဗိုင်းရပ်စ်စတိုင် (Fast viral pacing, high energy, punchy hooks for maximum watch retention)',
+      thriller: 'သည်းထိတ်ရင်ဖို ပဟေဠိ လျှို့ဝှက်ဆန်းကြယ်စတိုင် (Dark thriller & suspense mystery with plot twists and tension)',
+      action: 'အက်ရှင် စွန့်စားခန်းနှင့် အလှည့်အပြောင်း ဇာတ်ကွက် (High action momentum, dramatic combat, and climax turns)',
+      drama: 'ခံစားချက်ရသစုံ ဒရာမာ ဇာတ်လမ်းစတိုင် (Deep emotional journey, character decisions, and heartbreaking moments)',
+      summary: 'အနှစ်ချုပ် ဗဟုသုတနှင့် အဓိကအချက်များ (Key story takeaways and educational summaries)'
+    };
+
+    const durationMap: Record<string, string> = {
+      short: 'Short (၁-၂ မိနစ် အမြန်ရီကပ် / 150-250 words)',
+      medium: 'Medium (၃-၅ မိနစ် ပုံမှန်ရုပ်ရှင်ရီကပ် / 400-600 words)',
+      full: 'Full Extended (၈-၁၀ မိနစ် အပြည့်အစုံ ရီကပ် / 800+ words)'
+    };
+
+    try {
+      const gemini = getGeminiInstance();
+      const script = await gemini.generateMovieRecapScript(
+        sourceContent,
+        (seconds, msg) => {
+          setRecapRetryNotice(`${msg} (${seconds}s)`);
+        },
+        {
+          style: styleMap[recapStyle] || recapStyle,
+          tone: 'Engaging, viral, cinematic, and captivating',
+          duration: durationMap[recapDuration] || recapDuration,
+          targetLanguage: recapTargetLanguage
+        }
+      );
+      setRecapScript(script);
+      setRecapRetryNotice(null);
+      showToast(
+        isMm ? '🎉 Auto Recap ဇာတ်ညွှန်း အောင်မြင်စွာ ထုတ်ယူပြီးပါပြီ!' : '🎉 Auto Recap Script generated successfully!',
+        'success'
+      );
+    } catch (err) {
+      console.error('[Auto Recap] Script error:', err);
+      const msg = err instanceof Error ? err.message : 'Recap generation failed';
+      showToast(msg, 'error');
+    } finally {
+      setIsGeneratingRecapScript(false);
+    }
+  };
+
+  // 2. Sync Recap Script to Timeline as Timed Subtitles (SRT)
+  const handleSyncRecapAsSubtitles = () => {
+    if (!recapScript || !recapScript.trim()) {
+      showToast(
+        isMm ? 'စာတန်းထိုး ချိတ်ဆက်ရန်အတွက် Recap ဇာတ်ညွှန်း မရှိသေးပါ' : 'No recap script to sync',
+        'error'
+      );
+      return;
+    }
+
+    const rawSegments = recapScript
+      .split(/[။\n]+/)
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+
+    const cueTexts: string[] = [];
+    rawSegments.forEach(seg => {
+      // Split into clean cue blocks where each cue has max 2 lines, max 30 chars/line
+      const blocks = splitSentenceIntoCueBlocks(seg, 52, 30);
+      blocks.forEach(lines => {
+        const joined = lines.join('\n').trim();
+        if (joined) cueTexts.push(joined);
+      });
     });
-    const blob = new Blob([srtLines.join('\n')], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${videoFileName.replace(/\.[^/.]+$/, "")}_edited.srt`;
-    a.click();
-    showToast('Exported synchronized .SRT file', 'success');
+
+    if (cueTexts.length === 0) {
+      showToast(isMm ? 'စာသားများ မလုံလောက်ပါ' : 'Script too short', 'error');
+      return;
+    }
+
+    const availableDuration = (trimEnd > trimStart && trimEnd - trimStart > 3)
+      ? (trimEnd - trimStart)
+      : (videoDuration > 0 ? videoDuration : 180);
+    const startOffset = (trimEnd > trimStart) ? trimStart : 0;
+    const count = cueTexts.length;
+    const cueDuration = Math.max(2.2, availableDuration / Math.max(1, count));
+
+    const newCues: SubtitleCue[] = cueTexts.map((text, idx) => {
+      const cueStartSec = startOffset + (idx * cueDuration);
+      const cueEndSec = Math.min(startOffset + availableDuration, cueStartSec + cueDuration - 0.2);
+      return {
+        id: `recap-cue-${idx}-${Date.now()}`,
+        index: idx + 1,
+        startSeconds: cueStartSec,
+        endSeconds: cueEndSec,
+        startStr: normalizeSrtTimestamp(cueStartSec),
+        endStr: normalizeSrtTimestamp(cueEndSec),
+        text: text
+      };
+    });
+
+    setCues(newCues);
+    setSubtitlesEnabled(true);
+    showToast(
+      isMm
+        ? `✨ Recap ဇာတ်ညွှန်းကို အချိန်ကိုက် စာတန်းထိုး (${newCues.length} ခု) အဖြစ် ချိတ်ဆက်ပြီးပါပြီ!`
+        : `✨ Synced ${newCues.length} timed subtitle cues to timeline!`,
+      'success'
+    );
+  };
+
+  // 3. Generate AI Recap Voiceover (TTS)
+  const handleGenerateRecapVoiceover = async () => {
+    if (!recapScript || !recapScript.trim()) {
+      showToast(
+        isMm ? 'ကျေးဇူးပြု၍ Voiceover အသံသွင်းရန်အတွက် Recap ဇာတ်ညွှန်းကို အရင်ထုတ်ယူပါ' : 'Please generate recap script first',
+        'error'
+      );
+      return;
+    }
+
+    setIsGeneratingRecapVoiceover(true);
+    try {
+      const gemini = getGeminiInstance();
+      const result = await gemini.generateTTS(
+        recapScript,
+        {
+          voiceId: recapVoice,
+          speed: recapVoiceSpeed,
+          pitch: 0,
+          volume: 100,
+          vocalStyle: 'Expressive'
+        },
+        undefined,
+        (current, total, msg) => {
+          setExportStatusText(`${msg} (${current}/${total})`);
+        }
+      );
+
+      if (result && result.audioUrl) {
+        setVoiceoverAudioUrl(result.audioUrl);
+        setVoiceoverVolume(100);
+        if (recapAutoDucking) {
+          setOriginalAudioVolume(15);
+        }
+        showToast(
+          isMm
+            ? '🎙️ Recap Voiceover AI အသံသွင်းဖိုင် အောင်မြင်စွာ ဖန်တီးပြီး Timeline သို့ ချိတ်ဆက်ပြီးပါပြီ!'
+            : '🎙️ Recap Voiceover narration generated & linked to timeline!',
+          'success'
+        );
+      } else {
+        throw new Error('No audio URL returned from TTS');
+      }
+    } catch (err) {
+      console.error('[Auto Recap] Voiceover error:', err);
+      const msg = err instanceof Error ? err.message : 'Voiceover generation failed';
+      showToast(msg, 'error');
+    } finally {
+      setIsGeneratingRecapVoiceover(false);
+    }
+  };
+
+  // 4. Smart Scene Highlights Detection & Extraction
+  const handleGenerateRecapHighlights = async () => {
+    setIsAnalyzingHighlights(true);
+    try {
+      const gemini = getGeminiInstance();
+      const contextText = cues.length > 0
+        ? cues.map(c => `[${c.startStr}] ${c.text}`).join('\n')
+        : (recapScript || recapPrompt || videoFileName);
+
+      const scenes = await gemini.generateRecapHighlights(
+        contextText,
+        videoDuration > 0 ? videoDuration : 180,
+        5
+      );
+
+      setRecapHighlights(scenes.map((s, i) => ({
+        id: `highlight-${i}-${Date.now()}`,
+        title: s.title,
+        start: s.start,
+        end: s.end,
+        description: s.description
+      })));
+
+      showToast(
+        isMm ? '🎬 အဓိက ဇာတ်ကွက် (Highlights) ၅ ခုကို ခွဲထုတ်ပြီးပါပြီ!' : '🎬 5 Key Highlights extracted!',
+        'success'
+      );
+    } catch (err) {
+      console.error('[Auto Recap] Highlights error:', err);
+      showToast('Could not extract highlights', 'error');
+    } finally {
+      setIsAnalyzingHighlights(false);
+    }
+  };
+
+  // 5. Apply Scene Highlight as Active Timeline Trim
+  const handleApplyHighlightAsTrim = (start: number, end: number) => {
+    setTrimStart(start);
+    setTrimEnd(end);
+    handleSeek(start);
+    showToast(
+      isMm
+        ? `✂️ Highlight ဇာတ်ကွက်သို့ Trim ချိန်ညှိပြီးပါပြီ (${formatTime(start)} - ${formatTime(end)})`
+        : `✂️ Trimmed to scene (${formatTime(start)} - ${formatTime(end)})`,
+      'info'
+    );
+  };
+
+  // 6. Apply Full Pro Recapper Suite Preset (Anti-Copyright, Speed, Color Grading, Ducking)
+  const handleApplyProRecapperSuite = () => {
+    setMicroSpeedModulation(1.06);
+    setBrightness(105);
+    setContrast(120);
+    setSaturation(125);
+    setVignette(30);
+    setHueRotate(-5);
+    setFlipHorizontal(false);
+    setSubtitlesEnabled(true);
+    if (recapAutoDucking) {
+      setOriginalAudioVolume(15);
+    }
+    showToast(
+      isMm
+        ? '⚡ Pro Recapper မူပိုင်ခွင့်လွတ်၊ 1.06x အမြန်နှုန်းနှင့် Cinematic Grading Suite ကို အပြည့်အစုံ ဖွင့်ထားပြီးပါပြီ!'
+        : '⚡ Full Pro Recapper Suite activated (1.06x Speed, Cinematic Grade & Audio Ducking)!',
+      'success'
+    );
+  };
+
+  // Export Subtitle File (.srt) - 100% CapCut & NLE Compatible
+  const handleExportSrt = () => {
+    if (cues.length === 0) {
+      showToast(isMm ? 'ထုတ်ယူရန် စာတန်းထိုး မရှိပါ' : 'No subtitles to export', 'error');
+      return;
+    }
+
+    const subs: SRTSubtitle[] = cues
+      .filter(c => c.text && c.text.trim().length > 0)
+      .map((c, i) => {
+        const startSec = Math.max(0, c.startSeconds + subTimingOffset);
+        const endSec = Math.max(startSec + 0.2, c.endSeconds + subTimingOffset);
+        return {
+          index: i + 1,
+          startTime: normalizeSrtTimestamp(startSec),
+          endTime: normalizeSrtTimestamp(endSec),
+          text: c.text
+        };
+      });
+
+    if (subs.length === 0) {
+      showToast(isMm ? 'ထုတ်ယူရန် စာတန်းထိုး မရှိပါ' : 'No subtitles to export', 'error');
+      return;
+    }
+
+    const srtContent = generateSRT(subs);
+    downloadSrtFile(srtContent, `${videoFileName.replace(/\.[^/.]+$/, "")}_edited.srt`);
+    showToast(
+      isMm ? 'CapCut တွဲသုံးနိုင်သော .SRT စာတန်းထိုးဖိုင်ကို ထုတ်ယူပြီးပါပြီ ✅' : 'Exported CapCut-compatible .SRT file ✅',
+      'success'
+    );
   };
 
   // Drag-to-resize player height handler (ဗီဒီယိုအရွယ်အစား အပေါ်/အောက် ဆွဲချဲ့ခြင်း)
@@ -992,19 +1395,53 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
       if (c.id === editingCueId) {
         const startSec = Math.max(0, parseFloat(editCueDraftStart.toFixed(2)));
         const endSec = Math.max(startSec + 0.2, parseFloat(editCueDraftEnd.toFixed(2)));
+        let formattedText = editCueDraftText.trim() || c.text;
+        // If single line longer than 32 chars, wrap into 2 lines
+        if (!formattedText.includes('\n') && formattedText.length > 32) {
+          formattedText = wrapTextIntoLines(formattedText, 32, 2).join('\n');
+        }
         return {
           ...c,
-          text: editCueDraftText.trim() || c.text,
+          text: formattedText,
           startSeconds: startSec,
           endSeconds: endSec,
-          startStr: secondsToSrtTime(startSec),
-          endStr: secondsToSrtTime(endSec)
+          startStr: normalizeSrtTimestamp(startSec),
+          endStr: normalizeSrtTimestamp(endSec)
         };
       }
       return c;
     }));
     setEditingCueId(null);
     showToast(isMm ? 'စာတန်းထိုး ပြင်ဆင်ချက် သိမ်းဆည်းပြီးပါပြီ' : 'Subtitle cue updated', 'success');
+  };
+
+  const handleAutoBalanceCues = () => {
+    if (cues.length === 0) {
+      showToast(isMm ? 'ညှိစရာ စာတန်းထိုး မရှိပါ' : 'No subtitle cues to balance', 'error');
+      return;
+    }
+    let modifiedCount = 0;
+    const updated = cues.map(cue => {
+      const rawText = cue.text.trim();
+      const needsWrapping = !rawText.includes('\n') ? rawText.length > 30 : rawText.split('\n').some(l => l.trim().length > 34);
+      if (needsWrapping) {
+        modifiedCount++;
+        const wrappedLines = wrapTextIntoLines(rawText, 30, 2);
+        return {
+          ...cue,
+          text: wrappedLines.join('\n')
+        };
+      }
+      return cue;
+    });
+
+    setCues(updated);
+    showToast(
+      isMm
+        ? `✨ ရှည်လျားသော စာတန်းထိုး (${modifiedCount} ခု) ကို ၂ ကြောင်းညီအောင် အလိုအလျောက် ခွဲညှိပေးပြီးပါပြီ!`
+        : `✨ Auto-wrapped ${modifiedCount} long subtitle cues into clean 2-line format!`,
+      'success'
+    );
   };
 
   const handleCancelEditCue = () => {
@@ -1048,14 +1485,13 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
   };
 
   const handleOpenFullSrtModal = () => {
-    const srtLines: string[] = [];
-    cues.forEach((cue, i) => {
-      srtLines.push(`${i + 1}`);
-      srtLines.push(`${cue.startStr} --> ${cue.endStr}`);
-      srtLines.push(cue.text);
-      srtLines.push('');
-    });
-    setFullSrtDraftText(srtLines.join('\n'));
+    const subs: SRTSubtitle[] = cues.map((c, i) => ({
+      index: i + 1,
+      startTime: c.startStr,
+      endTime: c.endStr,
+      text: c.text
+    }));
+    setFullSrtDraftText(generateSRT(subs));
     setIsFullSrtModalOpen(true);
   };
 
@@ -1072,6 +1508,111 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
     setCues(parsed);
     setIsFullSrtModalOpen(false);
     showToast(isMm ? `စာတန်းထိုး ${parsed.length} ခု အားလုံး ပြင်ဆင်ပြီးပါပြီ` : `Updated ${parsed.length} subtitle cues`, 'success');
+  };
+
+  // User Custom Font Handlers
+  const handleAddUserFont = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!newFontName.trim()) {
+      showToast(isMm ? 'Font အမည် ထည့်သွင်းပေးပါ' : 'Please enter font name', 'error');
+      return;
+    }
+
+    setIsAddingFont(true);
+    try {
+      const fontId = `user_font_${Date.now()}`;
+      const familyName = newFontName.trim().replace(/['"]/g, '');
+      let fontUrl = newFontUrl.trim();
+
+      if (newFontFile) {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(newFontFile);
+        });
+        fontUrl = dataUrl;
+
+        try {
+          const fontFace = new FontFace(familyName, `url(${dataUrl})`);
+          await fontFace.load();
+          document.fonts.add(fontFace);
+        } catch (fontErr) {
+          console.warn('FontFace API load warning:', fontErr);
+        }
+
+        const style = document.createElement('style');
+        style.textContent = `
+          @font-face {
+            font-family: '${familyName}';
+            src: url('${dataUrl}');
+            font-display: swap;
+          }
+        `;
+        document.head.appendChild(style);
+      } else if (fontUrl) {
+        if (isFontGoogle) {
+          const link = document.createElement('link');
+          link.rel = 'stylesheet';
+          link.href = fontUrl;
+          document.head.appendChild(link);
+        } else {
+          const style = document.createElement('style');
+          style.textContent = `
+            @font-face {
+              font-family: '${familyName}';
+              src: url('${fontUrl}');
+              font-display: swap;
+            }
+          `;
+          document.head.appendChild(style);
+        }
+      } else {
+        showToast(isMm ? 'Font ဖိုင် (.ttf/.otf/.woff) သို့မဟုတ် URL ရွေးချယ်ပေးပါ' : 'Please upload a font file or enter URL', 'error');
+        setIsAddingFont(false);
+        return;
+      }
+
+      const newFont: CustomFont = {
+        id: fontId,
+        name: newFontName.trim(),
+        family: familyName,
+        url: fontUrl,
+        isGoogleFont: isFontGoogle,
+        createdAt: new Date().toISOString()
+      };
+
+      const updated = [...userCustomFonts.filter(f => f.family !== familyName), newFont];
+      setUserCustomFonts(updated);
+      try {
+        localStorage.setItem('vbs_user_custom_fonts', JSON.stringify(updated));
+      } catch (storageErr) {
+        console.warn('LocalStorage font save warning:', storageErr);
+      }
+
+      setSubFontFamily(`"${familyName}", sans-serif`);
+      setNewFontName('');
+      setNewFontUrl('');
+      setNewFontFile(null);
+      setIsFontModalOpen(false);
+      showToast(isMm ? `🎉 Font "${familyName}" ကို အောင်မြင်စွာ ထည့်သွင်းအသုံးပြုလိုက်ပါပြီ!` : `Font "${familyName}" added and applied!`, 'success');
+    } catch (err) {
+      console.error('Failed to add font:', err);
+      showToast(isMm ? 'Font ထည့်သွင်းခြင်း မအောင်မြင်ပါ' : 'Failed to add custom font', 'error');
+    } finally {
+      setIsAddingFont(false);
+    }
+  };
+
+  const handleDeleteUserFont = (id: string, name: string) => {
+    const updated = userCustomFonts.filter(f => f.id !== id);
+    setUserCustomFonts(updated);
+    try {
+      localStorage.setItem('vbs_user_custom_fonts', JSON.stringify(updated));
+    } catch (e) {
+      console.warn('LocalStorage remove warning:', e);
+    }
+    showToast(isMm ? `Font "${name}" ကို ဖျက်ပြီးပါပြီ` : `Deleted font "${name}"`, 'info');
   };
 
   // Browser Direct Video Export (Upgraded Zero-Stutter Frame Capture)
@@ -1330,14 +1871,42 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
           formData.append('video', fileToSend, videoFileName || 'video.mp4');
 
           if (subtitlesEnabled && cues.length > 0) {
-            const srtLines: string[] = [];
-            cues.forEach((cue, i) => {
-              srtLines.push(`${i + 1}`);
-              srtLines.push(`${cue.startStr} --> ${cue.endStr}`);
-              srtLines.push(cue.text);
-              srtLines.push('');
-            });
-            formData.append('srtContent', srtLines.join('\n'));
+            const subs: SRTSubtitle[] = cues.map((cue, i) => ({
+              index: i + 1,
+              startTime: cue.startStr,
+              endTime: cue.endStr,
+              text: cue.text
+            }));
+            formData.append('srtContent', generateSRT(subs));
+            formData.append('fontFamily', subFontFamily);
+            formData.append('fontSize', String(subFontSize));
+            formData.append('fontColor', subFontColor);
+            formData.append('strokeColor', subStrokeColor);
+
+            // If user selected a custom uploaded font, include the font file for FFmpeg
+            const activeCustomFont = userCustomFonts.find(f =>
+              subFontFamily.includes(f.family) || subFontFamily.includes(f.name)
+            );
+            if (activeCustomFont?.url && activeCustomFont.url.startsWith('data:')) {
+              try {
+                const fontResp = await fetch(activeCustomFont.url);
+                const fontBlob = await fontResp.blob();
+                const fontSafeName = `${activeCustomFont.family.replace(/[^a-zA-Z0-9_-]/g, '_')}.ttf`;
+                formData.append('fontFile', fontBlob, fontSafeName);
+              } catch (fontBlobErr) {
+                console.warn('Could not serialize custom font for FFmpeg:', fontBlobErr);
+              }
+            }
+          }
+
+          if (voiceoverAudioUrl) {
+            try {
+              const audioResp = await fetch(voiceoverAudioUrl);
+              const audioBlob = await audioResp.blob();
+              formData.append('audio', audioBlob, 'narration.mp3');
+            } catch (audioErr) {
+              console.warn('Could not serialize voiceover audio for worker:', audioErr);
+            }
           }
 
           formData.append('aspectRatio', aspectRatio);
@@ -1406,14 +1975,42 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
 
         // Prepare exact SRT subtitles if cues exist
         if (subtitlesEnabled && cues.length > 0) {
-          const srtLines: string[] = [];
-          cues.forEach((cue, i) => {
-            srtLines.push(`${i + 1}`);
-            srtLines.push(`${cue.startStr} --> ${cue.endStr}`);
-            srtLines.push(cue.text);
-            srtLines.push('');
-          });
-          formData.append('srtContent', srtLines.join('\n'));
+          const subs: SRTSubtitle[] = cues.map((cue, i) => ({
+            index: i + 1,
+            startTime: cue.startStr,
+            endTime: cue.endStr,
+            text: cue.text
+          }));
+          formData.append('srtContent', generateSRT(subs));
+          formData.append('fontFamily', subFontFamily);
+          formData.append('fontSize', String(subFontSize));
+          formData.append('fontColor', subFontColor);
+          formData.append('strokeColor', subStrokeColor);
+
+          // If user selected a custom uploaded font, include the font file for FFmpeg
+          const activeCustomFont = userCustomFonts.find(f =>
+            subFontFamily.includes(f.family) || subFontFamily.includes(f.name)
+          );
+          if (activeCustomFont?.url && activeCustomFont.url.startsWith('data:')) {
+            try {
+              const fontResp = await fetch(activeCustomFont.url);
+              const fontBlob = await fontResp.blob();
+              const fontSafeName = `${activeCustomFont.family.replace(/[^a-zA-Z0-9_-]/g, '_')}.ttf`;
+              formData.append('fontFile', fontBlob, fontSafeName);
+            } catch (fontBlobErr) {
+              console.warn('Could not serialize custom font for Server FFmpeg:', fontBlobErr);
+            }
+          }
+        }
+
+        if (voiceoverAudioUrl) {
+          try {
+            const audioResp = await fetch(voiceoverAudioUrl);
+            const audioBlob = await audioResp.blob();
+            formData.append('audio', audioBlob, 'narration.mp3');
+          } catch (audioErr) {
+            console.warn('Could not serialize voiceover audio for server:', audioErr);
+          }
         }
 
         formData.append('aspectRatio', aspectRatio);
@@ -1557,6 +2154,24 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
             >
               <ShieldAlert size={15} />
               <span>{isMm ? '1-Click မူပိုင်ခွင့်ကာကွယ်' : 'Anti-Copyright'}</span>
+            </button>
+
+            {/* Quick Auto Recap Studio Launch Button */}
+            <button
+              type="button"
+              onClick={() => setActiveInspectorTab('recap')}
+              className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl font-black text-xs border shadow-lg transition-all active:scale-95 cursor-pointer ${
+                activeInspectorTab === 'recap'
+                  ? 'bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 text-black border-amber-300 shadow-amber-400/30'
+                  : 'bg-gradient-to-r from-amber-500/20 via-yellow-500/10 to-amber-500/20 hover:from-amber-500/30 hover:to-yellow-500/20 text-amber-300 border-amber-500/40 shadow-amber-500/10'
+              }`}
+              title="Open Pro Auto Movie & Video Recap Studio"
+            >
+              <Sparkles size={14} className={activeInspectorTab === 'recap' ? "fill-black text-black" : "text-amber-400 animate-pulse"} />
+              <span>{isMm ? '⚡ Auto Recap' : '⚡ Auto Recap'}</span>
+              <span className={`text-[9px] px-1.5 py-0.2 rounded font-black tracking-wider uppercase ${
+                activeInspectorTab === 'recap' ? 'bg-black text-amber-400' : 'bg-amber-400/30 text-amber-200'
+              }`}>PRO</span>
             </button>
 
             {/* Engine Selector: Local PC Worker (Zero-Stutter) vs Cloud Server vs Browser */}
@@ -2114,6 +2729,22 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
             <div className="flex items-center gap-1 bg-black/40 p-1 rounded-xl border border-white/10 overflow-x-auto no-scrollbar">
               <button
                 type="button"
+                onClick={() => setActiveInspectorTab('recap')}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer ${
+                  activeInspectorTab === 'recap'
+                    ? 'bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 text-black shadow-md shadow-amber-400/30 font-extrabold'
+                    : 'text-amber-400 hover:text-white hover:bg-amber-400/10'
+                }`}
+              >
+                <Sparkles size={14} className={activeInspectorTab === 'recap' ? "fill-black" : "animate-pulse"} />
+                <span>{isMm ? 'Auto Recap' : 'Auto Recap'}</span>
+                <span className={`text-[9px] px-1.5 py-0.2 rounded font-black uppercase ${
+                  activeInspectorTab === 'recap' ? 'bg-black text-amber-400' : 'bg-amber-400/20 text-amber-300'
+                }`}>PRO</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setActiveInspectorTab('subtitles')}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all shrink-0 ${
                   activeInspectorTab === 'subtitles'
@@ -2204,6 +2835,476 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
               </button>
             </div>
 
+            {/* TAB 0: PRO AUTO RECAP STUDIO (ရုပ်ရှင်နှင့် ဗီဒီယို အော်တို ရီကပ် ဖန်တီးစနစ်) */}
+            {activeInspectorTab === 'recap' && (
+              <div className="space-y-4">
+                {/* Header Banner */}
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-500/15 via-yellow-500/10 to-transparent border border-amber-500/30 shadow-lg relative overflow-hidden">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="p-1.5 rounded-xl bg-amber-400 text-black shadow-md">
+                          <Sparkles size={16} className="fill-black" />
+                        </span>
+                        <h3 className="text-sm font-black text-amber-400 tracking-wide">
+                          {isMm ? 'Pro Auto Recap Studio (ရုပ်ရှင်/ဗီဒီယို အော်တို ရီကပ်)' : 'Pro Auto Recap Studio'}
+                        </h3>
+                        <span className="px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 text-[10px] font-mono font-black border border-amber-400/30">
+                          AI WORKFLOW
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-300 leading-relaxed">
+                        {isMm
+                          ? 'AI ဖြင့် ရုပ်ရှင်ဇာတ်လမ်းပြော ရီကပ်ဇာတ်ညွှန်း၊ Voiceover အသံသွင်း၊ အချိန်ကိုက် စာတန်းထိုးနှင့် အဓိက ဇာတ်ကွက်များကို တစ်နေရာတည်းတွင် အလွယ်တကူ ဖန်တီးနိုင်ပါသည်'
+                          : 'Generate viral movie recap narration script, AI voiceover, synchronized subtitles, and highlights montage.'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {recapRetryNotice && (
+                    <div className="mt-2.5 p-2 rounded-xl bg-amber-500/20 border border-amber-500/40 text-[11px] text-amber-300 font-bold flex items-center gap-2">
+                      <RefreshCw size={13} className="animate-spin text-amber-400" />
+                      <span>{recapRetryNotice}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Section 1: AI Recap Script Engine */}
+                <div className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+                      <FileText size={14} />
+                      <span>{isMm ? '၁။ ရီကပ် ဇာတ်ညွှန်း ထုတ်လုပ်ခြင်း' : '1. Recap Script Generator'}</span>
+                    </span>
+                    <span className="text-[11px] text-slate-400 font-bold">
+                      {isMm ? 'ဇာတ်လမ်းဇာတ်ကွက် အချက်အလက်' : 'Source Context'}
+                    </span>
+                  </div>
+
+                  {/* Source Toggle */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setRecapSource('subtitles')}
+                      className={`flex items-center justify-center gap-1.5 p-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                        recapSource === 'subtitles'
+                          ? 'bg-amber-400/20 text-amber-300 border-amber-400/40 shadow-sm'
+                          : 'bg-white/5 text-slate-400 border-white/5 hover:text-white'
+                      }`}
+                    >
+                      <Type size={13} />
+                      <span>{isMm ? `စာတန်းထိုးမှ (${cues.length} ခု)` : `From Cues (${cues.length})`}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRecapSource('prompt')}
+                      className={`flex items-center justify-center gap-1.5 p-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                        recapSource === 'prompt'
+                          ? 'bg-amber-400/20 text-amber-300 border-amber-400/40 shadow-sm'
+                          : 'bg-white/5 text-slate-400 border-white/5 hover:text-white'
+                      }`}
+                    >
+                      <Edit3 size={13} />
+                      <span>{isMm ? 'ဇာတ်လမ်းအကျဉ်း ရေးမည်' : 'Custom Synopsis'}</span>
+                    </button>
+                  </div>
+
+                  {recapSource === 'prompt' && (
+                    <div className="space-y-1.5">
+                      <label className="text-[11px] text-slate-400 font-bold">
+                        {isMm ? 'ရုပ်ရှင်အမည် / ဇာတ်လမ်းအကျဉ်း / အဓိက ဇာတ်ကွက်များ' : 'Movie Title / Synopsis / Plot Points'}
+                      </label>
+                      <textarea
+                        value={recapPrompt}
+                        onChange={(e) => setRecapPrompt(e.target.value)}
+                        rows={3}
+                        placeholder={
+                          isMm
+                            ? 'ဥပမာ - Train to Busan ရုပ်ရှင်ဇာတ်ကား ရီကပ်၊ ဖခင်တစ်ယောက် သမီးလေးကို ကာကွယ်ရင်း ဇွန်ဘီတွေရန်က လွတ်အောင် ရထားပေါ်မှာ ရုန်းကန်ရတဲ့ စိတ်လှုပ်ရှားဖွယ် ဇာတ်လမ်း...'
+                            : 'Enter movie title, plot points, synopsis, or character highlights to recap...'
+                        }
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      />
+                    </div>
+                  )}
+
+                  {/* Style Presets */}
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] text-slate-400 font-bold">
+                      {isMm ? 'ရီကပ်စတိုင် (Recap Style Preset)' : 'Recap Style Preset'}
+                    </label>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {[
+                        { id: 'cinematic', icon: '🎬', nameMm: 'ရုပ်ရှင် ရသစုံ', nameEn: 'Cinematic Recap' },
+                        { id: 'tiktok', icon: '🔥', nameMm: 'TikTok အမြန် 60s', nameEn: 'Viral 60s Short' },
+                        { id: 'thriller', icon: '🕵️', nameMm: 'သည်းထိတ်ရင်ဖို', nameEn: 'Thriller Mystery' },
+                        { id: 'action', icon: '⚔️', nameMm: 'အက်ရှင် အလှည့်အပြောင်း', nameEn: 'Action & Twists' },
+                        { id: 'drama', icon: '🎭', nameMm: 'ဒရာမာ ခံစားချက်', nameEn: 'Emotional Drama' },
+                        { id: 'summary', icon: '💡', nameMm: 'အနှစ်ချုပ် ဗဟုသုတ', nameEn: 'Key Summary' }
+                      ].map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => setRecapStyle(item.id)}
+                          className={`flex items-center gap-1.5 p-2 rounded-xl text-left text-xs font-bold border transition-all cursor-pointer ${
+                            recapStyle === item.id
+                              ? 'bg-amber-400 text-black border-amber-300 font-black shadow-md'
+                              : 'bg-white/5 text-slate-300 border-white/5 hover:bg-white/10'
+                          }`}
+                        >
+                          <span className="text-sm">{item.icon}</span>
+                          <span className="truncate">{isMm ? item.nameMm : item.nameEn}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Duration & Language Options */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[11px] text-slate-400 font-bold block mb-1">
+                        {isMm ? 'ပစ်မှတ် ကြာချိန်' : 'Target Length'}
+                      </label>
+                      <select
+                        value={recapDuration}
+                        onChange={(e) => setRecapDuration(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      >
+                        <option value="short">⚡ Short (၁-၂ မိနစ် / 60-120s)</option>
+                        <option value="medium">🎬 Medium (၃-၅ မိနစ် / 3-5 Mins)</option>
+                        <option value="full">📜 Full Story (၈-၁၀ မိနစ် / 8-10 Mins)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] text-slate-400 font-bold block mb-1">
+                        {isMm ? 'ဘာသာစကား' : 'Language'}
+                      </label>
+                      <select
+                        value={recapTargetLanguage}
+                        onChange={(e) => setRecapTargetLanguage(e.target.value as 'mm' | 'en')}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      >
+                        <option value="mm">🇲🇲 မြန်မာစကားပြော (Burmese)</option>
+                        <option value="en">🇺🇸 English Narration</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Generate Button */}
+                  <button
+                    type="button"
+                    onClick={handleGenerateRecapScript}
+                    disabled={isGeneratingRecapScript}
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 hover:from-amber-300 hover:to-yellow-400 text-black font-black text-xs shadow-lg shadow-amber-400/20 transition-all active:scale-98 disabled:opacity-50 cursor-pointer"
+                  >
+                    {isGeneratingRecapScript ? (
+                      <>
+                        <RefreshCw size={14} className="animate-spin stroke-[2.5]" />
+                        <span>{isMm ? 'AI ဖြင့် Recap ဇာတ်ညွှန်း ရေးသားနေပါသည်...' : 'Generating AI Recap Script...'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={14} className="fill-black stroke-[2.5]" />
+                        <span>{isMm ? '✨ Recap ဇာတ်ညွှန်း ထုတ်လုပ်မည်' : '✨ Generate Recap Script'}</span>
+                      </>
+                    )}
+                  </button>
+
+                  {/* Generated Script Display & Editor */}
+                  {recapScript && (
+                    <div className="space-y-2 pt-2 border-t border-white/10">
+                      <div className="flex items-center justify-between text-[11px] text-slate-300">
+                        <div className="flex items-center gap-2 font-mono font-bold text-amber-400">
+                          <span>{recapScriptStats.words} Words</span>
+                          <span>•</span>
+                          <span>{recapScriptStats.chars} Chars</span>
+                          <span>•</span>
+                          <span>⏱️ ~{recapScriptStats.estTime} Narration</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(recapScript);
+                            showToast(isMm ? '📋 Script ကို ကူးယူပြီးပါပြီ' : 'Copied script to clipboard', 'success');
+                          }}
+                          className="flex items-center gap-1 text-slate-400 hover:text-white text-[11px] font-bold cursor-pointer"
+                        >
+                          <Copy size={12} />
+                          <span>{isMm ? 'ကူးယူမည်' : 'Copy'}</span>
+                        </button>
+                      </div>
+
+                      <textarea
+                        value={recapScript}
+                        onChange={(e) => setRecapScript(e.target.value)}
+                        rows={6}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white leading-relaxed focus:outline-none focus:ring-1 focus:ring-amber-500 font-sans"
+                        placeholder="Generated recap script..."
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Section 2: AI Voiceover Narration & Subtitle Sync */}
+                {recapScript && (
+                  <div className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-3.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-extrabold uppercase tracking-wider text-purple-400 flex items-center gap-1.5">
+                        <Mic size={14} />
+                        <span>{isMm ? '၂။ Voiceover အသံသွင်းနှင့် စာတန်းထိုး' : '2. Voiceover & Subtitles'}</span>
+                      </span>
+                      {voiceoverAudioUrl && (
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">
+                          VO Track Active 🟢
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[11px] text-slate-400 font-bold block mb-1">
+                          {isMm ? 'AI အသံရှင် (Voice Talent)' : 'Voice Talent'}
+                        </label>
+                        <select
+                          value={recapVoice}
+                          onChange={(e) => setRecapVoice(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-purple-500"
+                        >
+                          {VOICE_OPTIONS.map((v) => (
+                            <option key={v.id} value={v.id}>
+                              {v.gender === 'female' ? '👩' : '👨'} {v.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[11px] text-slate-400 font-bold flex justify-between mb-1">
+                          <span>{isMm ? 'အသံနှုန်း' : 'Speed'}</span>
+                          <span className="text-purple-400 font-mono">{recapVoiceSpeed.toFixed(2)}x</span>
+                        </label>
+                        <input
+                          type="range"
+                          min="0.9"
+                          max="1.3"
+                          step="0.05"
+                          value={recapVoiceSpeed}
+                          onChange={(e) => setRecapVoiceSpeed(parseFloat(e.target.value))}
+                          className="w-full accent-purple-400 h-1.5 bg-slate-800 rounded-lg cursor-pointer mt-2"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Audio Ducking Toggle */}
+                    <div className="flex items-center justify-between p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/20">
+                      <div className="space-y-0.5">
+                        <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                          <Volume2 size={13} className="text-purple-400" />
+                          <span>{isMm ? 'မူရင်း ဗီဒီယိုအသံ လျှော့ချခြင်း (Ducking)' : 'Auto Audio Ducking'}</span>
+                        </span>
+                        <p className="text-[10px] text-slate-400">
+                          {isMm ? 'မူရင်းဗီဒီယိုအသံကို ၁၅% သို့ လျှော့ချပြီး Voiceover ကို ကြည်လင်ပြတ်သားစေမည်' : 'Lowers original video to 15% so narration voice is crystal clear'}
+                        </p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={recapAutoDucking}
+                        onChange={(e) => setRecapAutoDucking(e.target.checked)}
+                        className="w-4 h-4 accent-purple-500 rounded cursor-pointer"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={handleGenerateRecapVoiceover}
+                        disabled={isGeneratingRecapVoiceover}
+                        className="flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-extrabold text-xs shadow-md transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
+                      >
+                        {isGeneratingRecapVoiceover ? (
+                          <>
+                            <RefreshCw size={13} className="animate-spin" />
+                            <span>{isMm ? 'ထုတ်ယူနေပါသည်...' : 'Generating...'}</span>
+                          </>
+                        ) : (
+                          <>
+                            <Mic size={13} />
+                            <span>{isMm ? '🎙️ Voiceover အသံသွင်းမည်' : '🎙️ Generate Voiceover'}</span>
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleSyncRecapAsSubtitles}
+                        className="flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-black font-extrabold text-xs shadow-md transition-all active:scale-95 cursor-pointer"
+                      >
+                        <Type size={13} />
+                        <span>{isMm ? '⏱️ စာတန်းထိုး ချိတ်ဆက်မည်' : '⏱️ Sync Subtitles'}</span>
+                      </button>
+                    </div>
+
+                    {voiceoverAudioUrl && (
+                      <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-2">
+                        <audio src={voiceoverAudioUrl} controls className="h-8 max-w-[200px]" />
+                        <button
+                          type="button"
+                          onClick={() => setVoiceoverAudioUrl(null)}
+                          className="text-[11px] text-rose-400 hover:underline font-bold cursor-pointer"
+                        >
+                          {isMm ? 'ဖယ်ရှားမည်' : 'Remove Track'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Section 3: Smart Highlights Montage */}
+                <div className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-3.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
+                      <Scissors size={14} />
+                      <span>{isMm ? '၃။ အဓိက ဇာတ်ကွက်များ ခွဲထုတ်ခြင်း' : '3. Key Highlights Extraction'}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleGenerateRecapHighlights}
+                      disabled={isAnalyzingHighlights}
+                      className="text-xs text-cyan-400 hover:text-cyan-300 font-extrabold flex items-center gap-1 hover:underline cursor-pointer"
+                    >
+                      {isAnalyzingHighlights ? (
+                        <>
+                          <RefreshCw size={12} className="animate-spin" />
+                          <span>{isMm ? 'ရှာဖွေနေပါသည်...' : 'Analyzing...'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles size={12} />
+                          <span>{isMm ? 'ဇာတ်ကွက် ခွဲထုတ်မည်' : 'Analyze Scenes'}</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {recapHighlights.length > 0 ? (
+                    <div className="space-y-2">
+                      {recapHighlights.map((hl) => (
+                        <div
+                          key={hl.id}
+                          className="p-2.5 rounded-xl bg-slate-900/80 border border-white/5 flex items-center justify-between gap-2 hover:border-cyan-500/30 transition-all"
+                        >
+                          <div className="space-y-0.5 min-w-0">
+                            <p className="text-xs font-bold text-white truncate">{hl.title}</p>
+                            <span className="text-[10px] font-mono text-cyan-400 font-bold">
+                              {formatTime(hl.start)} - {formatTime(hl.end)}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleSeek(hl.start)}
+                              className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-white text-[10px] font-bold transition-all cursor-pointer"
+                              title="Seek playhead to highlight"
+                            >
+                              <Play size={10} className="inline mr-1" />
+                              {isMm ? 'ကြည့်မည်' : 'Jump'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleApplyHighlightAsTrim(hl.start, hl.end)}
+                              className="px-2 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30 text-[10px] font-bold transition-all cursor-pointer"
+                              title="Set timeline trim to this highlight"
+                            >
+                              <Scissors size={10} className="inline mr-1" />
+                              Trim
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-4 px-2 rounded-xl bg-white/5 border border-dashed border-white/10 space-y-2">
+                      <p className="text-xs text-slate-400">
+                        {isMm
+                          ? 'ဗီဒီယို၏ အဓိက အရေးပါသော ဇာတ်ကွက် ၅ ခု (Opening Hook, Incident, Conflict, Climax, Ending) ကို အလိုအလျောက် ခွဲထုတ်ပေးပါသည်'
+                          : 'Auto-extract 5 dramatic scene chapters across video timeline for quick montage cuts.'}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleGenerateRecapHighlights}
+                        disabled={isAnalyzingHighlights}
+                        className="px-3 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-xs font-extrabold transition-all cursor-pointer"
+                      >
+                        {isMm ? '🎬 အဓိက ဇာတ်ကွက်များ စတင်ခွဲထုတ်မည်' : '🎬 Extract Highlights Now'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Section 4: Pro Recapper Anti-Copyright & Styling Suite */}
+                <div className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-rose-400 flex items-center gap-1.5">
+                      <ShieldAlert size={14} />
+                      <span>{isMm ? '၄။ Pro Recapper မူပိုင်ခွင့်လွတ် Preset' : '4. Pro Recapper Anti-Copyright'}</span>
+                    </span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 font-bold">
+                      1-Click Preset
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    {isMm
+                      ? 'YouTube / Facebook မူပိုင်ခွင့် (Copyright Bot) ရှောင်ရှားရန်အတွက် 1.06x Pacing Speed, Cinematic Contrast Grading, နှင့် Audio Ducking ကို တစ်ချက်နှိပ်ရုံဖြင့် အလိုအလျောက် သတ်မှတ်ပေးပါသည်'
+                      : 'Applies 1.06x speed modulation, cinematic teal & orange grading, and audio ducking for copyright avoidance.'}
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={handleApplyProRecapperSuite}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-gradient-to-r from-rose-500/20 via-rose-500/30 to-rose-500/20 hover:from-rose-500/30 hover:to-rose-500/40 text-rose-300 border border-rose-500/40 font-black text-xs shadow-md transition-all active:scale-98 cursor-pointer"
+                  >
+                    <Zap size={14} className="text-rose-400 fill-rose-400" />
+                    <span>{isMm ? '⚡ Pro Recapper မူပိုင်ခွင့်လွတ် Preset အားလုံး ဖွင့်မည်' : '⚡ Activate Full Pro Recapper Suite'}</span>
+                  </button>
+                </div>
+
+                {/* Section 5: Master Export with FFmpeg */}
+                <div className="rounded-2xl border border-amber-500/30 bg-gradient-to-br from-amber-500/10 via-yellow-500/5 to-transparent p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+                      <Download size={14} />
+                      <span>{isMm ? '၅။ Recap ဗီဒီယို ထုတ်ယူခြင်း (FFmpeg)' : '5. Export Recap Video'}</span>
+                    </span>
+                    <span className="text-[10px] text-amber-300 font-mono font-bold">
+                      Lossless 1080p
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleExportVideo()}
+                    disabled={isExporting}
+                    className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 hover:from-amber-300 hover:to-yellow-400 text-black font-black text-sm shadow-xl shadow-amber-400/20 transition-all active:scale-98 disabled:opacity-50 cursor-pointer"
+                  >
+                    {isExporting ? (
+                      <>
+                        <RefreshCw size={16} className="animate-spin stroke-[2.5]" />
+                        <span>{isMm ? 'FFmpeg ဖြင့် Render လုပ်နေပါသည်...' : 'Exporting Video...'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Download size={16} className="stroke-[2.5]" />
+                        <span>{isMm ? '🚀 Recap ဗီဒီယိုကို FFmpeg ဖြင့် ထုတ်ယူမည်' : '🚀 Export Recap Video via FFmpeg'}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* TAB 1: SUBTITLES (စာတန်းထိုး အပြည့်အစုံ ပြင်ဆင်ခြင်း) */}
             {activeInspectorTab === 'subtitles' && (
               <div className="space-y-4">
@@ -2269,9 +3370,19 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
                   {!isSubtitleStylingCollapsed && (
                     <div className="p-3 border-t border-white/5 space-y-3.5 bg-black/20">
                       <div className="flex flex-col gap-1.5">
-                        <label className="text-[11px] text-slate-400 font-bold">
-                          {isMm ? 'စာလုံးစတိုင် (Font Family)' : 'Font Family'}
-                        </label>
+                        <div className="flex items-center justify-between">
+                          <label className="text-[11px] text-slate-400 font-bold">
+                            {isMm ? 'စာလုံးစတိုင် (Font Family)' : 'Font Family'}
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setIsFontModalOpen(true)}
+                            className="text-[10px] text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 hover:underline cursor-pointer"
+                          >
+                            <Plus size={11} className="stroke-[3]" />
+                            <span>{isMm ? '+ Font အသစ်ထည့်မည်' : '+ Add Font'}</span>
+                          </button>
+                        </div>
                         <select
                           value={subFontFamily}
                           onChange={(e) => setSubFontFamily(e.target.value)}
@@ -2284,10 +3395,10 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
                             <option value='sans-serif'>System Sans-Serif</option>
                             <option value='serif'>System Serif</option>
                           </optgroup>
-                          {customFonts.length > 0 && (
-                            <optgroup label="Custom Installed Fonts">
-                              {customFonts.map(f => (
-                                <option key={f.id} value={`"${f.family}"`}>{f.name}</option>
+                          {allAvailableFonts.length > 0 && (
+                            <optgroup label={isMm ? '⭐ ထည့်သွင်းထားသော Font များ (Custom & Installed)' : '⭐ Custom & Installed Fonts'}>
+                              {allAvailableFonts.map(f => (
+                                <option key={f.id} value={`"${f.family}", sans-serif`}>{f.name}</option>
                               ))}
                             </optgroup>
                           )}
@@ -2421,9 +3532,22 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
                     <span className="text-xs font-bold text-slate-300">
                       {isMm ? 'စာတန်းထိုး စာရင်း' : 'Subtitle Cues'} ({cues.length})
                     </span>
-                    <span className="text-[10px] text-slate-500">
-                      {isMm ? 'တည်းဖြတ်ရန် ✏️ နှိပ်ပါ' : 'Click ✏️ to edit text/time'}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {cues.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleAutoBalanceCues}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold transition-all shadow-sm active:scale-95"
+                          title={isMm ? 'ရှည်လျားသော စာတန်းများကို ၂ ကြောင်းညီအောင် အလိုအလျောက် ခွဲညှိမည်' : 'Auto balance & wrap long lines into 2 lines'}
+                        >
+                          <WrapText size={11} />
+                          <span>{isMm ? '၂ ကြောင်းခွဲညှိမည်' : 'Wrap 2-Lines'}</span>
+                        </button>
+                      )}
+                      <span className="text-[10px] text-slate-500">
+                        {isMm ? 'တည်းဖြတ်ရန် ✏️ နှိပ်ပါ' : 'Click ✏️ to edit'}
+                      </span>
+                    </div>
                   </div>
 
                   <input
@@ -3554,6 +4678,215 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
             </div>
 
             <FfmpegWorkerManager onToast={(msg, type) => showToast(msg, type)} />
+          </div>
+        </div>
+      )}
+
+      {/* User Custom Font Modal */}
+      {isFontModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
+          <div className="relative w-full max-w-xl bg-slate-950 border border-white/15 rounded-[32px] p-5 sm:p-7 shadow-2xl space-y-6 my-8 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-4 border-b border-white/10">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                  <Type size={22} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-white">
+                    {isMm ? 'မိမိစိတ်ကြိုက် Font ထည့်သွင်းခြင်း' : 'Add Custom Subtitle Font'}
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    {isMm ? 'သင့်ကွန်ပျူတာ သို့မဟုတ် ဖုန်းမှ Font ဖိုင် (.ttf / .otf / .woff) တင်၍ အသုံးပြုနိုင်ပါသည်' : 'Upload font file (.ttf / .otf / .woff) or enter Google Font URL'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsFontModalOpen(false)}
+                className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-slate-300 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Tabs */}
+            <div className="flex p-1 bg-white/5 rounded-xl border border-white/10">
+              <button
+                type="button"
+                onClick={() => setFontModalTab('file')}
+                className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${
+                  fontModalTab === 'file'
+                    ? 'bg-amber-400 text-black shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                📁 {isMm ? 'Font ဖိုင် တင်မည် (.ttf / .otf)' : 'Upload Font File'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setFontModalTab('url')}
+                className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${
+                  fontModalTab === 'url'
+                    ? 'bg-amber-400 text-black shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                🌐 {isMm ? 'Web / Google Font URL' : 'Google / Web Font URL'}
+              </button>
+            </div>
+
+            <form onSubmit={handleAddUserFont} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                  {isMm ? 'Font အမည် (Font Name / Family)' : 'Font Name'}
+                </label>
+                <input
+                  type="text"
+                  value={newFontName}
+                  onChange={(e) => setNewFontName(e.target.value)}
+                  placeholder={isMm ? 'ဥပမာ: Walone, Masterpiece, Zawgyi' : 'e.g. My Custom Font, Walone'}
+                  className="w-full bg-slate-900 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-400/50"
+                  required
+                />
+              </div>
+
+              {fontModalTab === 'file' ? (
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                    {isMm ? 'Font ဖိုင် ရွေးချယ်ပါ (.ttf, .otf, .woff, .woff2)' : 'Select Font File'}
+                  </label>
+                  <label className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-white/20 hover:border-amber-400/60 rounded-2xl cursor-pointer bg-white/[0.02] hover:bg-white/[0.05] transition-all">
+                    <Upload size={24} className="text-amber-400 mb-2" />
+                    <span className="text-xs font-bold text-white">
+                      {newFontFile ? newFontFile.name : (isMm ? 'Font ဖိုင် ရွေးချယ်ရန် နှိပ်ပါ' : 'Click to select font file')}
+                    </span>
+                    <span className="text-[10px] text-slate-400 mt-1">
+                      .ttf, .otf, .woff, .woff2 formats supported
+                    </span>
+                    <input
+                      type="file"
+                      accept=".ttf,.otf,.woff,.woff2"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          setNewFontFile(file);
+                          if (!newFontName.trim()) {
+                            const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+                            setNewFontName(cleanName);
+                          }
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                      {isMm ? 'Web Font URL / Google Font link' : 'Font URL'}
+                    </label>
+                    <input
+                      type="url"
+                      value={newFontUrl}
+                      onChange={(e) => setNewFontUrl(e.target.value)}
+                      placeholder="https://fonts.googleapis.com/css2?family=Padauk&display=swap"
+                      className="w-full bg-slate-900 border border-white/10 rounded-xl px-4 py-3 text-sm text-white font-mono focus:outline-none focus:ring-2 focus:ring-amber-400/50"
+                      required={fontModalTab === 'url'}
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={isFontGoogle}
+                      onChange={(e) => setIsFontGoogle(e.target.checked)}
+                      className="rounded accent-amber-400"
+                    />
+                    <span>{isMm ? 'Google Fonts link ဖြစ်ပါသည်' : 'This is a Google Fonts link'}</span>
+                  </label>
+                </div>
+              )}
+
+              {/* Real-time Preview */}
+              {newFontName.trim() && (
+                <div className="p-3.5 rounded-xl bg-black/60 border border-white/10 space-y-1">
+                  <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">
+                    {isMm ? 'စာလုံးနမူနာ Preview' : 'Sample Preview'}:
+                  </span>
+                  <p
+                    className="text-base text-amber-300 py-1"
+                    style={{ fontFamily: `"${newFontName.trim()}", sans-serif` }}
+                  >
+                    ၁၂၃ မင်္ဂလာပါ မြန်မာစာတန်းထိုး နမူနာ (The quick brown fox)
+                  </p>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsFontModalOpen(false)}
+                  className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-bold transition-colors"
+                >
+                  {isMm ? 'ပိတ်မည်' : 'Cancel'}
+                </button>
+                <button
+                  type="submit"
+                  disabled={isAddingFont}
+                  className="px-5 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-black text-xs font-extrabold shadow-md shadow-amber-400/20 transition-all flex items-center gap-1.5 active:scale-95 disabled:opacity-50"
+                >
+                  {isAddingFont ? <RefreshCw size={13} className="animate-spin" /> : <Check size={13} />}
+                  <span>{isMm ? 'Font ထည့်ပြီး အသုံးပြုမည်' : 'Save & Apply Font'}</span>
+                </button>
+              </div>
+            </form>
+
+            {/* List of User's Installed Fonts */}
+            {userCustomFonts.length > 0 && (
+              <div className="pt-4 border-t border-white/10 space-y-2.5">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                  {isMm ? `သင်ထည့်သွင်းထားသော Font များ (${userCustomFonts.length})` : `My Installed Fonts (${userCustomFonts.length})`}
+                </span>
+                <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                  {userCustomFonts.map((f) => (
+                    <div
+                      key={f.id}
+                      className="flex items-center justify-between p-2.5 rounded-xl bg-white/5 border border-white/5 hover:border-white/10 transition-colors"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-white truncate" style={{ fontFamily: `"${f.family}", sans-serif` }}>
+                          {f.name}
+                        </p>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {f.isGoogleFont ? 'Google Font' : 'Custom Font'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSubFontFamily(`"${f.family}", sans-serif`);
+                            setIsFontModalOpen(false);
+                            showToast(isMm ? `Font "${f.name}" ကို ရွေးချယ်ပြီးပါပြီ` : `Applied "${f.name}"`, 'success');
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 text-[10px] font-bold transition-colors"
+                        >
+                          {isMm ? 'အသုံးပြုမည်' : 'Use'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteUserFont(f.id, f.name)}
+                          className="p-1.5 rounded-lg hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-colors"
+                          title="Delete font"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

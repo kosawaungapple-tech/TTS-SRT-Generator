@@ -27,13 +27,33 @@ try {
   console.warn('[VBS Worker] WARNING: FFmpeg was not detected in PATH! Please ensure FFmpeg is installed.');
 }
 
+function getLanAddresses() {
+  const nets = os.networkInterfaces();
+  const results = [];
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === 'IPv4' && !net.internal) {
+        results.push(net.address);
+      }
+    }
+  }
+  return results;
+}
+
+const lanIps = getLanAddresses();
+
 console.log('========================================================');
-console.log('       🎬 VBS FFmpeg Worker Engine (Local PC / VPS)      ');
+console.log('       🎬 VBS FFmpeg Worker Engine (Multi-Device Ready)  ');
 console.log('========================================================');
 console.log(`[Status]  Port: ${PORT}`);
 console.log(`[FFmpeg]  ${isFfmpegInstalled ? '🟢 Detected: ' + ffmpegVersionStr : '🔴 Not detected in PATH'}`);
 console.log(`[System]  ${os.type()} ${os.release()} (${os.arch()})`);
-console.log(`[Health]  http://localhost:${PORT}/health`);
+console.log(`[Local PC]       http://localhost:${PORT}`);
+if (lanIps.length > 0) {
+  console.log('[Other Devices (Phone / Tablet / Other PC on same Wi-Fi)]:');
+  lanIps.forEach(ip => console.log(`  📱 Set Worker URL to: http://${ip}:${PORT}`));
+}
+console.log(`[Health Endpoint] http://localhost:${PORT}/health`);
 console.log('========================================================');
 console.log('Ready to process video rendering jobs from VlogsBySaw App!');
 
@@ -68,6 +88,7 @@ const server = http.createServer((req, res) => {
       ffmpegVersion: ffmpegVersionStr,
       platform: os.platform(),
       hostname: os.hostname(),
+      lanIps: getLanAddresses(),
       uptimeSeconds: Math.floor(os.uptime()),
       timestamp: new Date().toISOString()
     }));
@@ -135,10 +156,51 @@ const server = http.createServer((req, res) => {
         let features = {};
         try { features = JSON.parse(featuresRaw); } catch {}
 
+        // Custom Font & Style options
+        const fontPart = parsedParts.files['fontFile'] || parsedParts.files['font'];
+        const fontFamily = (parsedParts.fields['fontFamily'] || '').replace(/['"]/g, '').split(',')[0].trim();
+        const fontSize = parseInt(parsedParts.fields['fontSize'] || '24', 10);
+        const fontColor = parsedParts.fields['fontColor'] || '#FFFFFF';
+        const strokeColor = parsedParts.fields['strokeColor'] || '#000000';
+
+        function hexToAss(hex, fallback) {
+          if (!hex || typeof hex !== 'string') return fallback;
+          const clean = hex.replace('#', '').trim();
+          if (clean.length === 6) {
+            const r = clean.substring(0, 2);
+            const g = clean.substring(2, 4);
+            const b = clean.substring(4, 6);
+            return `&H00${b}${g}${r}`.toUpperCase();
+          }
+          return fallback;
+        }
+
+        const assPrimary = hexToAss(fontColor, '&H00FFFFFF');
+        const assOutline = hexToAss(strokeColor, '&H00000000');
+
         const timestamp = Date.now();
         const inputFilename = `worker_in_${timestamp}_${Math.random().toString(36).substring(2, 7)}.mp4`;
         const inputPath = path.join(UPLOADS_DIR, inputFilename);
         fs.writeFileSync(inputPath, videoPart.data);
+
+        let tempFontPath = null;
+        if (fontPart && fontPart.data && fontPart.data.length > 0) {
+          const fontExt = path.extname(fontPart.filename || '') || '.ttf';
+          const fontFilename = `font_${timestamp}_${Math.random().toString(36).substring(2, 7)}${fontExt}`;
+          tempFontPath = path.join(UPLOADS_DIR, fontFilename);
+          fs.writeFileSync(tempFontPath, fontPart.data);
+          console.log(`[VBS Worker] Staged custom user font: ${fontFilename}`);
+        }
+
+        let tempAudioPath = null;
+        const audioPart = parsedParts.files['audio'];
+        if (audioPart && audioPart.data && audioPart.data.length > 0) {
+          const audioExt = path.extname(audioPart.filename || '') || '.mp3';
+          const audioFilename = `audio_${timestamp}_${Math.random().toString(36).substring(2, 7)}${audioExt}`;
+          tempAudioPath = path.join(UPLOADS_DIR, audioFilename);
+          fs.writeFileSync(tempAudioPath, audioPart.data);
+          console.log(`[VBS Worker] Staged audio track: ${audioFilename}`);
+        }
 
         let tempSrtPath = null;
         if (srtContent && srtContent.trim()) {
@@ -162,6 +224,10 @@ const server = http.createServer((req, res) => {
 
         if (trimEnd > trimStart) {
           args.push('-to', String(trimEnd - trimStart));
+        }
+
+        if (tempAudioPath) {
+          args.push('-i', tempAudioPath);
         }
 
         const vFilters = [];
@@ -193,11 +259,17 @@ const server = http.createServer((req, res) => {
 
         if (tempSrtPath && fs.existsSync(tempSrtPath)) {
           const escSrt = tempSrtPath.replace(/\\/g, '/').replace(/'/g, "'\\''").replace(/:/g, '\\:');
-          vFilters.push(`subtitles='${escSrt}':force_style='FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3,Outline=2.5,MarginV=40'`);
+          const fontNamePart = fontFamily ? `FontName=${fontFamily},` : '';
+          const fontsDirPart = tempFontPath ? `:fontsdir='${UPLOADS_DIR.replace(/\\/g, '/').replace(/'/g, "'\\''")}'` : '';
+          vFilters.push(`subtitles='${escSrt}'${fontsDirPart}:force_style='${fontNamePart}FontSize=${fontSize},PrimaryColour=${assPrimary},OutlineColour=${assOutline},BorderStyle=3,Outline=2.5,MarginV=40'`);
         }
 
         if (vFilters.length > 0) {
           args.push('-vf', vFilters.join(','));
+        }
+
+        if (tempAudioPath) {
+          args.push('-map', '0:v', '-map', '1:a:0', '-shortest');
         }
 
         args.push(
@@ -222,6 +294,8 @@ const server = http.createServer((req, res) => {
           // Cleanup input and temp srt
           try { if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath); } catch {}
           try { if (tempSrtPath && fs.existsSync(tempSrtPath)) fs.unlinkSync(tempSrtPath); } catch {}
+          try { if (tempFontPath && fs.existsSync(tempFontPath)) fs.unlinkSync(tempFontPath); } catch {}
+          try { if (tempAudioPath && fs.existsSync(tempAudioPath)) fs.unlinkSync(tempAudioPath); } catch {}
 
           if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
             console.log(`[VBS Worker] SUCCESS! Output size: ${(fs.statSync(outputPath).size / (1024*1024)).toFixed(2)} MB`);
