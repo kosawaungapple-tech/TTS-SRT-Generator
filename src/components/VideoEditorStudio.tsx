@@ -55,6 +55,7 @@ import {
   splitSentenceIntoCueBlocks 
 } from '../utils/subtitleUtils';
 import { GeminiTTSService } from '../services/geminiService';
+import { renderSceneRecap, getRenderServerUrl, setRenderServerUrl } from '../services/recapRenderService';
 import { apiChannelManager } from '../services/apiChannelManager';
 import { VOICE_OPTIONS } from '../constants';
 
@@ -383,6 +384,9 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
   const [recapAutoDucking, setRecapAutoDucking] = useState<boolean>(true);
   const [recapHighlights, setRecapHighlights] = useState<RecapHighlight[]>([]);
   const [isAnalyzingHighlights, setIsAnalyzingHighlights] = useState<boolean>(false);
+  const [isBuildingSceneRecap, setIsBuildingSceneRecap] = useState<boolean>(false);
+  const [sceneRecapStatus, setSceneRecapStatus] = useState<string>('');
+  const [renderServerUrlInput, setRenderServerUrlInput] = useState<string>(() => getRenderServerUrl());
   const [recapRetryNotice, setRecapRetryNotice] = useState<string | null>(null);
 
   // Fast Offscreen Canvas for Blur Optimization
@@ -1282,6 +1286,84 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
       showToast('Could not extract highlights', 'error');
     } finally {
       setIsAnalyzingHighlights(false);
+    }
+  };
+
+  // 4b. One-click scene recap: plan scenes from the transcript, voice every scene,
+  // then let the render server fit each clip to its narration and join them.
+  const handleBuildSceneRecap = async () => {
+    if (!rawVideoFile) {
+      showToast(isMm ? 'ဗီဒီယိုဖိုင်ကို အရင် တင်ပါ' : 'Please load the video file first', 'error');
+      return;
+    }
+    if (cues.length === 0) {
+      showToast(
+        isMm ? 'အချိန်ပါသော စာတန်း (transcript) အရင်ရှိရပါမယ်' : 'A timestamped transcript (subtitles) is required first',
+        'error'
+      );
+      return;
+    }
+
+    setIsBuildingSceneRecap(true);
+    try {
+      const gemini = getGeminiInstance();
+      const targetSecondsMap: Record<string, number> = { short: 90, medium: 240, full: 540 };
+      const styleHintMap: Record<string, string> = {
+        cinematic: 'Cinematic movie recap with suspense and high emotion',
+        tiktok: 'Fast viral TikTok pacing, punchy hooks',
+        thriller: 'Dark thriller and mystery with plot twists',
+        action: 'High action momentum and dramatic turns',
+        drama: 'Deep emotional drama',
+        summary: 'Clear summary of the key points'
+      };
+      const total = videoDuration > 0 ? videoDuration : cues[cues.length - 1].endSeconds;
+
+      setSceneRecapStatus(isMm ? 'ဇာတ်ကွက်များ စီစဉ်နေသည်...' : 'Planning scenes...');
+      const plan = await gemini.generateRecapPlan(
+        cues.map((c, i) => ({ id: i + 1, start: c.startSeconds, end: c.endSeconds, text: c.text })),
+        total,
+        {
+          targetSeconds: targetSecondsMap[recapDuration] ?? 240,
+          style: styleHintMap[recapStyle] || recapStyle,
+          language: recapTargetLanguage
+        },
+        (seconds, msg) => setSceneRecapStatus(`${msg} (${seconds}s)`)
+      );
+
+      const result = await renderSceneRecap({
+        gemini,
+        videoFile: rawVideoFile,
+        videoFileName,
+        scenes: plan,
+        tts: { voiceId: recapVoice, speed: recapVoiceSpeed, pitch: 0, volume: 100, vocalStyle: 'Expressive' },
+        aspectRatio,
+        burnSubtitles: true,
+        fontFamily: subFontFamily,
+        fontColor: subFontColor,
+        strokeColor: subStrokeColor,
+        onProgress: (done, totalSteps, message) => setSceneRecapStatus(`${message} (${done}/${totalSteps})`),
+        onRetry: (seconds, msg) => setSceneRecapStatus(`${msg} (${seconds}s)`)
+      });
+
+      const a = document.createElement('a');
+      a.href = result.downloadUrl;
+      a.download = `VBS_SceneRecap_${videoFileName.replace(/\.[^/.]+$/, '')}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      showToast(
+        isMm
+          ? `🎬 Scene Recap ဗီဒီယို ပြီးပါပြီ (${plan.length} ဇာတ်ကွက်၊ ${Math.round(result.duration)} စက္ကန့်)`
+          : `🎬 Scene recap ready (${plan.length} scenes, ${Math.round(result.duration)}s)`,
+        'success'
+      );
+    } catch (err) {
+      console.error('[Scene Recap] failed:', err);
+      showToast(err instanceof Error ? err.message : 'Scene recap failed', 'error');
+    } finally {
+      setIsBuildingSceneRecap(false);
+      setSceneRecapStatus('');
     }
   };
 
@@ -3159,6 +3241,47 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
                     )}
                   </div>
                 )}
+
+                {/* Section 2b: Scene-based Recap Video (plan + per-scene voice + server render) */}
+                <div className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-3">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                    <Film size={14} />
+                    <span>{isMm ? 'Scene Recap ဗီဒီယို တစ်ခါတည်းထုတ်ခြင်း' : 'Scene Recap Video (one click)'}</span>
+                  </span>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    {isMm
+                      ? 'Transcript မှ ဇာတ်ကွက်များကို AI က ရွေးပြီး ဇာတ်ကွက်တစ်ခုချင်းစီကို အသံသွင်း၊ ဗီဒီယိုကို အသံအလျားနှင့် ကိုက်အောင် ညှိကာ ပေါင်းပေးပါမယ်။'
+                      : 'AI picks scenes from the transcript, voices each scene, fits the footage to each voice line, and joins them.'}
+                  </p>
+                  <input
+                    type="text"
+                    value={renderServerUrlInput}
+                    onChange={(e) => {
+                      setRenderServerUrlInput(e.target.value);
+                      setRenderServerUrl(e.target.value);
+                    }}
+                    placeholder={isMm ? 'Render server URL (ဥပမာ http://localhost:3000၊ အလွတ်=ဒီဆိုက်)' : 'Render server URL (e.g. http://localhost:3000, blank = this site)'}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-900/80 border border-white/10 text-xs text-white font-mono placeholder:text-slate-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleBuildSceneRecap}
+                    disabled={isBuildingSceneRecap}
+                    className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-black text-xs font-black uppercase tracking-tight flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    {isBuildingSceneRecap ? (
+                      <>
+                        <RefreshCw size={14} className="animate-spin" />
+                        <span>{sceneRecapStatus || (isMm ? 'လုပ်ဆောင်နေသည်...' : 'Working...')}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={14} />
+                        <span>{isMm ? 'Scene Recap ဗီဒီယို ထုတ်မည်' : 'Build Scene Recap Video'}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
 
                 {/* Section 3: Smart Highlights Montage */}
                 <div className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-3.5">

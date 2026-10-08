@@ -23,6 +23,21 @@ interface GeminiResponse {
 /**
  * GeminiTTSService handles integration with Google Generative AI
  */
+export interface RecapPlanCue {
+  id: number;
+  start: number; // seconds
+  end: number; // seconds
+  text: string;
+}
+
+export interface RecapPlanScene {
+  fromCue: number;
+  toCue: number;
+  start: number; // seconds in the source video
+  end: number; // seconds in the source video
+  narration: string;
+}
+
 export class GeminiTTSService {
   private apiKey: string;
   private isAdmin: boolean;
@@ -1088,6 +1103,118 @@ Constraints:
         description: `Timestamp: ${formatTime(start)} - ${formatTime(end)}`
       };
     });
+  }
+
+  /**
+   * Plans a scene-by-scene recap in ONE call. Gemini never invents timestamps:
+   * it picks cue IDs from the real transcript, and the start/end seconds are
+   * read back from those cues, so every narration line is tied to real footage.
+   */
+  async generateRecapPlan(
+    cues: RecapPlanCue[],
+    totalDurationSeconds: number,
+    options: {
+      targetSeconds?: number;
+      style?: string;
+      language?: 'mm' | 'en';
+      maxScenes?: number;
+    } = {},
+    onRetry?: (seconds: number, message: string) => void
+  ): Promise<RecapPlanScene[]> {
+    const valid = cues.filter(c => c.text && c.text.trim());
+    if (valid.length === 0) throw new Error('Recap planning needs a transcript with timestamps (cues).');
+
+    const targetSeconds = Math.max(30, options.targetSeconds ?? 180);
+    const sceneCount = Math.max(4, Math.min(options.maxScenes ?? 40, Math.round(targetSeconds / 12)));
+    const lang = options.language === 'en' ? 'English' : 'Burmese (Myanmar Unicode)';
+    const style = options.style || 'Cinematic movie recap, engaging and dramatic';
+
+    // Keep the whole video visible to Gemini: shrink each line, then thin out evenly if still too big.
+    const fmt = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+    let lines = valid.map(c => ({ id: c.id, line: `#${c.id} [${fmt(c.start)}] ${c.text.trim().replace(/\s+/g, ' ').slice(0, 140)}` }));
+    const MAX_CHARS = 60000;
+    const total = lines.reduce((a, l) => a + l.line.length + 1, 0);
+    if (total > MAX_CHARS) {
+      const step = Math.ceil(total / MAX_CHARS);
+      lines = lines.filter((_, i) => i % step === 0);
+    }
+
+    const prompt = `You are a professional video recap editor and scriptwriter.
+Below is the timestamped transcript of a source video (${Math.round(totalDurationSeconds)} seconds long). Each line starts with a cue ID.
+
+TASK: Build a recap of about ${targetSeconds} seconds made of ${sceneCount} scenes.
+- Scene 1 must be a strong hook; the last scene must be the ending/twist.
+- Keep scenes in the same order as the source video (increasing cue IDs, no overlap).
+- Each scene points at a stretch of source footage with "fromCue" and "toCue" (inclusive cue IDs copied from the transcript below).
+- Each scene has a "narration" written in ${lang}: ${style}. 1-3 spoken sentences (about 15-40 words). Write only what is read aloud: no timestamps, no stage directions, no markdown.
+- The narration must describe what happens in THAT footage so voice and picture match.
+
+Return ONLY JSON: {"scenes":[{"fromCue":12,"toCue":15,"narration":"..."}]}
+
+TRANSCRIPT:
+${lines.map(l => l.line).join('\n')}`;
+
+    type RawScene = { fromCue: number; toCue: number; narration: string };
+    const parseScenes = (rawText: string): RawScene[] => {
+      const clean = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(clean);
+      const arr = Array.isArray(parsed) ? parsed : parsed.scenes;
+      if (!Array.isArray(arr)) throw new Error('Gemini did not return a scenes array');
+      return arr.map((x: { fromCue?: unknown; toCue?: unknown; narration?: unknown }) => ({
+        fromCue: Number(x.fromCue),
+        toCue: Number(x.toCue),
+        narration: String(x.narration || '').trim()
+      }));
+    };
+
+    let raw: RawScene[] | null = null;
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < 2 && !raw; attempt++) {
+      try {
+        const data = await this.geminiRequest(
+          GEMINI_MODELS.REWRITE,
+          {
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: 'application/json', temperature: 0.7 }
+          },
+          0,
+          onRetry
+        );
+        raw = parseScenes(data.candidates?.[0]?.content?.parts?.[0]?.text || '');
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    if (!raw) {
+      const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+      throw new Error(`Recap planning failed: ${msg}`);
+    }
+
+    // Turn cue IDs into real times; fix overlaps / out-of-range values instead of guessing.
+    const byId = new Map(valid.map(c => [c.id, c]));
+    const ids = valid.map(c => c.id).sort((a, b) => a - b);
+    const nearest = (id: number) => ids.reduce((best, x) => (Math.abs(x - id) < Math.abs(best - id) ? x : best), ids[0]);
+
+    const scenes: RecapPlanScene[] = [];
+    let lastTo = -Infinity;
+    for (const r of raw.sort((a, b) => a.fromCue - b.fromCue)) {
+      if (!r.narration || !isFinite(r.fromCue) || !isFinite(r.toCue)) continue;
+      let from = byId.has(r.fromCue) ? r.fromCue : nearest(r.fromCue);
+      let to = byId.has(r.toCue) ? r.toCue : nearest(r.toCue);
+      if (to < from) [from, to] = [to, from];
+      if (from <= lastTo) from = ids.find(i => i > lastTo) ?? from;
+      if (from > to) continue;
+      const a = byId.get(from)!;
+      const b = byId.get(to)!;
+      const start = Math.max(0, a.start);
+      let end = Math.min(totalDurationSeconds, Math.max(b.end, start + 2.5));
+      end = Math.min(end, start + 45);
+      if (end - start < 1) continue;
+      scenes.push({ fromCue: from, toCue: to, start, end, narration: r.narration });
+      lastTo = to;
+    }
+    if (scenes.length === 0) throw new Error('Recap planning produced no usable scenes');
+    return scenes;
   }
 
   private async fileToBase64(file: File): Promise<string> {
