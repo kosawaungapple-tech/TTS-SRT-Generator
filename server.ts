@@ -4,13 +4,21 @@ import path from "path";
 import fs from "fs";
 import multer from "multer";
 import ffmpeg from "fluent-ffmpeg";
+import ffmpegInstaller from "ffmpeg-static";
 import { execSync } from "child_process";
+
+// Configure FFmpeg to use the static binary if available
+if (ffmpegInstaller) {
+  ffmpeg.setFfmpegPath(ffmpegInstaller);
+  console.log('[VBS Server] FFmpeg set to static path:', ffmpegInstaller);
+}
 import { getFirestore } from "firebase-admin/firestore";
 import { getAuth, DecodedIdToken } from "firebase-admin/auth";
 import { initializeApp, getApps, getApp } from "firebase-admin/app";
 import firebaseConfig from "./firebase-applet-config.json" with { type: "json" };
 import { GoogleGenAI } from "@google/genai";
 import { MediaResolverService } from "./src/services/mediaResolverService";
+import { SystemConfig } from "./src/types";
 
 // Initialize Firebase Admin
 const app = getApps().length 
@@ -22,6 +30,29 @@ const app = getApps().length
 const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 const auth = getAuth(app);
 console.log('Firebase Auth initialized:', !!auth);
+
+// Cache for system configuration
+let cachedSystemConfig: SystemConfig | null = null;
+let lastConfigFetch = 0;
+const CONFIG_CACHE_TTL = 60000; // 1 minute
+
+async function getSystemConfig() {
+  const now = Date.now();
+  if (cachedSystemConfig && (now - lastConfigFetch < CONFIG_CACHE_TTL)) {
+    return cachedSystemConfig;
+  }
+  try {
+    const docSnap = await db.collection('system_config').doc('main').get();
+    if (docSnap.exists) {
+      cachedSystemConfig = docSnap.data() as SystemConfig;
+      lastConfigFetch = now;
+      return cachedSystemConfig;
+    }
+  } catch (err) {
+    console.error('[VBS Server] Error fetching system config:', err);
+  }
+  return cachedSystemConfig || {} as SystemConfig;
+}
 
 // Setup Multer for video uploads
 const upload = multer({ dest: 'uploads/' });
@@ -294,24 +325,113 @@ async function startServer() {
     }
   });
 
-  // Video Processing Endpoint
-  app.post("/api/video/process", upload.fields([
+  // Cross-Device Worker Proxy Endpoint
+  // Allows mobile phones, tablets, or other PCs (especially on HTTPS) to utilize the PC / VPS FFmpeg worker
+  // without mixed-content restrictions, and provides seamless Server FFmpeg fallback!
+  app.post("/api/worker/process", upload.fields([
     { name: 'video', maxCount: 1 },
     { name: 'audio', maxCount: 1 },
     { name: 'logo', maxCount: 1 },
     { name: 'fontFile', maxCount: 1 }
   ]), async (req: express.Request, res: express.Response) => {
-    console.log('[VBS Video] Processing request received');
-    console.log('[VBS Video] Files:', req.files);
-    console.log('[VBS Video] Body keys:', Object.keys(req.body));
+    let targetUrl = (req.query.url as string) || (req.body.workerUrl as string);
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+    const videoFile = files?.['video']?.[0];
 
-    try {
-      // 1. Check if FFmpeg is available
+    if (!videoFile) {
+      return res.status(400).json({ success: false, error: "No video file received" });
+    }
+
+    const config = await getSystemConfig();
+    const globalWorkerUrl = config?.global_worker_url;
+
+    // Smart target selection:
+    // If target is localhost (default) and we have a global worker, use global worker for remote users
+    if (globalWorkerUrl && (!targetUrl || targetUrl.includes('localhost') || targetUrl.includes('127.0.0.1'))) {
+      console.log(`[Worker Proxy] Defaulting to Global Worker: ${globalWorkerUrl}`);
+      targetUrl = globalWorkerUrl;
+    }
+
+    let proxySucceeded = false;
+
+    if (targetUrl && targetUrl.trim()) {
+      const cleanUrl = targetUrl.trim().replace(/\/+$/, '');
       try {
-        execSync('ffmpeg -version', { stdio: 'ignore' });
+        console.log(`[Worker Proxy] Forwarding render job to: ${cleanUrl}/process`);
+        const forwardFormData = new FormData();
+        const videoBuffer = fs.readFileSync(videoFile.path);
+        forwardFormData.append('video', new Blob([videoBuffer]), videoFile.originalname || 'video.mp4');
+
+        if (files?.['audio']?.[0]) {
+          const audioBuf = fs.readFileSync(files['audio'][0].path);
+          forwardFormData.append('audio', new Blob([audioBuf]), files['audio'][0].originalname || 'audio.mp3');
+        }
+        if (files?.['logo']?.[0]) {
+          const logoBuf = fs.readFileSync(files['logo'][0].path);
+          forwardFormData.append('logo', new Blob([logoBuf]), files['logo'][0].originalname || 'logo.png');
+        }
+        if (files?.['fontFile']?.[0]) {
+          const fontBuf = fs.readFileSync(files['fontFile'][0].path);
+          forwardFormData.append('fontFile', new Blob([fontBuf]), files['fontFile'][0].originalname || 'font.ttf');
+        }
+
+        for (const [key, val] of Object.entries(req.body)) {
+          if (typeof val === 'string') {
+            forwardFormData.append(key, val);
+          }
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 600000); // Increased to 10 min
+        const workerResponse = await fetch(`${cleanUrl}/process`, {
+          method: 'POST',
+          body: forwardFormData,
+          signal: controller.signal
+        });
+        clearTimeout(timeout);
+
+        if (workerResponse.ok) {
+          const workerData = await workerResponse.json();
+          if (workerData.success) {
+            proxySucceeded = true;
+            // Clean up files locally since we've sent them
+            for (const fileList of Object.values(files)) {
+              for (const f of fileList) {
+                try { if (fs.existsSync(f.path)) fs.unlinkSync(f.path); } catch {}
+              }
+            }
+            return res.json({ ...workerData, proxied: true });
+          }
+        }
+        console.warn(`[Worker Proxy] Worker response unsuccessful, proceeding with server FFmpeg fallback`);
+      } catch (proxyErr) {
+        console.warn(`[Worker Proxy] Forwarding to ${cleanUrl} failed; fallback to server FFmpeg:`, proxyErr);
+      }
+    }
+
+    if (!proxySucceeded) {
+      // Direct Server Render Fallback: Internal call to process route logic
+      // Instead of redirecting (which triggers a new upload), we call the logic directly
+      console.log('[Worker Proxy] Falling back to Internal Server Render...');
+      // We pass the already parsed request to a shared logic function
+      return await handleVideoProcessInternal(req, res);
+    }
+  });
+
+  // Re-usable internal logic for video processing to avoid redundant code and redirects
+  async function handleVideoProcessInternal(req: express.Request, res: express.Response) {
+    console.log('[VBS Video] Processing request (Internal)');
+    try {
+      // Check if FFmpeg is available
+      try {
+        if (ffmpegInstaller) {
+          // Already set above
+        } else {
+          execSync('ffmpeg -version', { stdio: 'ignore' });
+        }
       } catch (e) {
         console.error('[VBS Video] FFmpeg not found on server:', e);
-        return res.json({ success: false, error: 'FFmpeg not found on server. Please contact administrator.' });
+        return res.json({ success: false, error: 'FFmpeg not found on server. Please use Local PC Worker Engine or contact administrator.' });
       }
 
       const files = req.files as { [fieldname: string]: Express.Multer.File[] };
@@ -321,7 +441,6 @@ async function startServer() {
       const fontFile = files?.['fontFile']?.[0];
 
       if (!videoFile) {
-        console.warn('[VBS Video] No video file received in request');
         return res.json({ success: false, error: "No video file received" });
       }
 
@@ -335,7 +454,6 @@ async function startServer() {
       const subtitleSize = req.body.subtitleSize || "medium";
       const pitchShift = parseFloat(req.body.pitchShift || "0");
 
-      // Custom Font and Style Settings
       const fontFamily = (req.body.fontFamily || "").replace(/['"]/g, '').split(',')[0].trim();
       const fontColor = req.body.fontColor || "#FFFFFF";
       const strokeColor = req.body.strokeColor || "#000000";
@@ -373,7 +491,6 @@ async function startServer() {
         }
       }
 
-      // Movie Recap specific params
       const videoSpeed = parseFloat(req.body.videoSpeed || "1.0");
       const audioSpeed = parseFloat(req.body.audioSpeed || "1.0");
       const aspectRatio = req.body.aspectRatio || "16:9";
@@ -388,7 +505,6 @@ async function startServer() {
       const finalOutputPath = path.join('public/output', outputFilename);
       const tempOutputPath = path.join('/tmp', outputFilename);
 
-      // 1. Probe video for audio track existence
       let hasInputAudio = false;
       try {
         const probeResult = execSync(`ffprobe -v error -select_streams a -show_entries stream=codec_type -of csv=p=0 "${inputPath}"`).toString().trim();
@@ -402,7 +518,6 @@ async function startServer() {
       const trimStart = parseFloat(req.body.trimStart || "0");
       const trimEnd = parseFloat(req.body.trimEnd || "0");
 
-      // Check if we need any video filters
       const needsVideoProcessing = 
         activeFeatureNames.includes("flip") || 
         activeFeatureNames.includes("hflip") ||
@@ -418,51 +533,24 @@ async function startServer() {
         Boolean(logoInputPath);
 
       const command = ffmpeg(inputPath);
-      
-      if (trimStart > 0) {
-        command.setStartTime(trimStart);
-      }
-      if (trimEnd > trimStart) {
-        command.setDuration(trimEnd - trimStart);
-      }
-      
-      if (audioInputPath) {
-        command.input(audioInputPath);
-      }
-      
-      if (logoInputPath) {
-        command.input(logoInputPath);
-      }
+      if (trimStart > 0) command.setStartTime(trimStart);
+      if (trimEnd > trimStart) command.setDuration(trimEnd - trimStart);
+      if (audioInputPath) command.input(audioInputPath);
+      if (logoInputPath) command.input(logoInputPath);
 
       const filterComplex: string[] = [];
       let currentVideoLabel = '0:v';
 
       if (needsVideoProcessing) {
-        // --- VIDEO FILTERS ---
         const vFilters: string[] = [];
-        
-        if (activeFeatureNames.includes("flip") || activeFeatureNames.includes("hflip") || activeFeatureNames.includes("flipHorizontal")) {
-          vFilters.push("hflip");
-        }
-        if (activeFeatureNames.includes("vflip") || activeFeatureNames.includes("flipVertical")) {
-          vFilters.push("vflip");
-        }
-        
-        if (activeFeatureNames.includes("crop")) {
-          vFilters.push("crop=iw*0.97:ih*0.97:(iw-iw*0.97)/2:(ih-ih*0.97)/2");
-        }
-        
-        if (activeFeatureNames.includes("colorGrade")) {
-          vFilters.push("eq=contrast=1.1:saturation=1.2:brightness=-0.05");
-        }
+        if (activeFeatureNames.includes("flip") || activeFeatureNames.includes("hflip") || activeFeatureNames.includes("flipHorizontal")) vFilters.push("hflip");
+        if (activeFeatureNames.includes("vflip") || activeFeatureNames.includes("flipVertical")) vFilters.push("vflip");
+        if (activeFeatureNames.includes("crop")) vFilters.push("crop=iw*0.97:ih*0.97:(iw-iw*0.97)/2:(ih-ih*0.97)/2");
+        if (activeFeatureNames.includes("colorGrade")) vFilters.push("eq=contrast=1.1:saturation=1.2:brightness=-0.05");
         
         if (aspectRatio !== "original" && aspectRatio !== "16:9") {
           const resolutions: Record<string, string> = {
-            "9:16": "1080:1920",
-            "1:1": "1080:1080",
-            "4:5": "1080:1350",
-            "4:3": "1440:1080",
-            "21:9": "2560:1080"
+            "9:16": "1080:1920", "1:1": "1080:1080", "4:5": "1080:1350", "4:3": "1440:1080", "21:9": "2560:1080"
           };
           const targetResString = resolutions[aspectRatio];
           if (targetResString) {
@@ -471,20 +559,16 @@ async function startServer() {
           }
         }
 
-        if (videoSpeed !== 1.0) {
-          vFilters.push(`setpts=PTS/${videoSpeed}`);
-        }
+        if (videoSpeed !== 1.0) vFilters.push(`setpts=PTS/${videoSpeed}`);
 
-        // Handle burning in Subtitles (Single Text or Full .SRT Content)
         let tempSrtPath: string | null = null;
-
         if (hasSubtitles) {
           try {
             tempSrtPath = path.join('/tmp', `sub_${Date.now()}_${Math.random().toString(36).substring(7)}.srt`);
             fs.writeFileSync(tempSrtPath, srtContent, 'utf-8');
-            const escapedSrtPath = tempSrtPath.replace(/'/g, "'\\\\''").replace(/:/g, "\\:");
+            const escapedSrtPath = tempSrtPath.replace(/\\/g, '/').replace(/'/g, "'\\''").replace(/:/g, '\\:');
             const fontNamePart = fontFamily ? `FontName=${fontFamily},` : (fontFile ? '' : 'FontName=Noto Sans Myanmar,');
-            const fontsDirPart = fontDirForAss ? `:fontsdir='${fontDirForAss}'` : '';
+            const fontsDirPart = fontDirForAss ? `:fontsdir='${fontDirForAss.replace(/\\/g, '/').replace(/'/g, "'\\''")}'` : '';
             vFilters.push(`subtitles='${escapedSrtPath}'${fontsDirPart}:force_style='${fontNamePart}FontSize=${fontSizeNum},PrimaryColour=${assPrimary},OutlineColour=${assOutline},BorderStyle=3,Outline=2.5,MarginV=40'`);
           } catch (srtErr) {
             console.error('[VBS Video] Failed to write temporary SRT file:', srtErr);
@@ -493,8 +577,8 @@ async function startServer() {
           const fontSizeMap: Record<string, number> = { 'small': 30, 'medium': 45, 'large': 60 };
           const fontSize = fontSizeNum || fontSizeMap[subtitleSize] || 45;
           const chosenFontPath = customFontTempPath || fontFile?.path || '/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf';
-          const fontArg = fs.existsSync(chosenFontPath) ? `:fontfile='${chosenFontPath.replace(/'/g, "'\\\\''")}'` : '';
-          const escapedText = subtitleText.replace(/'/g, "'\\\\''").replace(/:/g, "\\:");
+          const fontArg = fs.existsSync(chosenFontPath) ? `:fontfile='${chosenFontPath.replace(/\\/g, '/').replace(/'/g, "'\\''")}'` : '';
+          const escapedText = subtitleText.replace(/'/g, "'\\''").replace(/:/g, "\\:");
           vFilters.push(`drawtext=text='${escapedText}':fontcolor=${fontColor || 'white'}:fontsize=${fontSize}:shadowcolor=black:shadowx=2:shadowy=2:x=(w-text_w)/2:y=h-(h*0.15)${fontArg}`);
         }
 
@@ -506,33 +590,21 @@ async function startServer() {
         if (logoInputPath) {
           const logoInIdx = audioInputPath ? 2 : 1;
           const logoScale = `scale=iw*${logoSize}:-1,format=rgba,colorchannelmixer=aa=${logoOpacity}`;
-          const pos = {
-            'top-left': '20:20',
-            'top-right': 'W-w-20:20',
-            'bottom-left': '20:H-h-20',
-            'bottom-right': 'W-w-20:H-h-20',
-            'center': '(W-w)/2:(H-h)/2'
-          }[logoPosition] || 'W-w-20:20';
-
+          const pos = { 'top-left': '20:20', 'top-right': 'W-w-20:20', 'bottom-left': '20:H-h-20', 'bottom-right': 'W-w-20:H-h-20', 'center': '(W-w)/2:(H-h)/2' }[logoPosition] || 'W-w-20:20';
           filterComplex.push(`[${logoInIdx}:v]${logoScale}[l_ready]`);
           filterComplex.push(`[${currentVideoLabel}][l_ready]overlay=${pos}[v_branded]`);
           currentVideoLabel = 'v_branded';
         }
       }
 
-      // --- AUDIO FILTERS ---
       let currentAudioLabel = audioInputPath ? '1:a' : (hasInputAudio ? '0:a' : null);
-      
       if (currentAudioLabel) {
         const aFilters: string[] = [];
         if (activeFeatureNames.includes("pitch") && pitchShift !== 0) {
           const factor = Math.pow(2, pitchShift / 12);
           aFilters.push(`asetrate=44100*${factor}`, `atempo=${(1/factor).toFixed(2)}`);
         }
-        if (audioSpeed !== 1.0) {
-          aFilters.push(`atempo=${audioSpeed.toFixed(2)}`);
-        }
-
+        if (audioSpeed !== 1.0) aFilters.push(`atempo=${audioSpeed.toFixed(2)}`);
         if (aFilters.length > 0) {
           filterComplex.push(`[${currentAudioLabel}]${aFilters.join(',')}[a_proc]`);
           currentAudioLabel = 'a_proc';
@@ -540,32 +612,17 @@ async function startServer() {
       }
 
       const outputOptions = [
-        '-y',
-        '-vcodec', 'libx264',
-        '-acodec', 'aac',
-        '-ar', '44100',
-        '-ac', '2',
-        '-pix_fmt', 'yuv420p',
-        '-preset', 'fast',
-        '-crf', '19',
-        '-movflags', '+faststart',
-        '-f', 'mp4'
+        '-y', '-vcodec', 'libx264', '-acodec', 'aac', '-ar', '44100', '-ac', '2', '-pix_fmt', 'yuv420p',
+        '-preset', 'fast', '-crf', '19', '-movflags', '+faststart', '-f', 'mp4'
       ];
-
-      // Video Mapping
       outputOptions.push('-map', filterComplex.length > 0 && currentVideoLabel !== '0:v' ? `[${currentVideoLabel}]` : '0:v');
-
-      // Audio Mapping
       if (currentAudioLabel) {
         const finalAudioSource = currentAudioLabel.includes('_proc') ? `[${currentAudioLabel}]` : (audioInputPath ? '1:a:0' : '0:a:0');
         outputOptions.push('-map', finalAudioSource);
         outputOptions.push('-shortest');
       }
 
-      if (filterComplex.length > 0) {
-        console.log('[VBS Video] Filter Complex:', filterComplex.join('; '));
-        command.complexFilter(filterComplex);
-      }
+      if (filterComplex.length > 0) command.complexFilter(filterComplex);
 
       command
         .outputOptions(outputOptions)
@@ -574,151 +631,48 @@ async function startServer() {
         .on('end', () => {
           try {
             const stats = fs.statSync(tempOutputPath);
-            console.log('[VBS Video] Processing complete. Output size:', stats.size, 'bytes');
-            
-            if (stats.size === 0) {
-              throw new Error('Processed output file is empty (0 bytes).');
-            }
-
-            // Move from temp to final public output
+            if (stats.size === 0) throw new Error('Processed output file is empty (0 bytes).');
             fs.renameSync(tempOutputPath, finalOutputPath);
-
-            // Clean up inputs
-            if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-            if (audioInputPath && fs.existsSync(audioInputPath)) fs.unlinkSync(audioInputPath);
-            if (logoInputPath && fs.existsSync(logoInputPath)) fs.unlinkSync(logoInputPath);
-            if (customFontTempPath && fs.existsSync(customFontTempPath)) {
-              try { fs.unlinkSync(customFontTempPath); } catch {}
-            }
-            if (fontDirForAss && fs.existsSync(fontDirForAss)) {
-              try { fs.rmdirSync(fontDirForAss); } catch {}
-            }
-            if (fontFile && fs.existsSync(fontFile.path)) {
-              try { fs.unlinkSync(fontFile.path); } catch {}
-            }
-            
-            res.json({ 
-              success: true, 
-              downloadUrl: `/output/${outputFilename}` 
-            });
+            cleanupLocalFiles(files, tempOutputPath);
+            res.json({ success: true, downloadUrl: `/output/${outputFilename}` });
           } catch (verifyErr: unknown) {
-            const verifyErrMsg = verifyErr instanceof Error ? verifyErr.message : String(verifyErr);
             console.error('[VBS Video] post-process verification failed:', verifyErr);
-            res.status(500).json({ success: false, error: "Output verification failed: " + verifyErrMsg });
+            res.status(500).json({ success: false, error: "Output verification failed: " + (verifyErr instanceof Error ? verifyErr.message : String(verifyErr)) });
           }
         })
         .on('error', (err) => {
           console.error('[VBS Video] FFmpeg error:', err);
-          if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-          if (audioInputPath && fs.existsSync(audioInputPath)) fs.unlinkSync(audioInputPath);
-          if (logoInputPath && fs.existsSync(logoInputPath)) fs.unlinkSync(logoInputPath);
-          if (customFontTempPath && fs.existsSync(customFontTempPath)) {
-            try { fs.unlinkSync(customFontTempPath); } catch {}
-          }
-          if (fontDirForAss && fs.existsSync(fontDirForAss)) {
-            try { fs.rmdirSync(fontDirForAss); } catch {}
-          }
-          if (fontFile && fs.existsSync(fontFile.path)) {
-            try { fs.unlinkSync(fontFile.path); } catch {}
-          }
-          if (fs.existsSync(tempOutputPath)) fs.unlinkSync(tempOutputPath);
+          cleanupLocalFiles(files, tempOutputPath);
           res.status(500).json({ success: false, error: "FFmpeg execution failed: " + err.message });
         })
         .run();
-
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
       console.error('Global Processing error:', err);
-      // Clean up files if possible
-      const files = req.files as { [fieldname: string]: Express.Multer.File[] };
-      if (files?.['video']?.[0]?.path && fs.existsSync(files['video'][0].path)) fs.unlinkSync(files['video'][0].path);
-      if (files?.['audio']?.[0]?.path && fs.existsSync(files['audio'][0].path)) fs.unlinkSync(files['audio'][0].path);
-      if (files?.['logo']?.[0]?.path && fs.existsSync(files['logo'][0].path)) fs.unlinkSync(files['logo'][0].path);
-      if (files?.['fontFile']?.[0]?.path && fs.existsSync(files['fontFile'][0].path)) fs.unlinkSync(files['fontFile'][0].path);
-      
-      res.status(500).json({ 
-        success: false, 
-        error: "Server Error: " + errorMessage
-      });
+      cleanupLocalFiles(req.files as { [fieldname: string]: Express.Multer.File[] } | undefined);
+      res.status(500).json({ success: false, error: "Server Error: " + (err instanceof Error ? err.message : String(err)) });
     }
-  });
+  }
 
-  // Cross-Device Worker Proxy Endpoint
-  // Allows mobile phones, tablets, or other PCs (especially on HTTPS) to utilize the PC / VPS FFmpeg worker
-  // without mixed-content restrictions, and provides seamless Server FFmpeg fallback!
-  app.post("/api/worker/process", upload.fields([
+  function cleanupLocalFiles(files: { [fieldname: string]: Express.Multer.File[] } | undefined, tempOutput?: string) {
+    if (!files) return;
+    Object.values(files).flat().forEach(f => {
+      try { if (f?.path && fs.existsSync(f.path)) fs.unlinkSync(f.path); } catch {}
+    });
+    if (tempOutput && fs.existsSync(tempOutput)) {
+      try { fs.unlinkSync(tempOutput); } catch {}
+    }
+  }
+
+  // Original Video Processing Endpoint (now uses shared logic)
+  app.post("/api/video/process", upload.fields([
     { name: 'video', maxCount: 1 },
     { name: 'audio', maxCount: 1 },
     { name: 'logo', maxCount: 1 },
     { name: 'fontFile', maxCount: 1 }
   ]), async (req: express.Request, res: express.Response) => {
-    const targetUrl = (req.query.url as string) || (req.body.workerUrl as string);
-    const files = req.files as { [fieldname: string]: Express.Multer.File[] };
-    const videoFile = files?.['video']?.[0];
-
-    if (!videoFile) {
-      return res.status(400).json({ success: false, error: "No video file received" });
-    }
-
-    if (targetUrl && targetUrl.trim()) {
-      const cleanUrl = targetUrl.trim().replace(/\/+$/, '');
-      try {
-        console.log(`[Worker Proxy] Forwarding render job to: ${cleanUrl}/process`);
-        const forwardFormData = new FormData();
-        const videoBuffer = fs.readFileSync(videoFile.path);
-        forwardFormData.append('video', new Blob([videoBuffer]), videoFile.originalname || 'video.mp4');
-
-        if (files?.['audio']?.[0]) {
-          const audioBuf = fs.readFileSync(files['audio'][0].path);
-          forwardFormData.append('audio', new Blob([audioBuf]), files['audio'][0].originalname || 'audio.mp3');
-        }
-        if (files?.['logo']?.[0]) {
-          const logoBuf = fs.readFileSync(files['logo'][0].path);
-          forwardFormData.append('logo', new Blob([logoBuf]), files['logo'][0].originalname || 'logo.png');
-        }
-        if (files?.['fontFile']?.[0]) {
-          const fontBuf = fs.readFileSync(files['fontFile'][0].path);
-          forwardFormData.append('fontFile', new Blob([fontBuf]), files['fontFile'][0].originalname || 'font.ttf');
-        }
-
-        for (const [key, val] of Object.entries(req.body)) {
-          if (typeof val === 'string') {
-            forwardFormData.append(key, val);
-          }
-        }
-
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 300000); // 5 min timeout
-        const workerResponse = await fetch(`${cleanUrl}/process`, {
-          method: 'POST',
-          body: forwardFormData,
-          signal: controller.signal
-        });
-        clearTimeout(timeout);
-
-        if (workerResponse.ok) {
-          const workerData = await workerResponse.json();
-          if (workerData.success) {
-            for (const fileList of Object.values(files)) {
-              for (const f of fileList) {
-                try { if (fs.existsSync(f.path)) fs.unlinkSync(f.path); } catch {}
-              }
-            }
-            return res.json({ ...workerData, proxied: true });
-          }
-        }
-        console.warn(`[Worker Proxy] Worker response unsuccessful, proceeding with server FFmpeg fallback`);
-      } catch (proxyErr) {
-        console.warn(`[Worker Proxy] Forwarding to ${cleanUrl} failed; fallback to server FFmpeg:`, proxyErr);
-      }
-    }
-
-    // Direct Server Render Fallback: forward to internal /api/video/process
-    // Re-route to the server processor directly
-    const videoUrlRedirect = '/api/video/process';
-    // Since req has already parsed multipart, call the process route via internal forwarding or re-invoke
-    return res.redirect(307, videoUrlRedirect);
+    return await handleVideoProcessInternal(req, res);
   });
+
 
   // Helper function to recursively convert server-side Buffer objects to Base64 strings for serialization
   function convertBuffersToBase64(obj: unknown): unknown {
@@ -753,15 +707,6 @@ async function startServer() {
       return res.status(400).json({ error: "Model name is required" });
     }
 
-    // Map friendly value to actual preview modelName only for TTS requests
-    if (isTts) {
-      if (targetModel === 'gemini-3.1-flash-tts' || targetModel === 'gemini-3.1-flash-tts-preview') {
-        targetModel = 'gemini-3.8-flash-lite-tts';
-      }
-    }
-
-    const isTwoStepTts = isTts && (targetModel === 'gemini-2.5-flash' || targetModel === 'gemini-3.1-flash-lite' || targetModel === 'gemini-3.1-flash-lite-8b');
-
     // Check if providedKey is plausible format
     const trimmedProvidedKey = typeof providedKey === 'string' ? providedKey.trim() : '';
     const lowerKey = trimmedProvidedKey.toLowerCase();
@@ -777,97 +722,41 @@ async function startServer() {
 
     const personalKey = isPlausiblePersonalKey ? trimmedProvidedKey : null;
 
+    // Map friendly value to actual production modelName only for TTS requests
+    if (isTts) {
+      if (targetModel.includes('tts')) {
+        targetModel = 'gemini-1.5-flash';
+      }
+    }
+
     const executeWithClient = async (ai: GoogleGenAI): Promise<unknown> => {
-      if (isTwoStepTts) {
-        let firstStepModel = targetModel;
-        // Optimization: For 3.1 Lite, use it directly as it has high quota. 
-        if (firstStepModel === 'gemini-3.1-flash-lite-8b' || firstStepModel === 'gemini-2.5-flash') {
-          firstStepModel = 'gemini-3.1-flash-lite';
-        }
+      const updatedConfig: Record<string, unknown> = config ? { ...config } : {};
+      if (isTts) {
+        updatedConfig.responseModalities = ["AUDIO"];
+      }
 
-        // Step 1: Clean/Strip audio args to prevent 400 Bad Request
-        const textOnlyConfig: Record<string, unknown> = config ? { ...config } : {};
-        delete textOnlyConfig.responseModalities;
-        delete textOnlyConfig.speechConfig;
-        delete textOnlyConfig.responseMimeType;
-
-        console.log(`[Proxy] Two-step TTS Step 1: Generating text with standard model: ${firstStepModel}`);
-        const textResult = await ai.models.generateContent({
-          model: firstStepModel,
+      try {
+        return await ai.models.generateContent({
+          model: targetModel,
           contents,
-          config: textOnlyConfig
+          config: updatedConfig
         });
-
-        const generatedText = textResult.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!generatedText) {
-          throw new Error("No text generated from standard Gemini model in Step 1 of TTS pipeline");
-        }
-
-        console.log(`[Proxy] Two-step TTS Step 1 text output received: "${generatedText.substring(0, 50)}..."`);
-
-        // Grab any parenthesized or bracketed style instruction from prompt to carry forward
-        let styleMatch = "";
-        const originalText = contents?.[0]?.parts?.[0]?.text || "";
-        if (typeof originalText === "string" && originalText.startsWith("[")) {
-          const closingBracketIndex = originalText.indexOf("]");
-          if (closingBracketIndex !== -1) {
-            styleMatch = originalText.substring(0, closingBracketIndex + 1);
-          }
-        }
-
-        const ttsText = styleMatch ? `${styleMatch}\n\n${generatedText}` : generatedText;
+      } catch (directErr: unknown) {
+        const errMsg = String(directErr);
+        const isQuota = errMsg.includes('quota') || errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('resource_exhausted');
         
-        // Preserve audio parts from original contents if any (for voice cloning)
-        const audioParts = (contents?.[0]?.parts || []).filter((p: { inlineData?: { mimeType: string } }) => p.inlineData && p.inlineData.mimeType.startsWith('audio/'));
-        const ttsContents = [{ parts: [...audioParts, { text: ttsText }] }];
-
-        const ttsConfig: Record<string, unknown> = config ? { ...config } : {};
-        ttsConfig.responseModalities = ["AUDIO"];
-
-        console.log(`[Proxy] Two-step TTS Step 2: Pitching to dedicated audio pipeline gemini-3.8-flash-lite-tts`);
-        const ttsResult = await ai.models.generateContent({
-          model: "gemini-3.8-flash-lite-tts",
-          contents: ttsContents,
-          config: ttsConfig
-        });
-
-        return ttsResult;
-      } else {
-        const updatedConfig: Record<string, unknown> = config ? { ...config } : {};
-        if (isTts) {
-          updatedConfig.responseModalities = ["AUDIO"];
-        }
-
-        try {
-          return await ai.models.generateContent({
-            model: targetModel,
-            contents,
-            config: updatedConfig
-          });
-        } catch (directErr: unknown) {
-          const errMsg = String(directErr);
-          const isQuota = errMsg.includes('quota') || errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('resource_exhausted');
-          
-          if (isQuota) {
-            if (!isTts && (targetModel === 'gemini-3.8-flash' || targetModel !== 'gemini-3.1-flash-lite')) {
-              console.warn(`[Proxy] Quota exceeded on ${targetModel}, falling back to gemini-3.1-flash-lite`);
-              return await ai.models.generateContent({
-                model: 'gemini-3.1-flash-lite',
-                contents,
-                config: updatedConfig
-              });
-            }
-            if (isTts && targetModel === 'gemini-3.8-flash-tts') {
-              console.warn(`[Proxy] Quota exceeded on gemini-3.8-flash-tts, falling back to gemini-3.8-flash-lite-tts`);
-              return await ai.models.generateContent({
-                model: 'gemini-3.8-flash-lite-tts',
-                contents,
-                config: updatedConfig
-              });
-            }
+        if (isQuota) {
+          // Standard fallback to high-quota model if primary fails
+          if (targetModel !== 'gemini-1.5-flash') {
+            console.warn(`[Proxy] Quota exceeded on ${targetModel}, falling back to gemini-1.5-flash`);
+            return await ai.models.generateContent({
+              model: 'gemini-1.5-flash',
+              contents,
+              config: updatedConfig
+            });
           }
-          throw directErr;
         }
+        throw directErr;
       }
     };
 

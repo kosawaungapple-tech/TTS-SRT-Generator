@@ -1,82 +1,122 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128;
+    // 1. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
     }
+
+    // Helpers
+    function isValidId(id) { return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+    
+    // Master admin check (via session accessCode)
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/sessions/$(request.auth.uid))
+             && get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode == 'saw_vlogs_2026';
+    }
+
+    // Check if user has any valid session
+    function hasAnySession() {
+      return isSignedIn() && exists(/databases/$(database)/documents/sessions/$(request.auth.uid));
+    }
+    
+    // Get current user's access code
+    function getAccessCode() {
+      return get(/databases/$(database)/documents/sessions/$(request.auth.uid)).data.accessCode;
+    }
+
+    // Validation Helpers
+    function isValidSession(data) {
+      return data.keys().hasAll(['accessCode', 'createdAt'])
+          && data.keys().hasOnly(['accessCode', 'createdAt'])
+          && data.accessCode is string && data.accessCode.size() <= 64
+          && data.createdAt == request.time;
+    }
+
+    // Path Rules
 
     // Sessions - tracks Access Code session for users & admins
     match /sessions/{userId} {
-      allow read: if true;
-      allow write: if isValidId(userId);
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isSignedIn() && request.auth.uid == userId && isValidSession(incoming());
+      allow update: if isSignedIn() && request.auth.uid == userId && isValidSession(incoming()) 
+                    && incoming().accessCode == existing().accessCode;
     }
 
     // User controls - authorized user accounts
     match /user_controls/{vbsId} {
-      allow read: if true;
-      allow write: if isValidId(vbsId);
+      // Allow 'get' for ANYONE to verify their code
+      allow get: if true;
+      allow list: if isAdmin();
+      allow create: if isAdmin() || (isValidId(vbsId) && incoming().credits >= 0 && incoming().credits <= 20);
+      allow update: if isAdmin() || (isSignedIn() && hasAnySession() && getAccessCode() == vbsId);
     }
 
-    // Legacy users collection
+    // users - real profiles (Google Auth)
     match /users/{userId} {
-      allow read: if true;
-      allow write: if isValidId(userId);
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow write: if isSignedIn() && (request.auth.uid == userId || isAdmin());
     }
 
-    // API Key stats
-    match /adminKeyStats/{keyId} {
-      allow read: if true;
-      allow write: if isValidId(keyId);
-    }
-
-    // System and credit settings
+    // settings
     match /settings/{doc} {
+      // Allow 'read' for anyone to see global configuration (announcements, welcome credits, etc.)
       allow read: if true;
-      allow write: if isValidId(doc);
+      allow write: if isAdmin();
     }
 
-    // Activity logs
+    // activity_logs
     match /activity_logs/{logId} {
-      allow read: if true;
-      allow write: if isValidId(logId);
+      allow read: if isAdmin();
+      allow create: if true; // Allow logging even if auth is not ready
     }
 
-    // Global pronunciation rules
+    // globalRules
     match /globalRules/{ruleId} {
-      allow read: if true;
-      allow write: if isValidId(ruleId);
+      allow read: if true; // Global rules can be read to show UI properly
+      allow write: if isAdmin();
     }
 
-    // Voiceover history
-    match /history/{id} {
-      allow read: if true;
-      allow write: if isValidId(id);
+    // history
+    match /history/{historyId} {
+      // The app seems to use 'userId' field in history to store the vbsId/accessCode
+      allow read: if isAdmin() || (isSignedIn() && hasAnySession() && existing().userId == getAccessCode());
+      allow create: if isSignedIn() && hasAnySession() && incoming().userId == getAccessCode();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
     }
 
-    // Admin channels
+    // adminKeyStats
+    match /adminKeyStats/{keyId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // admin_channels
     match /admin_channels/{channelId} {
-      allow read: if true;
-      allow write: if isValidId(channelId);
+      allow read: if isAdmin();
+      allow write: if isAdmin();
     }
 
-    // System config
+    // system_config
     match /system_config/{doc} {
-      allow read: if true;
-      allow write: if isValidId(doc);
+      allow read: if isAdmin();
+      allow write: if isAdmin();
     }
 
-    // Authorized user accounts (Access Codes)
+    // vlogs_users - Access Code verification (lookup)
     match /vlogs_users/{accessCode} {
-      allow read: if true;
-      allow write: if isValidId(accessCode);
+      allow get: if true;
+      allow write: if isAdmin();
     }
-
-    // Connection test doc
+    
+    // test
     match /test/{doc} {
-      allow read: if true;
-      allow write: if isValidId(doc);
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
     }
   }
 }
-

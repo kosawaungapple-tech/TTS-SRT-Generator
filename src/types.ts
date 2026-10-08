@@ -89,6 +89,7 @@ export interface SystemConfig {
   firebase_app_id: string;
   telegram_bot_token: string;
   telegram_chat_id: string;
+  global_worker_url?: string;
   mock_mode?: boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   updatedAt?: any;

@@ -21,11 +21,11 @@ import { apiChannelManager, isPlausibleApiKey } from './services/apiChannelManag
 import { assemblyAiService } from './services/assemblyAiService';
 import { logActivity } from './services/activityService';
 import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, SystemConfig, VBSUserControl, Announcement, CustomFont } from './types';
-import { DEFAULT_RULES } from './constants';
+import { DEFAULT_RULES, GEMINI_MODELS } from './constants';
 import { useLanguage } from './contexts/LanguageContext';
 import { formatDate } from './utils/dateUtils';
 import { formatMyanmarDuration, renderProcessedAudio, pcmToWav } from './utils/audioUtils';
-import { generateOptimizedSubtitles, generateSRT, createSrtBlob } from './utils/subtitleUtils';
+import { generateOptimizedSubtitles, generateSRT, createSrtBlob, cleanAndFormatSrtForCapCut } from './utils/subtitleUtils';
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId } from './firebase';
 
 type Tab = 'generate' | 'translator' | 'transcriber' | 'video-editor' | 'thumbnail' | 'history' | 'tools' | 'admin' | 'vbs-admin';
@@ -44,7 +44,7 @@ export default function App() {
     pitch: 0,
     volume: 0,
     styleInstruction: '',
-    selectedModel: 'gemini-3.8-flash-lite-tts',
+    selectedModel: GEMINI_MODELS.TTS,
     customFileName: '',
     voiceProfile: localStorage.getItem('vbs_custom_voice_profile') || undefined,
     exportFormat: 'wav',
@@ -522,32 +522,22 @@ export default function App() {
     });
   };
 
-  // Handle Auth State
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
+        console.log('[VBS Auth] User signed in:', user.uid, user.isAnonymous ? '(Anonymous)' : '(Real)');
         setIsAuthReady(true);
-        
-        // Requirement: Set synced immediately if user is logged in
-        // We allow it for anonymous users too if they have a stored access code
-        const code = localStorage.getItem('vbs_access_code');
-        if (code === 'saw_vlogs_2026') {
-          console.log('[VBS] Master Admin detected, setting session synced immediately');
-          setIsSessionSynced(true);
-        } else if (code) {
-          console.log('[VBS] User with stored access code detected, setting session synced proactively');
-          setIsSessionSynced(true);
-        }
       } else {
-        // Attempt anonymous sign-in if enabled in Firebase; if restricted (auth/admin-restricted-operation),
-        // fallback gracefully without error so access-code / local credentials continue seamlessly.
+        console.log('[VBS Auth] No user detected, attempting anonymous sign-in...');
         signInAnonymously(auth).then((result) => {
           if (result?.user) {
+            console.log('[VBS Auth] Anonymous sign-in success:', result.user.uid);
             setIsAuthReady(true);
           }
         }).catch((err) => {
           // Anonymous authentication is restricted in this Firebase project (admin-restricted-operation)
-          console.log("[VBS Auth] Anonymous sign-in not available, operating in access-code mode:", err?.code || err?.message);
+          console.warn("[VBS Auth] Anonymous sign-in failed/disabled. Operating in Access-Code-Only mode.", err?.code || err?.message);
+          // We still set auth ready so the app can proceed with local access codes
           setIsAuthReady(true);
         });
       }
@@ -581,20 +571,26 @@ export default function App() {
     const isOwner = code === 'saw_vlogs_2026';
 
     if ((isAccessGranted || isOwner) && isAuthReady && code) {
-      setIsSessionSynced(true);
-
       const syncSession = async () => {
-        const authUserId = getCurrentUserId() || code;
-        if (!authUserId) return;
+        // Requirement: Only sync session if we have a real Firebase Auth user
+        // If anonymous auth is disabled, we skip this to avoid permission errors
+        if (!auth.currentUser) {
+          console.warn('[VBS] Skipping session sync — no authenticated user. Admin features requiring Firestore rules will be limited.');
+          setIsSessionSynced(false);
+          return;
+        }
 
+        const authUserId = auth.currentUser.uid;
         try {
           await setDoc(doc(db, 'sessions', authUserId), {
             accessCode: code,
             createdAt: serverTimestamp()
           });
-          console.log('[VBS] Session synced in background for:', code);
+          console.log('[VBS] Session synced for user:', authUserId, 'with code:', code);
+          setIsSessionSynced(true);
         } catch (e) {
-          console.warn('[VBS] Background session sync warning:', e);
+          console.warn('[VBS] Session sync failed:', e);
+          setIsSessionSynced(false);
         }
       };
       syncSession();
@@ -1255,12 +1251,12 @@ export default function App() {
             error.message.includes('RESOURCES_EXHAUSTED')
           ));
 
-        const isTtsModel = config.selectedModel === 'gemini-3.8-flash-tts' || 
-                           config.selectedModel === 'gemini-3.8-flash-lite-tts' ||
-                           config.selectedModel === 'gemini-3.1-flash-lite';
+        const isTtsModel = config.selectedModel === GEMINI_MODELS.TTS_STUDIO || 
+                           config.selectedModel === GEMINI_MODELS.TTS ||
+                           config.selectedModel === GEMINI_MODELS.VIDEO;
 
         if (isQuotaExceeded && isTtsModel) {
-          const quotaMsg = "ယခုဆာဗာ Quota ပြည့်သွားပါသဖြင့် 'Gemini 3.8 Flash Lite TTS' သို့မဟုတ် 'Gemini 3.1 Flash Lite' သို့ ပြောင်းလဲအသုံးပြုပေးပါ။";
+          const quotaMsg = `ယခုဆာဗာ Quota ပြည့်သွားပါသဖြင့် '${GEMINI_MODELS.TTS}' သို့မဟုတ် '${GEMINI_MODELS.VIDEO}' သို့ ပြောင်းလဲအသုံးပြုပေးပါ။`;
           setError(quotaMsg);
           setToast({ message: quotaMsg, type: 'error' });
           setTimeout(() => setToast(null), 8000);
@@ -1336,8 +1332,9 @@ export default function App() {
       content = await response.text();
     }
     
-    // Ensure Windows line endings (CRLF) and UTF-8 with BOM (\uFEFF) for 100% CapCut compatibility
-    const blob = createSrtBlob(content);
+    // Ensure Windows line endings (CRLF), UTF-8 with BOM (\uFEFF), and strict CapCut formatting
+    const formatted = cleanAndFormatSrtForCapCut(content);
+    const blob = createSrtBlob(formatted);
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;

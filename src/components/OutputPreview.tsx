@@ -19,7 +19,7 @@ import {
 import { AudioResult } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { formatTime, formatMyanmarDuration, pcmToWav, detectSilence, trimAudioBuffer, audioBufferToWav, convertWavToMp3 } from '../utils/audioUtils';
-import { generateSRT, generateASS, generateLRC, shiftSubtitles, createSrtBlob } from '../utils/subtitleUtils';
+import { generateSRT, generateASS, generateLRC, shiftSubtitles, createSrtBlob, cleanAndFormatSrtForCapCut } from '../utils/subtitleUtils';
 
 interface OutputPreviewProps {
   result: AudioResult | null;
@@ -724,8 +724,11 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
     
     // Strict formatting for compatibility
     // CRLF line endings (\r\n) and UTF-8 with BOM (\uFEFF) for 100% CapCut recognition
-    const sanitizedContent = content.replace(/\r?\n/g, '\r\n');
-    const blob = fileName.toLowerCase().endsWith('.srt')
+    const isSrt = fileName.toLowerCase().endsWith('.srt');
+    const sanitizedContent = isSrt
+      ? cleanAndFormatSrtForCapCut(content)
+      : content.replace(/\r?\n/g, '\r\n');
+    const blob = isSrt
       ? createSrtBlob(sanitizedContent)
       : new Blob(['\uFEFF' + sanitizedContent], { type: 'text/plain;charset=utf-8' });
     

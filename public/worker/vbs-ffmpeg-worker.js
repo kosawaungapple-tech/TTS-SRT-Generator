@@ -266,6 +266,7 @@ const server = http.createServer((req, res) => {
 
         if (vFilters.length > 0) {
           args.push('-vf', vFilters.join(','));
+          console.log(`[VBS Worker] Applied Filters: ${vFilters.join(',')}`);
         }
 
         if (tempAudioPath) {

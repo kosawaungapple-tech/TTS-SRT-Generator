@@ -389,7 +389,7 @@ export class GeminiTTSService {
 
     // Dynamically switch to multimodal model if audio input is present
     if (hasAudioInput && selectedModel.includes('tts')) {
-      selectedModel = 'gemini-2.5-flash';
+      selectedModel = 'gemini-1.5-flash';
     }
 
     const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [{ text: textWithInstruction }];
