@@ -33,7 +33,6 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { AudioResult, VBSUserControl, TTSConfig, ModalConfig, CustomFont } from '../types';
 import { formatMyanmarDuration } from '../utils/audioUtils';
 import { generateSRT, downloadSrtFile } from '../utils/subtitleUtils';
-import { GEMINI_MODELS } from '../constants';
 
 interface StoryAudiobookStudioProps {
   showToast: (message: string, type: 'success' | 'error') => void;
@@ -473,7 +472,7 @@ export const StoryAudiobookStudio: React.FC<StoryAudiobookStudioProps> = ({
         pitch: activeChapter.pitch,
         volume: 0,
         styleInstruction: mood?.instruction || '',
-        selectedModel: GEMINI_MODELS.TTS,
+        selectedModel: 'gemini-3.8-flash-lite-tts',
         customFileName: `${project.title}_Ch${activeChapter.number}`,
         exportFormat: 'wav'
       };

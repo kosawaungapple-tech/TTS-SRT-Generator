@@ -154,10 +154,10 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid || undefined,
+      userId: auth.currentUser?.uid || 'anonymous',
       email: auth.currentUser?.email || null,
       emailVerified: auth.currentUser?.emailVerified || false,
-      isAnonymous: auth.currentUser?.isAnonymous || false,
+      isAnonymous: auth.currentUser?.isAnonymous || true,
       tenantId: auth.currentUser?.tenantId || null,
       providerInfo: auth.currentUser?.providerData.map(provider => ({
         providerId: provider.providerId,

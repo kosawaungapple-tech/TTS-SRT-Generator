@@ -26,14 +26,14 @@ export const DEFAULT_RULES = [
 ];
 
 export const GEMINI_MODELS = {
-  VERIFY: 'gemini-1.5-flash',
-  REWRITE: 'gemini-1.5-flash',
-  TRANSLATE: 'gemini-1.5-flash',
-  IMAGE: 'gemini-1.5-flash',
-  TTS: 'gemini-1.5-flash',
-  TTS_STUDIO: 'gemini-1.5-flash',
-  VIDEO: 'gemini-1.5-flash',
-  TRANSCRIBE: 'gemini-1.5-flash'
+  VERIFY: 'gemini-3.1-flash-lite',
+  REWRITE: 'gemini-3.1-flash-lite',
+  TRANSLATE: 'gemini-3.1-flash-lite',
+  IMAGE: 'gemini-3.1-flash-image',
+  TTS: 'gemini-3.8-flash-lite-tts',
+  TTS_STUDIO: 'gemini-3.8-flash-tts',
+  VIDEO: 'gemini-3.1-flash-lite',
+  TRANSCRIBE: 'gemini-3.5-transcribe'
 };
 
 export const ELEVENLABS_VOICES = [

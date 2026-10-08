@@ -6,6 +6,7 @@ import {
   FileAudio,
   Sparkles, 
   Trash2, 
+  ShieldCheck, 
   Key,
   Download,
   Copy,
@@ -30,7 +31,7 @@ import { GeminiTTSService } from '../services/geminiService';
 import { assemblyAiService, AssemblyAITranscriptResponse } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
 import { logActivity } from '../services/activityService';
-import { parseTimestampToSeconds, shiftSrtContent, cleanAndFormatSrtForCapCut, downloadSrtFile, wrapTextIntoLines } from '../utils/subtitleUtils';
+import { parseTimestampToSeconds, shiftSrtContent } from '../utils/subtitleUtils';
 import { formatTime } from '../utils/audioUtils';
 import { VBSUserControl, ModalConfig } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -44,7 +45,7 @@ interface VideoTranscriberProps {
   userControl: VBSUserControl | null;
   onNavigateToSettings?: () => void;
   onProcessingStateChange?: (isProcessing: boolean) => void;
-  onSendToVideoEditor?: (media: { videoFile?: File; videoUrl?: string; fileName?: string; srtContent?: string; recapScript?: string }) => void;
+  onSendToVideoEditor?: (media: { videoFile?: File; videoUrl?: string; fileName?: string; srtContent?: string }) => void;
 }
 
 interface SrtCue {
@@ -87,15 +88,11 @@ function parseSrtToCues(srtText: string): SrtCue[] {
           fullText = speakerMatch[2];
         }
 
-        const wrappedText = fullText.length > 32 
-          ? wrapTextIntoLines(fullText, 30, 2).join('\n') 
-          : fullText;
-
         cues.push({
           index,
           start,
           end,
-          text: wrappedText,
+          text: fullText,
           speaker
         });
       }
@@ -140,9 +137,6 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
   const [isProcessingAssemblyAI, setIsProcessingAssemblyAI] = useState(false);
   const [assemblyProgress, setAssemblyProgress] = useState<{ step: string; percent: number }>({ step: '', percent: 0 });
   const [assemblyResult, setAssemblyResult] = useState<{ transcript: AssemblyAITranscriptResponse; srt: string } | null>(null);
-  
-  // New UI mode selection
-  const [outputMode, setOutputMode] = useState<'srt' | 'recap'>('srt');
   const [activeResultTab, setActiveResultTab] = useState<'cues' | 'raw' | 'text' | 'recap'>('cues');
   const [recapScript, setRecapScript] = useState<string | null>(null);
   const [isGeneratingRecap, setIsGeneratingRecap] = useState(false);
@@ -420,10 +414,16 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
         : 'subtitles';
       
       const effectiveContent = getEffectiveSrt(translatedBurmeseSrt);
-      const capcutSrt = cleanAndFormatSrtForCapCut(effectiveContent);
-      const fileName = `${baseName}_Burmese${timingOffset !== 0 ? `_offset_${timingOffset}s` : ''}.srt`;
-      downloadSrtFile(capcutSrt, fileName);
-      showToast(isMm ? 'CapCut တွဲသုံးနိုင်သော မြန်မာ .SRT ဖိုင်ကို ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ 🇲🇲📝' : 'CapCut-compatible Burmese .SRT downloaded!', 'success');
+      const blob = new Blob([effectiveContent], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${baseName}_Burmese${timingOffset !== 0 ? `_offset_${timingOffset}s` : ''}.srt`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast(isMm ? 'မြန်မာ .SRT ဖိုင်ကို ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ 🇲🇲📝' : 'Burmese .SRT file downloaded!', 'success');
     } catch {
       showToast(isMm ? 'ဒေါင်းလုဒ် မအောင်မြင်ပါ' : 'Download failed', 'error');
     }
@@ -438,10 +438,16 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
         : 'subtitles';
       
       const effectiveContent = getEffectiveSrt(assemblyResult.srt);
-      const capcutSrt = cleanAndFormatSrtForCapCut(effectiveContent);
-      const fileName = `${baseName}_Original${timingOffset !== 0 ? `_offset_${timingOffset}s` : ''}.srt`;
-      downloadSrtFile(capcutSrt, fileName);
-      showToast(isMm ? 'CapCut တွဲသုံးနိုင်သော မူရင်း .SRT ဖိုင်ကို ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ 📝' : 'CapCut-compatible Original .SRT downloaded!', 'success');
+      const blob = new Blob([effectiveContent], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${baseName}_Original${timingOffset !== 0 ? `_offset_${timingOffset}s` : ''}.srt`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast(isMm ? 'မူရင်း .SRT ဖိုင်ကို ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ 📝' : 'Original .SRT downloaded!', 'success');
     } catch {
       showToast(isMm ? 'ဒေါင်းလုဒ် မအောင်မြင်ပါ' : 'Download failed', 'error');
     }
@@ -908,183 +914,117 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
             </div>
 
             {/* Results Display Area: Combined for both languages */}
-            <div className="bg-[#0e121a] rounded-[28px] p-5 sm:p-8 border border-white/10 shadow-2xl space-y-6">
-              
-              {/* HIGH-LEVEL MODE SELECTOR (User Requirement: Simplify Tabs) */}
-              <div className="grid grid-cols-2 gap-3 p-1.5 bg-black/60 border border-white/10 rounded-2xl">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOutputMode('srt');
-                    setActiveResultTab('cues');
-                  }}
-                  className={`flex flex-col items-center justify-center gap-2 py-4 px-3 rounded-xl transition-all border ${
-                    outputMode === 'srt'
-                      ? 'bg-amber-400 text-black border-amber-300 shadow-lg shadow-amber-400/20'
-                      : 'bg-white/5 text-slate-400 border-transparent hover:bg-white/10'
-                  }`}
-                >
-                  <FileText size={24} className={outputMode === 'srt' ? 'fill-black/20' : ''} />
-                  <div className="text-center">
-                    <span className="text-xs sm:text-sm font-black uppercase tracking-tight block">
-                      {isMm ? 'SRT စာတန်းထိုး Video' : 'SRT Subtitle Video'}
-                    </span>
-                    <span className={`text-[10px] font-bold opacity-80 ${outputMode === 'srt' ? 'text-black' : 'text-slate-500'}`}>
-                      {isMm ? '(မူရင်းအတိုင်း တစ်ကြောင်းချင်း)' : '(Full line-by-line sync)'}
-                    </span>
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOutputMode('recap');
-                    setActiveResultTab('recap');
-                    if (!recapScript && assemblyResult.transcript.text) {
-                      handleGenerateRecapScript(assemblyResult.transcript.text);
-                    }
-                  }}
-                  className={`flex flex-col items-center justify-center gap-2 py-4 px-3 rounded-xl transition-all border ${
-                    outputMode === 'recap'
-                      ? 'bg-purple-500 text-white border-purple-400 shadow-lg shadow-purple-500/20'
-                      : 'bg-white/5 text-slate-400 border-transparent hover:bg-white/10'
-                  }`}
-                >
-                  <Sparkles size={24} className={outputMode === 'recap' ? 'fill-white/20' : ''} />
-                  <div className="text-center">
-                    <span className="text-xs sm:text-sm font-black uppercase tracking-tight block">
-                      {isMm ? 'Movie Recap Video' : 'Movie Recap Video'}
-                    </span>
-                    <span className={`text-[10px] font-bold opacity-80 ${outputMode === 'recap' ? 'text-white' : 'text-slate-500'}`}>
-                      {isMm ? '(AI ဖြင့် ဇာတ်လမ်းပြန်ပြောခြင်း)' : '(AI Script & Narration)'}
-                    </span>
-                  </div>
-                </button>
-              </div>
-
-              {/* Header Bar: File stats & Dynamic Action buttons */}
+            <div className="bg-[#0e121a] rounded-[28px] p-6 sm:p-8 border border-white/10 shadow-2xl space-y-5">
+              {/* Header Bar: File stats, Language switchers, & Action buttons */}
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-white/10 pb-5">
                 <div className="space-y-1.5">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-white text-[10px] font-bold truncate max-w-xs">
+                    <span className="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-white text-xs font-bold truncate max-w-xs">
                       {assemblyMediaFile?.name || 'Media Subtitle'}
                     </span>
                     {translatedBurmeseSrt && (
-                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold flex items-center gap-1.5">
+                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-bold flex items-center gap-1.5">
                         <span>🇲🇲</span>
                         <span>Burmese Subtitles Ready</span>
                       </span>
                     )}
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-3 text-[10px] text-slate-400">
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
                     {assemblyResult.transcript.audio_duration && (
                       <span className="flex items-center gap-1 font-mono">
-                        <Clock size={11} className="text-amber-400" />
+                        <Clock size={13} className="text-amber-400" />
                         <span>{Math.round(assemblyResult.transcript.audio_duration)}s</span>
                       </span>
                     )}
                     <span className="flex items-center gap-1 font-mono">
-                      <FileText size={11} className="text-amber-400" />
+                      <FileText size={13} className="text-amber-400" />
                       <span>{originalCues.length} Cues</span>
                     </span>
+                    {assemblyResult.transcript.confidence && (
+                      <span className="flex items-center gap-1 font-mono">
+                        <ShieldCheck size={13} className="text-emerald-400" />
+                        <span>{(assemblyResult.transcript.confidence * 100).toFixed(1)}% Accuracy</span>
+                      </span>
+                    )}
                   </div>
                 </div>
 
-                {/* Primary Action Buttons Bar - Context Aware */}
+                {/* Primary Action Buttons Bar */}
                 <div className="flex flex-wrap items-center gap-2">
-                  {outputMode === 'srt' ? (
-                    <>
-                      {/* SRT Specific Actions */}
-                      {translatedBurmeseSrt ? (
-                        <button
-                          type="button"
-                          onClick={handleDownloadBurmeseSrtFile}
-                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs shadow-md shadow-emerald-500/20 transition-all active:scale-95"
-                        >
-                          <Download size={13} />
-                          <span>{isMm ? 'မြန်မာ .SRT' : 'Burmese .SRT'}</span>
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={handleTranslateToBurmese}
-                          disabled={isTranslatingSrt}
-                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 font-bold text-xs border border-emerald-500/30 transition-all active:scale-95"
-                        >
-                          {isTranslatingSrt ? <RefreshCw size={13} className="animate-spin" /> : <Languages size={13} />}
-                          <span>{isMm ? 'မြန်မာပြန်မည်' : 'Translate'}</span>
-                        </button>
-                      )}
-                      
-                      <button
-                        type="button"
-                        onClick={handleDownloadOriginalSrtFile}
-                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 font-bold text-xs border border-amber-400/40 transition-all"
-                      >
-                        <Download size={13} />
-                        <span>{isMm ? 'မူရင်း .SRT' : 'Original .SRT'}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (onSendToVideoEditor) {
-                            onSendToVideoEditor({
-                              videoFile: assemblyMediaFile || undefined,
-                              videoUrl: mediaFileUrl || undefined,
-                              fileName: assemblyMediaFile?.name || 'transcribed_video.mp4',
-                              srtContent: translatedBurmeseSrt || assemblyResult?.srt || undefined
-                            });
-                          }
-                        }}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 text-black font-black text-xs shadow-lg shadow-amber-400/20 active:scale-95 transition-all"
-                      >
-                        <Film size={15} />
-                        <span>{isMm ? 'Video Editor သို့ ပို့မည် 🎬' : 'Send to Video Editor 🎬'}</span>
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      {/* Recap Specific Actions */}
-                      <button
-                        type="button"
-                        onClick={() => handleGenerateRecapScript(assemblyResult.transcript.text || '')}
-                        disabled={isGeneratingRecap}
-                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 font-bold text-xs border border-purple-500/30 transition-all"
-                      >
-                        {isGeneratingRecap ? <RefreshCw size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                        <span>{isMm ? 'Recap ပြန်ထုတ်မည်' : 'Regenerate Recap'}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={handleSendToVoiceStudio}
-                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white font-bold text-xs border border-white/10 transition-all"
-                      >
-                        <Mic2 size={13} />
-                        <span>Voice Studio</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (onSendToVideoEditor) {
-                            onSendToVideoEditor({
-                              videoFile: assemblyMediaFile || undefined,
-                              videoUrl: mediaFileUrl || undefined,
-                              fileName: assemblyMediaFile?.name || 'recap_video.mp4',
-                              recapScript: recapScript || undefined
-                            });
-                          }
-                        }}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-purple-500 to-pink-500 text-white font-black text-xs shadow-lg shadow-purple-500/20 active:scale-95 transition-all"
-                      >
-                        <Film size={15} />
-                        <span>{isMm ? 'Recap Video လုပ်မည် 🎬' : 'Create Recap Video 🎬'}</span>
-                      </button>
-                    </>
+                  {/* Download Burmese .SRT (if available) */}
+                  {translatedBurmeseSrt && (
+                    <button
+                      type="button"
+                      onClick={handleDownloadBurmeseSrtFile}
+                      className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs shadow-md shadow-emerald-500/20 transition-all active:scale-95"
+                    >
+                      <Download size={14} />
+                      <span>{isMm ? '📥 မြန်မာ .SRT' : 'Burmese .SRT'}</span>
+                    </button>
                   )}
+
+                  {/* Download Original .SRT (သူ့မူရင်းအတိုင်း) */}
+                  <button
+                    type="button"
+                    onClick={handleDownloadOriginalSrtFile}
+                    className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-black font-bold text-xs shadow-md shadow-amber-400/20 transition-all active:scale-95"
+                  >
+                    <Download size={14} />
+                    <span>{isMm ? '🌐 မူရင်း .SRT' : 'Original .SRT'}</span>
+                  </button>
+
+                  {/* Copy Active SRT */}
+                  <button
+                    type="button"
+                    onClick={handleCopyActiveSrt}
+                    className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white font-bold text-xs border border-white/10 transition-all"
+                  >
+                    {isCopied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                    <span>{isCopied ? (isMm ? 'ကူးပြီးပါပြီ' : 'Copied') : (isMm ? 'SRT ကူးမည်' : 'Copy SRT')}</span>
+                  </button>
+
+                  {/* Send to Voiceover Studio */}
+                  <button
+                    type="button"
+                    onClick={handleSendToVoiceStudio}
+                    className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 font-bold text-xs border border-purple-500/30 transition-all"
+                    title="Send script to Voice Studio"
+                  >
+                    <Mic2 size={14} />
+                    <span>Voice Studio</span>
+                  </button>
+
+                  {/* Open in Video Editor Studio */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onSendToVideoEditor) {
+                        onSendToVideoEditor({
+                          videoFile: assemblyMediaFile || undefined,
+                          videoUrl: mediaFileUrl || undefined,
+                          fileName: assemblyMediaFile?.name || 'transcribed_video.mp4',
+                          srtContent: translatedBurmeseSrt || assemblyResult?.srt || undefined
+                        });
+                      }
+                    }}
+                    className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 font-bold text-xs border border-amber-400/40 shadow-sm transition-all active:scale-95"
+                    title="Open video and subtitles in Video Editor Studio"
+                  >
+                    <Film size={14} />
+                    <span>{isMm ? 'Video Editor 🎬' : 'Video Editor 🎬'}</span>
+                  </button>
+
+                  {/* Download Text Transcript / Recap */}
+                  <button
+                    type="button"
+                    onClick={handleDownloadTxtFile}
+                    className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-white font-bold text-xs shadow-md shadow-purple-500/20 transition-all active:scale-95"
+                    title="Download text script (.txt)"
+                  >
+                    <FileText size={15} />
+                    <span>{activeResultTab === 'recap' ? (isMm ? 'Recap ဇာတ်ညွှန်း' : 'Recap Script') : (isMm ? 'စာသားဖိုင်' : 'Text File')}</span>
+                  </button>
                 </div>
               </div>
 
@@ -1280,90 +1220,93 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
               {/* Subtitle Language Switcher & View Tabs */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  {/* Mode-specific Sub-tabs */}
+                  {/* Burmese vs Original Language Toggle */}
                   <div className="flex items-center p-1 bg-black/60 rounded-xl border border-white/10">
-                    {outputMode === 'srt' ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => setActiveResultTab('cues')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                            activeResultTab === 'cues' ? 'bg-white/15 text-white' : 'text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          {isMm ? 'အပိုင်းလိုက်' : 'Cues'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setActiveResultTab('text')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                            activeResultTab === 'text' ? 'bg-white/15 text-white' : 'text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          {isMm ? 'စာသားပြား' : 'Plain Text'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setActiveResultTab('raw')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                            activeResultTab === 'raw' ? 'bg-white/15 text-white' : 'text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          SRT Code
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => setActiveResultTab('recap')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                            activeResultTab === 'recap' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          <Sparkles size={13} />
-                          <span>Recap Script</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setActiveResultTab('text')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                            activeResultTab === 'text' ? 'bg-white/15 text-white' : 'text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          {isMm ? 'မူရင်းစာသား' : 'Transcript'}
-                        </button>
-                      </>
-                    )}
-                  </div>
-
-                  {/* Language Toggle for SRT Mode */}
-                  {outputMode === 'srt' && (
-                    <div className="flex items-center p-1 bg-black/60 rounded-xl border border-white/10">
-                      {translatedBurmeseSrt && (
-                        <button
-                          type="button"
-                          onClick={() => setActiveSubtitleLang('burmese')}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                            activeSubtitleLang === 'burmese' ? 'bg-emerald-500 text-black shadow-md' : 'text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          <span>🇲🇲</span>
-                          <span>Burmese</span>
-                        </button>
-                      )}
+                    {translatedBurmeseSrt && (
                       <button
                         type="button"
-                        onClick={() => setActiveSubtitleLang('original')}
+                        onClick={() => setActiveSubtitleLang('burmese')}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                          activeSubtitleLang === 'original' ? 'bg-amber-400 text-black shadow-md' : 'text-slate-400 hover:text-white'
+                          activeSubtitleLang === 'burmese'
+                            ? 'bg-emerald-500 text-black shadow-md'
+                            : 'text-slate-400 hover:text-white'
                         }`}
                       >
-                        <span>🌐</span>
-                        <span>Original</span>
+                        <span>🇲🇲</span>
+                        <span>{isMm ? 'မြန်မာ စာတန်းထိုး' : 'Burmese Subtitles'}</span>
                       </button>
-                    </div>
-                  )}
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveSubtitleLang('original')}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        activeSubtitleLang === 'original'
+                          ? 'bg-amber-400 text-black shadow-md'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <span>🌐</span>
+                      <span>{isMm ? 'သူ့မူရင်းအတိုင်း (Original)' : 'Original (မူရင်းအတိုင်း)'}</span>
+                    </button>
+                  </div>
+
+                  {/* Result View Tabs */}
+                  <div className="flex items-center p-1 bg-black/60 rounded-xl border border-white/10">
+                    <button
+                      type="button"
+                      onClick={() => setActiveResultTab('cues')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        activeResultTab === 'cues'
+                          ? 'bg-white/15 text-white'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {isMm ? 'အပိုင်းလိုက်' : 'Cues'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveResultTab('text')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        activeResultTab === 'text'
+                          ? 'bg-white/15 text-white'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {isMm ? 'စာသားပြား' : 'Plain Text'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveResultTab('raw')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        activeResultTab === 'raw'
+                          ? 'bg-white/15 text-white'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      SRT Code
+                    </button>
+                    {recapScript && (
+                      <button
+                        type="button"
+                        onClick={() => setActiveResultTab('recap')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                          activeResultTab === 'recap'
+                            ? 'bg-purple-500 text-white shadow-lg shadow-purple-500/20'
+                            : 'text-purple-400 hover:text-purple-300'
+                        }`}
+                      >
+                        <Sparkles size={13} className={activeResultTab === 'recap' ? "fill-white" : ""} />
+                        <span>Recap Script</span>
+                      </button>
+                    )}
+                    {isGeneratingRecap && (
+                      <div className="px-3 py-1.5 text-xs text-purple-400 flex items-center gap-1.5 animate-pulse">
+                        <RefreshCw size={13} className="animate-spin" />
+                        <span>Generating...</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Search Input for Cues */}

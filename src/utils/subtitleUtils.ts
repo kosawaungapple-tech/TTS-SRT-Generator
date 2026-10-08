@@ -38,41 +38,24 @@ export function normalizeSrtTimestamp(time: string | number): string {
 }
 
 /**
- * Common Myanmar grammatical particles that serve as ideal natural phrase boundaries
- */
-export const MYANMAR_PARTICLES = [
-  'အတွက်', 'ကြောင့်', 'သောအခါ', 'သည့်အခါ', 'ပြီးနောက်', 
-  'သည်', 'မှာ', '၏', 'ကို', 'သို့', 'မှ', 'ဖြင့်', 'တွင်', 'က', 
-  'နှင့်', '၍', 'ပြီး', 'သော', 'စဉ်', 'လည်း', 'မည့်', 'မည်', 
-  'ဖြစ်ပြီး', 'ဖြစ်သည်', 'ရုံ'
-];
-
-const PARTICLE_REGEX = new RegExp(`(${MYANMAR_PARTICLES.join('|')}|\\s+|[၊။!?])`, 'g');
-
-/**
- * Splits Myanmar and general text into natural syllables and words safely.
+ * Splits Myanmar and general text into syllables/words safely.
  * Never breaks a Myanmar syllable in the middle of stacked consonants or combining diacritics.
  */
 export function splitMyanmarWordsOrSyllables(text: string): string[] {
   if (!text) return [];
 
-  // Split on natural particles, spaces, or punctuation while keeping delimiters
-  const rawTokens = text.split(PARTICLE_REGEX).filter(Boolean);
+  // Split initially on spaces or major punctuation while keeping them
+  const rawTokens = text.split(/(\s+|[၊။!?])/g).filter(Boolean);
   const result: string[] = [];
 
   for (const token of rawTokens) {
-    if (/^\s+$/.test(token) || /^[၊။!?]$/.test(token)) {
+    // If token has reasonable length or is whitespace/punct, keep as is
+    if (token.length <= 26 || /^\s+$/.test(token) || /^[၊။!?]$/.test(token)) {
       result.push(token);
       continue;
     }
 
-    // If token is reasonably short (<= 8 chars), keep intact
-    if (token.length <= 8) {
-      result.push(token);
-      continue;
-    }
-
-    // Break long unbroken Myanmar token at syllable boundaries
+    // Break long unbroken Myanmar text at safe syllable boundaries
     let cur = '';
     for (let i = 0; i < token.length; i++) {
       const char = token[i];
@@ -84,8 +67,8 @@ export function splitMyanmarWordsOrSyllables(text: string): string[] {
       const isBaseChar = (code >= 0x1000 && code <= 0x102A) || (code >= 0x1040 && code <= 0x1049);
       const prevIsVirama = prevCode === 0x1039; // Stacked consonant killer
 
-      // Break if we hit a base character (not stacked) and current segment has at least 5-6 chars
-      if (isBaseChar && !prevIsVirama && cur.length >= 6) {
+      // Safe syllable boundary if current char is base and previous char wasn't a stacked virama
+      if (isBaseChar && !prevIsVirama && cur.length >= 14) {
         result.push(cur);
         cur = char;
       } else {
@@ -99,13 +82,15 @@ export function splitMyanmarWordsOrSyllables(text: string): string[] {
 }
 
 /**
- * Wraps a single block of text into balanced lines without exceeding maxLineChars.
+ * Wraps a single block of text into 1 or 2 balanced lines without exceeding maxLineChars.
  * Prevents "တစ်ကြောင်းထဲနဲ့ အများကြီးဖြစ်နေခြင်း" (single line with too much text).
- * Guarantees every single line is strictly <= maxLineChars.
  */
-export function wrapTextIntoLines(text: string, maxLineChars = 30, maxLines = 2): string[] {
+export function wrapTextIntoLines(text: string, maxLineChars = 32, maxLines = 2): string[] {
   const clean = text.trim();
   if (!clean) return [];
+  if (clean.length <= maxLineChars && !clean.includes('\n')) {
+    return [clean];
+  }
 
   // If already contains newlines, respect them but ensure each line is capped
   if (clean.includes('\n')) {
@@ -118,14 +103,10 @@ export function wrapTextIntoLines(text: string, maxLineChars = 30, maxLines = 2)
         wrapped.push(...wrapTextIntoLines(rLine, maxLineChars, maxLines));
       }
     }
-    return wrapped;
+    return wrapped.slice(0, maxLines);
   }
 
-  if (clean.length <= maxLineChars) {
-    return [clean];
-  }
-
-  // Tokenize at safe syllable/word boundaries
+  // Tokenize
   const tokens = splitMyanmarWordsOrSyllables(clean);
   const lines: string[] = [];
   let currentLine = '';
@@ -148,18 +129,13 @@ export function wrapTextIntoLines(text: string, maxLineChars = 30, maxLines = 2)
     lines.push(currentLine.trim());
   }
 
-  // If we only have 2 lines and both are <= maxLineChars, return them
-  if (lines.length <= maxLines) {
-    return lines;
-  }
-
-  // If more lines were produced, ensure we don't truncate text, but if maxLines is strictly 2
-  // and total text is short enough to balance into 2 lines <= maxLineChars:
-  if (clean.length <= maxLineChars * 2) {
+  // If we have more than maxLines, merge or balance
+  if (lines.length > maxLines) {
+    // If it's 2 lines requested and we have 2-3, balance them into 2 lines
     const half = Math.ceil(clean.length / 2);
     let splitIdx = half;
 
-    // Search nearest space, comma, or syllable boundary near half
+    // Search nearest space or syllable boundary near half
     for (let delta = 0; delta < Math.floor(clean.length / 3); delta++) {
       const right = half + delta;
       const left = half - delta;
@@ -175,19 +151,19 @@ export function wrapTextIntoLines(text: string, maxLineChars = 30, maxLines = 2)
 
     const line1 = clean.substring(0, splitIdx).trim();
     const line2 = clean.substring(splitIdx).trim();
-    if (line1 && line2 && line1.length <= maxLineChars + 4 && line2.length <= maxLineChars + 4) {
+    if (line1 && line2) {
       return [line1, line2];
     }
   }
 
-  return lines;
+  return lines.slice(0, maxLines);
 }
 
 /**
  * Splits a long sentence into 1 or more subtitle cue blocks.
- * Each cue block has at most 2 lines, and no line exceeds maxLineChars (default 30).
+ * Each cue block has at most 2 lines, and no line exceeds maxLineChars (default 32).
  */
-export function splitSentenceIntoCueBlocks(sentence: string, maxCharsPerCue = 52, maxLineChars = 30): string[][] {
+export function splitSentenceIntoCueBlocks(sentence: string, maxCharsPerCue = 56, maxLineChars = 32): string[][] {
   const clean = sentence.trim();
   if (!clean) return [];
 
@@ -220,65 +196,6 @@ export function splitSentenceIntoCueBlocks(sentence: string, maxCharsPerCue = 52
   }
 
   return blocks;
-}
-
-/**
- * Sanitizes and cleans any raw SRT subtitle text into strict CapCut-compatible format:
- * - HH:MM:SS,mmm comma milliseconds
- * - Sequential indices 1..N
- * - Long unbroken lines (>34 chars) wrapped into balanced 2-line cues
- * - CRLF line endings with exactly one blank line between cues
- * - Strips empty cues
- */
-export function cleanAndFormatSrtForCapCut(rawSrt: string): string {
-  if (!rawSrt || !rawSrt.trim()) return '';
-  const normalized = rawSrt.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const rawBlocks = normalized.split(/\n\s*\n/).filter(b => b.trim().length > 0);
-
-  const validSubs: SRTSubtitle[] = [];
-
-  rawBlocks.forEach((block) => {
-    const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
-    if (lines.length < 2) return;
-
-    let timeLine = lines[1];
-    let textLines = lines.slice(2);
-    if (!timeLine.includes('-->') && lines[0].includes('-->')) {
-      timeLine = lines[0];
-      textLines = lines.slice(1);
-    }
-
-    const parts = timeLine.split('-->');
-    if (parts.length === 2) {
-      const startSec = parseTimestampToSeconds(parts[0]);
-      let endSec = parseTimestampToSeconds(parts[1]);
-      if (isNaN(startSec) || startSec < 0) return;
-      if (isNaN(endSec) || endSec <= startSec) {
-        endSec = startSec + 1.5;
-      }
-
-      const wrappedLines: string[] = [];
-      textLines.forEach(l => {
-        if (l.length > 32) {
-          wrappedLines.push(...wrapTextIntoLines(l, 30, 2));
-        } else {
-          wrappedLines.push(l);
-        }
-      });
-
-      const text = wrappedLines.join('\n').trim();
-      if (!text) return;
-
-      validSubs.push({
-        index: validSubs.length + 1,
-        startTime: normalizeSrtTimestamp(startSec),
-        endTime: normalizeSrtTimestamp(endSec),
-        text
-      });
-    }
-  });
-
-  return generateSRT(validSubs);
 }
 
 /**

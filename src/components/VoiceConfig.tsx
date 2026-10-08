@@ -1,7 +1,7 @@
 import React, { useMemo, useEffect, useState } from 'react';
 import { ChevronDown, Volume2, Wand2, Server, FileText, Plus, Minus, UserCheck, Music } from 'lucide-react';
 import { TTSConfig } from '../types';
-import { VOICE_OPTIONS, GEMINI_MODELS } from '../constants';
+import { VOICE_OPTIONS } from '../constants';
 import { useLanguage } from '../contexts/LanguageContext';
 import { CustomVoiceProfile } from './CustomVoiceProfile';
 
@@ -97,18 +97,18 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
           </label>
           <div className="relative">
             <select
-              value={config.selectedModel || GEMINI_MODELS.TTS}
+              value={config.selectedModel || 'gemini-3.8-flash-lite-tts'}
               onChange={(e) => handleChange('selectedModel', e.target.value)}
               className="w-full bg-black/40 border border-white/5 rounded-xl px-4 sm:px-5 py-3.5 sm:py-4 text-sm sm:text-base text-white appearance-none focus:outline-none focus:ring-1 focus:ring-amber-400/30 focus:border-amber-400/50 transition-all cursor-pointer font-medium"
             >
-              <option value={GEMINI_MODELS.TTS} className="bg-black text-white">
-                Gemini 1.5 Flash (Standard / Reliable / မြန်ဆန်)
+              <option value="gemini-3.8-flash-lite-tts" className="bg-black text-white">
+                Gemini 3.8 Flash Lite TTS (Recommended / Fresh Quota / မြန်ဆန်)
               </option>
-              <option value={GEMINI_MODELS.TTS_STUDIO} className="bg-black text-white">
-                Gemini 1.5 Flash Studio (Cinematic Persona / အရည်အသွေးမြင့်)
+              <option value="gemini-3.8-flash-tts" className="bg-black text-white">
+                Gemini 3.8 Flash TTS (Cinematic Studio Persona / အရည်အသွေးမြင့်)
               </option>
-              <option value={GEMINI_MODELS.VIDEO} className="bg-black text-white">
-                Gemini 1.5 Flash Pro (High Token Capacity / အကန့်အသတ်မရှိသလောက်သုံးရန်)
+              <option value="gemini-3.1-flash-lite" className="bg-black text-white">
+                Gemini 3.1 Flash Lite (High Quota Two-Step / အကန့်အသတ်မရှိသလောက်သုံးရန်)
               </option>
             </select>
             <div className="absolute right-8 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500 group-hover/item:text-amber-500 transition-colors">

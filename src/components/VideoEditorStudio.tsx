@@ -19,6 +19,7 @@ import {
   Music,
   Scissors,
   Eye,
+  EyeOff,
   FlipHorizontal,
   FlipVertical,
   FileText,
@@ -63,7 +64,6 @@ export interface VideoEditorSharedMedia {
   fileName?: string | null;
   srtContent?: string | null;
   subtitles?: SRTSubtitle[] | null;
-  recapScript?: string | null;
 }
 
 interface VideoEditorStudioProps {
@@ -176,7 +176,6 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
 
   // Video Element & Canvas References
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const voiceoverAudioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
 
@@ -406,10 +405,6 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
         const parsed = parseSrtText(sharedMedia.srtContent);
         setCues(parsed);
       }
-      if (sharedMedia.recapScript) {
-        setRecapScript(sharedMedia.recapScript);
-        setActiveInspectorTab('recap');
-      }
       return () => {
         if (createdUrl) {
           URL.revokeObjectURL(createdUrl);
@@ -477,20 +472,10 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
   const togglePlayPause = () => {
     const video = videoRef.current;
     if (!video) return;
-    const vo = voiceoverAudioRef.current;
     if (video.paused) {
-      if (vo && voiceoverAudioUrl) {
-        vo.currentTime = video.currentTime;
-        vo.volume = Math.min(1, Math.max(0, voiceoverVolume / 100));
-        vo.playbackRate = microSpeedModulation;
-        vo.play().catch((err) => console.warn('[VideoEditor] Voiceover play err:', err));
-      }
       video.play().then(() => setIsPlaying(true)).catch((err) => console.error(err));
     } else {
       video.pause();
-      if (vo) {
-        vo.pause();
-      }
       setIsPlaying(false);
     }
   };
@@ -501,10 +486,6 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
     if (!video) return;
     video.currentTime = newTime;
     setCurrentTime(newTime);
-    const vo = voiceoverAudioRef.current;
-    if (vo && voiceoverAudioUrl) {
-      vo.currentTime = newTime;
-    }
   };
 
   // Target Canvas Dimensions calculation based on selected Aspect Ratio (မူရင်း Video အရည်အသွေးတိုင်း ထိန်းသိမ်းခြင်း)
@@ -800,21 +781,7 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
         targetCtx.save();
         targetCtx.fillStyle = subBgBoxColor;
         targetCtx.beginPath();
-        if (typeof targetCtx.roundRect === 'function') {
-          targetCtx.roundRect(boxX, boxY, boxW, boxH, radius);
-        } else {
-          // Fallback for older browsers (Capacitor/Old WebView)
-          targetCtx.moveTo(boxX + radius, boxY);
-          targetCtx.lineTo(boxX + boxW - radius, boxY);
-          targetCtx.quadraticCurveTo(boxX + boxW, boxY, boxX + boxW, boxY + radius);
-          targetCtx.lineTo(boxX + boxW, boxY + boxH - radius);
-          targetCtx.quadraticCurveTo(boxX + boxW, boxY + boxH, boxX + boxW - radius, boxY + boxH);
-          targetCtx.lineTo(boxX + radius, boxY + boxH);
-          targetCtx.quadraticCurveTo(boxX, boxY + boxH, boxX, boxY + boxH - radius);
-          targetCtx.lineTo(boxX, boxY + radius);
-          targetCtx.quadraticCurveTo(boxX, boxY, boxX + radius, boxY);
-          targetCtx.closePath();
-        }
+        targetCtx.roundRect(boxX, boxY, boxW, boxH, radius);
         targetCtx.fill();
         targetCtx.restore();
       }
@@ -906,28 +873,13 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
     };
   }, [drawFrameToCanvas, targetCanvasSize, isExporting]);
 
-  // Audio Playback Rate & Volume update with Recap Narration sync
+  // Audio Playback Rate & Volume update
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
     video.playbackRate = microSpeedModulation;
-
-    // When Voiceover (Recap) is active, or if user muted, mute the original video audio
-    const hasActiveVoiceover = Boolean(voiceoverAudioUrl && voiceoverAudioUrl.trim() !== '');
-    const isOriginalMuted = isMuted || (hasActiveVoiceover && originalAudioVolume === 0);
-
-    video.muted = isOriginalMuted;
-    video.volume = isOriginalMuted ? 0 : Math.min(1, Math.max(0, originalAudioVolume / 100));
-  }, [microSpeedModulation, originalAudioVolume, isMuted, voiceoverAudioUrl]);
-
-  // Keep Voiceover volume and speed in sync
-  useEffect(() => {
-    const vo = voiceoverAudioRef.current;
-    if (vo) {
-      vo.volume = Math.min(1, Math.max(0, voiceoverVolume / 100));
-      vo.playbackRate = microSpeedModulation;
-    }
-  }, [voiceoverVolume, microSpeedModulation]);
+    video.volume = Math.min(1, originalAudioVolume / 100);
+  }, [microSpeedModulation, originalAudioVolume]);
 
   // One-Click Color Filter Presets
   const applyColorPreset = (presetName: string) => {
@@ -1277,13 +1229,13 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
       if (result && result.audioUrl) {
         setVoiceoverAudioUrl(result.audioUrl);
         setVoiceoverVolume(100);
-        // Auto recap: mute original video audio so only the recap voiceover is heard in preview
-        setOriginalAudioVolume(0);
-        setIsMuted(false);
+        if (recapAutoDucking) {
+          setOriginalAudioVolume(15);
+        }
         showToast(
           isMm
-            ? '🎙️ Recap Voiceover AI အသံသွင်းပြီးပါပြီ! Video Preview တွင် မူရင်းအသံကို ဖျောက်၍ Recap အသံဖြင့် ပြသပါမည်'
-            : '🎙️ Recap Voiceover narration linked to timeline! Original audio muted.',
+            ? '🎙️ Recap Voiceover AI အသံသွင်းဖိုင် အောင်မြင်စွာ ဖန်တီးပြီး Timeline သို့ ချိတ်ဆက်ပြီးပါပြီ!'
+            : '🎙️ Recap Voiceover narration generated & linked to timeline!',
           'success'
         );
       } else {
@@ -1469,57 +1421,25 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
       return;
     }
     let modifiedCount = 0;
-    const balancedCues: SubtitleCue[] = [];
-
-    cues.forEach(cue => {
+    const updated = cues.map(cue => {
       const rawText = cue.text.trim();
-      const dur = cue.endSeconds - cue.startSeconds;
-
-      // If cue text is very long (>56 chars) and duration is sufficient (>=3.0s), split into 2 timed cues
-      if (rawText.length > 56 && dur >= 3.0) {
-        const blocks = splitSentenceIntoCueBlocks(rawText, 45, 28);
-        if (blocks.length >= 2) {
-          modifiedCount++;
-          const partDur = dur / blocks.length;
-          blocks.forEach((blockLines, bIdx) => {
-            const startSec = cue.startSeconds + (bIdx * partDur);
-            const endSec = cue.startSeconds + ((bIdx + 1) * partDur);
-            balancedCues.push({
-              id: `${cue.id}-p${bIdx}-${Date.now()}`,
-              index: balancedCues.length + 1,
-              startSeconds: startSec,
-              endSeconds: endSec,
-              startStr: normalizeSrtTimestamp(startSec),
-              endStr: normalizeSrtTimestamp(endSec),
-              text: blockLines.join('\n')
-            });
-          });
-          return;
-        }
-      }
-
-      const needsWrapping = !rawText.includes('\n') ? rawText.length > 28 : rawText.split('\n').some(l => l.trim().length > 32);
+      const needsWrapping = !rawText.includes('\n') ? rawText.length > 30 : rawText.split('\n').some(l => l.trim().length > 34);
       if (needsWrapping) {
         modifiedCount++;
-        const wrappedLines = wrapTextIntoLines(rawText, 28, 2);
-        balancedCues.push({
+        const wrappedLines = wrapTextIntoLines(rawText, 30, 2);
+        return {
           ...cue,
-          index: balancedCues.length + 1,
           text: wrappedLines.join('\n')
-        });
-      } else {
-        balancedCues.push({
-          ...cue,
-          index: balancedCues.length + 1
-        });
+        };
       }
+      return cue;
     });
 
-    setCues(balancedCues);
+    setCues(updated);
     showToast(
       isMm
-        ? `✨ ရှည်လျားသော စာတန်းထိုး (${modifiedCount} ခု) ကို တစ်ကြောင်းတည်း မဖြစ်အောင် ၂ ကြောင်းညီ ခွဲညှိပေးပြီးပါပြီ!`
-        : `✨ Auto-balanced ${modifiedCount} long subtitle cues into clean lines!`,
+        ? `✨ ရှည်လျားသော စာတန်းထိုး (${modifiedCount} ခု) ကို ၂ ကြောင်းညီအောင် အလိုအလျောက် ခွဲညှိပေးပြီးပါပြီ!`
+        : `✨ Auto-wrapped ${modifiedCount} long subtitle cues into clean 2-line format!`,
       'success'
     );
   };
@@ -2187,25 +2107,28 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
   }, [cues, subTextSearch]);
 
   return (
-    <div className="space-y-4 sm:space-y-6 max-w-7xl mx-auto px-1 sm:px-4 pb-16">
-      {/* Top Banner / Hero - More compact on mobile */}
-      <div className="glass-card rounded-[22px] sm:rounded-[28px] p-4 sm:p-8 border border-white/10 shadow-2xl relative overflow-hidden bg-gradient-to-br from-black/80 via-slate-950/70 to-black/90">
+    <div className="space-y-6 max-w-7xl mx-auto px-2 sm:px-4 pb-16">
+      {/* Top Banner / Hero */}
+      <div className="glass-card rounded-[28px] p-6 sm:p-8 border border-white/10 shadow-2xl relative overflow-hidden bg-gradient-to-br from-black/80 via-slate-950/70 to-black/90">
         <div className="absolute top-0 right-0 w-80 h-80 bg-amber-500/10 rounded-full blur-[90px] -z-10 pointer-events-none" />
 
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 sm:gap-6">
-          <div className="space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="p-2 bg-amber-400/15 border border-amber-400/30 rounded-xl text-amber-400 shadow-lg shadow-amber-400/10">
-                <Film size={22} />
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="p-2.5 bg-amber-400/15 border border-amber-400/30 rounded-2xl text-amber-400 shadow-lg shadow-amber-400/10">
+                <Film size={26} />
               </div>
-              <h2 className="text-xl sm:text-3xl font-extrabold text-white tracking-tight">
+              <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
                 {isMm ? 'Video Edit Studio' : 'Video Edit Studio'}
               </h2>
+              <span className="px-3 py-1 bg-amber-400/20 text-amber-300 border border-amber-400/40 rounded-full text-xs font-black uppercase tracking-wider">
+                PRO SUITE
+              </span>
             </div>
-            <p className="text-[10px] sm:text-sm text-slate-400 max-w-2xl leading-relaxed">
+            <p className="text-xs sm:text-sm text-slate-400 max-w-2xl leading-relaxed">
               {isMm
-                ? 'ဗီဒီယိုတွင် မြန်မာစာတန်းထိုး ထိုးခြင်း၊ Aspect Ratio ပြောင်းခြင်း နှင့် မူပိုင်ခွင့်လွတ်အောင် ပြင်ဆင်ခြင်း tools များ'
-                : 'Burn-in subtitles, change aspect ratios, and apply anti-copyright visual & audio bypass tools.'}
+                ? 'ဗီဒီယိုတွင် မြန်မာစာတန်းထိုး (Subtitles) ထိုးခြင်း၊ Aspect Ratio (16:9 / 9:16 Shorts) ပြောင်းခြင်း၊ Color Grading ပြုလုပ်ခြင်း နှင့် မူပိုင်ခွင့် (Copyright) လွတ်အောင် အသံ/ရုပ် ပြင်ဆင်ခြင်း tools များ'
+                : 'Burn-in Burmese subtitles, change aspect ratios with blurred backgrounds, grade colors, and apply anti-copyright visual & audio bypass tools.'}
             </p>
           </div>
 
@@ -2513,46 +2436,82 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
       {/* Main Workspace (Sticky Video Preview keeps video visible while editing tools!) */}
       <div className={`grid grid-cols-1 ${isTheaterMode ? 'gap-6' : 'lg:grid-cols-12 gap-6'}`}>
         {/* Left Video Canvas Area - Pinned & Sticky */}
-        <div className={`${isTheaterMode ? 'w-full' : 'lg:col-span-7 sticky top-0 lg:top-4 self-start z-40 bg-[#020617] lg:bg-transparent -mx-1 sm:mx-0 px-1 sm:px-0 py-2 sm:py-3 lg:py-0 border-b border-white/10 lg:border-0'} space-y-2 sm:space-y-3`}>
-          <div className="glass-card rounded-[20px] sm:rounded-[24px] p-3 sm:p-5 border border-white/10 shadow-2xl space-y-2 sm:space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-white/10">
-              <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5">
+        <div className={`${isTheaterMode ? 'w-full' : 'lg:col-span-7 lg:sticky lg:top-4 self-start lg:max-h-[calc(100vh-2rem)] overflow-y-auto no-scrollbar'} space-y-3`}>
+          <div className="glass-card rounded-[24px] p-4 sm:p-5 border border-white/10 shadow-2xl space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-white/10">
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-1">
                 {(['16:9', '9:16', '1:1', '4:5', '4:3', '21:9', 'original'] as AspectRatioType[]).map((r) => (
                   <button
                     key={r}
                     type="button"
                     onClick={() => setAspectRatio(r)}
-                    className={`px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all shrink-0 ${
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all shrink-0 ${
                       aspectRatio === r
                         ? 'bg-amber-400 text-black shadow-md shadow-amber-400/20'
                         : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10'
                     }`}
                   >
-                    {r === '16:9' ? '16:9' : r === '9:16' ? '9:16' : r === 'original' ? 'Orig' : r}
+                    {r === '16:9' ? '16:9 (Landscape)' : r === '9:16' ? '9:16 (Shorts/TikTok)' : r === 'original' ? (isMm ? 'မူရင်းအရွယ်အစား (Original)' : 'Original') : r}
                   </button>
                 ))}
               </div>
 
               <div className="flex items-center gap-1.5 flex-wrap">
-                {/* Comparison Button - Compact on mobile */}
+                {/* Quick Mirror Horizontal */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFlipHorizontal(!flipHorizontal);
+                    showToast(isMm ? (!flipHorizontal ? 'Flip Horizontal (ဘယ်/ညာ) ဖွင့်ပါသည်' : 'Flip Horizontal ပိတ်ပါသည်') : (!flipHorizontal ? 'Flip Horizontal ON' : 'Flip Horizontal OFF'), 'info');
+                  }}
+                  className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold border transition-all ${
+                    flipHorizontal
+                      ? 'bg-amber-400 text-black border-amber-400 shadow-sm'
+                      : 'bg-white/5 hover:bg-white/10 text-slate-300 border-white/10'
+                  }`}
+                  title="Horizontal Mirror Flip (Flip X)"
+                >
+                  <FlipHorizontal size={13} />
+                  <span>Mirror H</span>
+                </button>
+
+                {/* Quick Mirror Vertical */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFlipVertical(!flipVertical);
+                    showToast(isMm ? (!flipVertical ? 'Flip Vertical (အထက်/အောက်) ဖွင့်ပါသည်' : 'Flip Vertical ပိတ်ပါသည်') : (!flipVertical ? 'Flip Vertical ON' : 'Flip Vertical OFF'), 'info');
+                  }}
+                  className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold border transition-all ${
+                    flipVertical
+                      ? 'bg-amber-400 text-black border-amber-400 shadow-sm'
+                      : 'bg-white/5 hover:bg-white/10 text-slate-300 border-white/10'
+                  }`}
+                  title="Vertical Mirror Flip (Flip Y)"
+                >
+                  <FlipVertical size={13} />
+                  <span>Mirror V</span>
+                </button>
+
                 <button
                   type="button"
                   onMouseDown={() => setShowOriginalComparison(true)}
                   onMouseUp={() => setShowOriginalComparison(false)}
                   onTouchStart={() => setShowOriginalComparison(true)}
                   onTouchEnd={() => setShowOriginalComparison(false)}
-                  className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-[10px] font-bold border border-white/10 transition-all select-none active:bg-amber-400/20 active:text-amber-300"
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-bold border border-white/10 transition-all select-none active:bg-amber-400/20 active:text-amber-300"
+                  title="Press and hold to see raw original video without edits"
                 >
-                  <Eye size={12} />
-                  <span className="hidden sm:inline">{isMm ? 'မူရင်းကြည့်ရန်' : 'Hold Original'}</span>
+                  {showOriginalComparison ? <EyeOff size={13} className="text-amber-400" /> : <Eye size={13} />}
+                  <span>{showOriginalComparison ? (isMm ? 'မူရင်းပြနေသည်' : 'Original') : (isMm ? 'မူရင်းကြည့်ရန် ဖိထားပါ' : 'Hold Original')}</span>
                 </button>
               </div>
             </div>
 
-            {/* Video Canvas Container with Resizable Height */}
+            {/* Video Canvas Container with Resizable Height (လိုသလို ဆွဲချဲ့နိုင်သည်) */}
             <div
               style={{ height: `${playerHeight}px` }}
-              className="relative w-full bg-black rounded-xl sm:rounded-2xl overflow-hidden flex items-center justify-center border border-white/10 shadow-inner group transition-all"
+              className="relative w-full bg-black rounded-2xl overflow-hidden flex items-center justify-center border border-white/10 shadow-inner group transition-all"
             >
               {videoSrc && (
                 <video
@@ -2561,34 +2520,9 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
                   className="hidden"
                   playsInline
                   onLoadedMetadata={handleLoadedMetadata}
-                  onTimeUpdate={(e) => {
-                    const t = e.currentTarget.currentTime;
-                    setCurrentTime(t);
-                    const vo = voiceoverAudioRef.current;
-                    if (vo && voiceoverAudioUrl && !vo.paused) {
-                      if (Math.abs(vo.currentTime - t) > 0.25) {
-                        vo.currentTime = t;
-                      }
-                    }
-                  }}
-                  onEnded={() => {
-                    setIsPlaying(false);
-                    const vo = voiceoverAudioRef.current;
-                    if (vo) {
-                      vo.pause();
-                      vo.currentTime = 0;
-                    }
-                  }}
+                  onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+                  onEnded={() => setIsPlaying(false)}
                   onError={() => {}}
-                />
-              )}
-
-              {voiceoverAudioUrl && (
-                <audio
-                  ref={voiceoverAudioRef}
-                  src={voiceoverAudioUrl}
-                  preload="auto"
-                  className="hidden"
                 />
               )}
 
@@ -2736,23 +2670,6 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {voiceoverAudioUrl && (
-                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-purple-500/20 border border-purple-500/30 text-purple-300 text-[11px] font-bold shadow-sm">
-                        <Mic size={13} className="text-purple-400" />
-                        <span>{isMm ? 'Recap အသံ' : 'Recap VO'}</span>
-                        <button
-                          type="button"
-                          onClick={() => setOriginalAudioVolume(originalAudioVolume === 0 ? 30 : 0)}
-                          className="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-rose-500/25 text-rose-300 hover:bg-rose-500/40 transition-all font-mono"
-                          title="Toggle mute original video audio"
-                        >
-                          {originalAudioVolume === 0 
-                            ? (isMm ? 'မူရင်းအသံ ဖျောက်ထားသည် 🔇' : 'Original Muted 🔇') 
-                            : (isMm ? `မူရင်း: ${originalAudioVolume}%` : `Orig: ${originalAudioVolume}%`)}
-                        </button>
-                      </div>
-                    )}
-
                     <button
                       type="button"
                       onClick={() => setIsMuted(!isMuted)}
@@ -3641,7 +3558,7 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
                     className="w-full bg-black/60 border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400"
                   />
 
-                  <div className="max-h-[300px] sm:max-h-72 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                  <div className="max-h-72 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
                     {filteredCues.length === 0 ? (
                       <div className="p-6 text-center text-xs text-slate-500 border border-dashed border-white/10 rounded-xl space-y-2">
                         <p>{isMm ? 'စာတန်းထိုး မရှိသေးပါ' : 'No subtitle cues loaded.'}</p>
@@ -3662,122 +3579,125 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
                           return (
                             <div
                               key={cue.id}
-                              className="p-3 rounded-xl border border-amber-400 bg-amber-500/10 shadow-lg shadow-amber-400/10 space-y-2 sm:space-y-3 transition-all"
+                              className="p-3 rounded-xl border border-amber-400 bg-amber-500/10 shadow-lg shadow-amber-500/10 space-y-2.5 transition-all"
                             >
-                              <div className="flex items-center justify-between text-[10px] sm:text-[11px] font-bold text-amber-300 pb-1 border-b border-amber-400/20">
-                                <span className="flex items-center gap-1.5">
-                                  <span className="w-4 h-4 sm:w-5 sm:h-5 rounded bg-amber-400 text-black flex items-center justify-center font-black">#{cue.index}</span>
-                                  <span>{isMm ? 'ပြင်ဆင်နေသည်' : 'Editing Cue'}</span>
-                                </span>
-                                <div className="flex items-center gap-1.5">
+                              <div className="flex items-center justify-between text-[11px] font-bold text-amber-300 pb-1 border-b border-amber-400/20">
+                                <span>#{cue.index} {isMm ? 'ပြင်ဆင်နေသည်' : 'Editing Cue'}</span>
+                                <div className="flex items-center gap-1">
                                   <button
                                     type="button"
                                     onClick={handleSaveEditCue}
-                                    className="flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg bg-amber-400 text-black font-extrabold text-[10px] hover:bg-amber-300 transition-all shadow-md active:scale-95"
+                                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-400 text-black font-extrabold text-[10px] hover:bg-amber-300 transition-all"
                                   >
                                     <Check size={11} className="stroke-[3]" />
-                                    <span>{isMm ? 'Save' : 'Save'}</span>
+                                    <span>{isMm ? 'ပြီးပါပြီ' : 'Save'}</span>
                                   </button>
                                   <button
                                     type="button"
                                     onClick={handleCancelEditCue}
-                                    className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300"
+                                    className="p-1 rounded-lg bg-white/10 hover:bg-white/15 text-slate-300"
+                                    title="Cancel"
                                   >
                                     <X size={12} />
                                   </button>
                                 </div>
                               </div>
 
-                              {/* Editable Text Area */}
+                              {/* Editable Text Area (Live Canvas Sync) */}
                               <div>
+                                <label className="text-[10px] text-slate-400 font-bold block mb-1">
+                                  {isMm ? 'စာတန်းထိုး စာသား (ရိုက်ထည့်ပါက Video တွင် တိုက်ရိုက်ပြပါမည်):' : 'Subtitle Text (Live synced):'}
+                                </label>
                                 <textarea
                                   rows={2}
                                   value={editCueDraftText}
                                   onChange={(e) => setEditCueDraftText(e.target.value)}
-                                  className="w-full bg-black/80 border border-amber-400/50 rounded-lg p-2 sm:p-3 text-xs sm:text-sm text-white focus:outline-none focus:ring-1 focus:ring-amber-400/30 resize-none font-sans leading-relaxed"
+                                  className="w-full bg-black/80 border border-amber-400/50 rounded-lg p-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-amber-400 resize-none font-sans"
                                   placeholder="Type subtitle text..."
                                   autoFocus
                                 />
                               </div>
 
                               {/* Editable Time Controls */}
-                              <div className="grid grid-cols-2 gap-2 text-[10px]">
-                                <div className="space-y-1 bg-black/40 p-2 rounded-xl border border-white/5">
-                                  <span className="text-[9px] text-slate-400 font-bold block uppercase">{isMm ? 'Start' : 'Start'}</span>
-                                  <div className="flex items-center justify-center py-0.5 font-mono font-black text-amber-300 text-xs bg-black/40 rounded-lg border border-white/5 mb-1">
-                                    {secondsToSrtTime(editCueDraftStart)}
+                              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                                <div className="space-y-1 bg-black/40 p-2 rounded-lg border border-white/5">
+                                  <span className="text-[10px] text-slate-400 block">{isMm ? 'အစချိန် (Start)' : 'Start'}</span>
+                                  <div className="flex items-center justify-between font-mono font-bold text-white text-xs">
+                                    <span>{secondsToSrtTime(editCueDraftStart)}</span>
                                   </div>
-                                  <div className="grid grid-cols-3 gap-1">
+                                  <div className="flex items-center gap-1 pt-1">
                                     <button
                                       type="button"
                                       onClick={() => setEditCueDraftStart(prev => Math.max(0, parseFloat((prev - 0.2).toFixed(2))))}
-                                      className="py-1 rounded-lg bg-white/5 text-[9px] font-mono text-slate-300 border border-white/5"
+                                      className="flex-1 py-0.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-mono text-slate-200"
                                     >
-                                      -0.2
+                                      -0.2s
                                     </button>
                                     <button
                                       type="button"
                                       onClick={() => setEditCueDraftStart(prev => parseFloat((prev + 0.2).toFixed(2)))}
-                                      className="py-1 rounded-lg bg-white/5 text-[9px] font-mono text-slate-300 border border-white/5"
+                                      className="flex-1 py-0.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-mono text-slate-200"
                                     >
-                                      +0.2
+                                      +0.2s
                                     </button>
                                     <button
                                       type="button"
                                       onClick={() => setEditCueDraftStart(parseFloat(currentTime.toFixed(2)))}
-                                      className="py-1 rounded-lg bg-amber-400/20 text-amber-300 text-[9px] font-black border border-amber-400/20"
+                                      className="px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 hover:bg-amber-400/30 text-[9px] font-bold"
+                                      title="Set start to current playhead"
                                     >
-                                      NOW
+                                      Now
                                     </button>
                                   </div>
                                 </div>
 
-                                <div className="space-y-1 bg-black/40 p-2 rounded-xl border border-white/5">
-                                  <span className="text-[9px] text-slate-400 font-bold block uppercase">{isMm ? 'End' : 'End'}</span>
-                                  <div className="flex items-center justify-center py-0.5 font-mono font-black text-amber-300 text-xs bg-black/40 rounded-lg border border-white/5 mb-1">
-                                    {secondsToSrtTime(editCueDraftEnd)}
+                                <div className="space-y-1 bg-black/40 p-2 rounded-lg border border-white/5">
+                                  <span className="text-[10px] text-slate-400 block">{isMm ? 'အဆုံးချိန် (End)' : 'End'}</span>
+                                  <div className="flex items-center justify-between font-mono font-bold text-white text-xs">
+                                    <span>{secondsToSrtTime(editCueDraftEnd)}</span>
                                   </div>
-                                  <div className="grid grid-cols-3 gap-1">
+                                  <div className="flex items-center gap-1 pt-1">
                                     <button
                                       type="button"
                                       onClick={() => setEditCueDraftEnd(prev => Math.max(editCueDraftStart + 0.2, parseFloat((prev - 0.2).toFixed(2))))}
-                                      className="py-1 rounded-lg bg-white/5 text-[9px] font-mono text-slate-300 border border-white/5"
+                                      className="flex-1 py-0.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-mono text-slate-200"
                                     >
-                                      -0.2
+                                      -0.2s
                                     </button>
                                     <button
                                       type="button"
                                       onClick={() => setEditCueDraftEnd(prev => parseFloat((prev + 0.2).toFixed(2)))}
-                                      className="py-1 rounded-lg bg-white/5 text-[9px] font-mono text-slate-300 border border-white/5"
+                                      className="flex-1 py-0.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-mono text-slate-200"
                                     >
-                                      +0.2
+                                      +0.2s
                                     </button>
                                     <button
                                       type="button"
                                       onClick={() => setEditCueDraftEnd(parseFloat(currentTime.toFixed(2)))}
-                                      className="py-1 rounded-lg bg-amber-400/20 text-amber-300 text-[9px] font-black border border-amber-400/20"
+                                      className="px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 hover:bg-amber-400/30 text-[9px] font-bold"
+                                      title="Set end to current playhead"
                                     >
-                                      NOW
+                                      Now
                                     </button>
                                   </div>
                                 </div>
                               </div>
 
-                              <div className="flex items-center justify-between pt-0.5">
+                              <div className="flex items-center justify-between pt-1">
                                 <button
                                   type="button"
                                   onClick={(e) => handleDeleteCue(cue.id, e)}
-                                  className="flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-rose-500/10 text-[10px] text-rose-400 font-bold transition-colors"
+                                  className="flex items-center gap-1 text-[11px] text-rose-400 hover:text-rose-300 hover:underline"
                                 >
                                   <Trash2 size={12} />
-                                  <span>{isMm ? 'Delete' : 'Delete'}</span>
+                                  <span>{isMm ? 'စာတန်းထိုး ဖျက်မည်' : 'Delete Cue'}</span>
                                 </button>
                                 <button
                                   type="button"
                                   onClick={handleSaveEditCue}
-                                  className="px-4 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-black font-black text-xs shadow-lg shadow-amber-400/20 active:scale-95 transition-all"
+                                  className="px-3 py-1 rounded-lg bg-amber-400 hover:bg-amber-300 text-black font-extrabold text-xs shadow-md shadow-amber-400/20"
                                 >
-                                  {isMm ? 'Save ✓' : 'Save ✓'}
+                                  {isMm ? 'သိမ်းဆည်းမည် ✓' : 'Save Changes ✓'}
                                 </button>
                               </div>
                             </div>
@@ -3788,40 +3708,35 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
                           <div
                             key={cue.id}
                             onClick={() => handleSeek(cue.startSeconds + 0.05)}
-                            className={`p-3.5 rounded-2xl border text-xs cursor-pointer transition-all group relative overflow-hidden ${
+                            className={`p-2.5 rounded-xl border text-xs cursor-pointer transition-all group ${
                               isCurrent
-                                ? 'bg-amber-400/15 border-amber-400/60 shadow-xl shadow-amber-400/10 scale-[1.01] z-10'
-                                : 'bg-black/60 border-white/5 hover:border-white/20 hover:bg-black/80'
+                                ? 'bg-amber-400/15 border-amber-400/50 shadow-md shadow-amber-400/10'
+                                : 'bg-black/40 border-white/5 hover:border-white/20'
                             }`}
                           >
-                            {isCurrent && <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-400" />}
-                            <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono mb-2">
-                              <div className="flex items-center gap-2">
-                                <span className={`flex items-center justify-center w-5 h-5 rounded text-[10px] font-black ${isCurrent ? 'bg-amber-400 text-black' : 'bg-white/10 text-slate-300'}`}>
-                                  {cue.index}
-                                </span>
-                                <span className={`font-bold ${isCurrent ? 'text-amber-400' : 'text-slate-300'}`}>{cue.startStr} → {cue.endStr}</span>
-                              </div>
-                              <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono mb-1">
+                              <span className="font-bold text-amber-400">#{cue.index}</span>
+                              <span className="group-hover:text-slate-200 transition-colors">{cue.startStr} → {cue.endStr}</span>
+                              <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                                 <button
                                   type="button"
                                   onClick={() => handleStartEditCue(cue)}
-                                  className="p-2 rounded-lg bg-white/5 hover:bg-amber-400 hover:text-black text-slate-300 transition-all shadow-sm"
+                                  className="p-1 rounded bg-white/5 hover:bg-amber-400 hover:text-black text-slate-300 transition-colors"
                                   title="Edit subtitle text & timing"
                                 >
-                                  <Edit3 size={14} />
+                                  <Edit3 size={12} />
                                 </button>
                                 <button
                                   type="button"
                                   onClick={(e) => handleDeleteCue(cue.id, e)}
-                                  className="p-2 rounded-lg bg-white/5 hover:bg-rose-500 hover:text-white text-slate-400 transition-all shadow-sm"
+                                  className="p-1 rounded bg-white/5 hover:bg-rose-500 hover:text-white text-slate-400 transition-colors"
                                   title="Delete subtitle cue"
                                 >
-                                  <Trash2 size={14} />
+                                  <Trash2 size={12} />
                                 </button>
                               </div>
                             </div>
-                            <p className={`font-bold leading-relaxed transition-colors ${isCurrent ? 'text-white' : 'text-slate-300'}`}>
+                            <p className="text-white font-medium line-clamp-2 leading-relaxed">
                               {cue.text}
                             </p>
                           </div>

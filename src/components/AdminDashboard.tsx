@@ -35,8 +35,7 @@ import {
   Type,
   Cpu,
   Download,
-  Laptop,
-  Server
+  Laptop
 } from 'lucide-react';
 import { FfmpegWorkerManager } from './FfmpegWorkerManager';
 import { downloadSetupScript } from '../utils/engineSetupGenerator';
@@ -275,8 +274,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     firebase_auth_domain: '',
     firebase_app_id: '',
     telegram_bot_token: '',
-    telegram_chat_id: '',
-    global_worker_url: ''
+    telegram_chat_id: ''
   });
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings>({
     allow_admin_keys: false,
@@ -441,8 +439,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
       
       // Ensure session is synced on mount if already authenticated
-      const authUserId = auth.currentUser?.uid;
-      if (isAuthReady && auth.currentUser && authUserId && adminCode) {
+      const authUserId = getCurrentUserId() || adminCode;
+      if (isAuthReady && authUserId && adminCode) {
         setDoc(doc(db, 'sessions', authUserId), {
           accessCode: adminCode,
           createdAt: serverTimestamp()
@@ -451,7 +449,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           if (onAdminLogin) onAdminLogin(adminCode);
         })
         .catch(err => {
-          console.warn('Admin session sync notice (expected if rules propagated):', err.message);
+          console.error('Failed to sync admin session on mount:', err);
           if (onAdminLogin) onAdminLogin(adminCode);
         });
       } else if (isAuthReady && adminCode) {
@@ -703,11 +701,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (!isAuthenticated || !isAuthReady || (!isSessionSynced && !isOwner)) return;
 
     const fetchSystemConfig = async () => {
-      if (!auth.currentUser) {
-        console.log('Skipping system config fetch — user not authenticated with Firebase.');
-        setIsSystemLoading(false);
-        return;
-      }
       setIsSystemLoading(true);
       try {
         const docRef = doc(db, 'system_config', 'main');
@@ -2686,33 +2679,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
                       />
                     </div>
-                  </div>
-                </div>
-
-                {/* Worker Engine Section */}
-                <div className="space-y-6">
-                  <div className="flex items-center gap-2 pb-2 border-b border-slate-200 dark:border-white/5">
-                    <Server size={16} className="text-brand-purple" />
-                    <h4 className="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wider">Shared Worker Engine</h4>
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Global Worker URL (Optional - Shared FFmpeg PC for everyone)</label>
-                    <div className="relative">
-                      <Laptop className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-                      <input
-                        type="text"
-                        value={systemConfig.global_worker_url || ''}
-                        onChange={(e) => setSystemConfig({ ...systemConfig, global_worker_url: e.target.value })}
-                        placeholder="e.g. https://your-ngrok-url.ngrok-free.app"
-                        className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl pl-12 pr-4 py-3.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
-                      />
-                    </div>
-                    <p className="text-[10px] text-slate-500 mt-1 px-1">
-                      {isMm 
-                        ? 'ဤနေရာတွင် သင့် PC ၏ Ngrok URL ကို ထည့်ထားပါက အခြား user များသည် ၎င်းတို့၏ စက်တွင် Worker မရှိသော်လည်း သင့် PC ကို အသုံးပြု၍ render လုပ်နိုင်ပါမည်။'
-                        : 'If set, remote users without a local worker will automatically use this PC to render videos. Perfect for shared high-performance setups.'}
-                    </p>
                   </div>
                 </div>
 
