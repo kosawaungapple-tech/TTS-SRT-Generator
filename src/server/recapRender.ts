@@ -262,7 +262,7 @@ export async function renderRecap(opts: RecapRenderOptions): Promise<{
 
     const listFile = (name: string, files: string[]) => {
       const p = path.join(work, name);
-      fs.writeFileSync(p, files.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join("\n"));
+      fs.writeFileSync(p, files.map((f) => `file '${f.replace(/\\/g, "/").replace(/'/g, "'\\''")}'`).join("\n"));
       return p;
     };
 

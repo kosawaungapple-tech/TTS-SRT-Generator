@@ -35,6 +35,16 @@ export class WorkerEngineService {
     return this.cachedUrl;
   }
 
+  /** True for http(s)://localhost, 127.x.x.x and [::1]. */
+  public static isLoopbackUrl(url: string): boolean {
+    try {
+      const h = new URL(url).hostname.replace(/^\[|\]$/g, '');
+      return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
+    } catch {
+      return false;
+    }
+  }
+
   public static setWorkerUrl(url: string): void {
     const clean = url.trim().replace(/\/+$/, '');
     this.cachedUrl = clean || DEFAULT_WORKER_URL;
@@ -164,8 +174,13 @@ export class WorkerEngineService {
     const isHttpsOrigin = typeof window !== 'undefined' && window.location.protocol === 'https:';
     const isHttpWorker = url.startsWith('http://');
 
-    // Only try direct if not in mixed-content block scenario (HTTPS page to HTTP private IP)
-    if (!isHttpsOrigin || !isHttpWorker) {
+    // Browsers block HTTPS page -> plain-HTTP requests (mixed content) EXCEPT to loopback
+    // (localhost / 127.0.0.1), which they treat as secure. A worker running on this PC
+    // therefore works fine straight from the Vercel site.
+    const isLoopbackWorker = WorkerEngineService.isLoopbackUrl(url);
+
+    // Only skip direct if it would be blocked (HTTPS page to HTTP LAN IP)
+    if (!isHttpsOrigin || !isHttpWorker || isLoopbackWorker) {
       try {
         const response = await fetch(`${url}/process`, {
           method: 'POST',
@@ -209,6 +224,13 @@ export class WorkerEngineService {
     });
 
     if (!serverResp.ok) {
+      if (serverResp.status === 404 || serverResp.status === 405) {
+        // Static hosts (e.g. Vercel) have no /api/video/process route, so this means no render engine was reached.
+        throw new Error(
+          `FFmpeg Worker ကို မချိတ်ဆက်နိုင်ပါ (${url}). PC ပေါ်တွင် vbs-ffmpeg-worker.js ကို run ထားပါ ` +
+          `(Worker is not reachable at ${url}; start vbs-ffmpeg-worker.js on your PC. This site has no built-in render server.)`
+        );
+      }
       const errText = await serverResp.text();
       throw new Error(`Video processing failed (HTTP ${serverResp.status}): ${errText.slice(0, 200)}`);
     }

@@ -55,7 +55,7 @@ import {
   splitSentenceIntoCueBlocks 
 } from '../utils/subtitleUtils';
 import { GeminiTTSService } from '../services/geminiService';
-import { renderSceneRecap, getRenderServerUrl, setRenderServerUrl } from '../services/recapRenderService';
+import { renderSceneRecap, getRenderServerUrl } from '../services/recapRenderService';
 import { apiChannelManager } from '../services/apiChannelManager';
 import { VOICE_OPTIONS } from '../constants';
 
@@ -386,7 +386,6 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
   const [isAnalyzingHighlights, setIsAnalyzingHighlights] = useState<boolean>(false);
   const [isBuildingSceneRecap, setIsBuildingSceneRecap] = useState<boolean>(false);
   const [sceneRecapStatus, setSceneRecapStatus] = useState<string>('');
-  const [renderServerUrlInput, setRenderServerUrlInput] = useState<string>(() => getRenderServerUrl());
   const [recapRetryNotice, setRecapRetryNotice] = useState<string | null>(null);
 
   // Fast Offscreen Canvas for Blur Optimization
@@ -3253,16 +3252,10 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
                       ? 'Transcript မှ ဇာတ်ကွက်များကို AI က ရွေးပြီး ဇာတ်ကွက်တစ်ခုချင်းစီကို အသံသွင်း၊ ဗီဒီယိုကို အသံအလျားနှင့် ကိုက်အောင် ညှိကာ ပေါင်းပေးပါမယ်။'
                       : 'AI picks scenes from the transcript, voices each scene, fits the footage to each voice line, and joins them.'}
                   </p>
-                  <input
-                    type="text"
-                    value={renderServerUrlInput}
-                    onChange={(e) => {
-                      setRenderServerUrlInput(e.target.value);
-                      setRenderServerUrl(e.target.value);
-                    }}
-                    placeholder={isMm ? 'Render server URL (ဥပမာ http://localhost:3000၊ အလွတ်=ဒီဆိုက်)' : 'Render server URL (e.g. http://localhost:3000, blank = this site)'}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-900/80 border border-white/10 text-xs text-white font-mono placeholder:text-slate-600"
-                  />
+                  <p className="text-[10px] font-mono text-slate-500 break-all">
+                    {isMm ? 'Render Worker: ' : 'Render worker: '}
+                    {getRenderServerUrl()}
+                  </p>
                   <button
                     type="button"
                     onClick={handleBuildSceneRecap}

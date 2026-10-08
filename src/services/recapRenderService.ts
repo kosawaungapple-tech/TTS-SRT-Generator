@@ -1,5 +1,6 @@
 import type { GeminiTTSService, RecapPlanScene } from './geminiService';
 import type { TTSConfig } from '../types';
+import { WorkerEngineService } from './workerEngineService';
 
 /**
  * Client side of the scene-based recap pipeline:
@@ -7,23 +8,13 @@ import type { TTSConfig } from '../types';
  * The server fits each scene's footage to the real length of its narration.
  */
 
-const RENDER_URL_KEY = 'vbs_render_server_url';
-
-/** Base URL of the machine running server.ts + ffmpeg ('' = same origin). */
+/**
+ * Where the render happens: the same FFmpeg Worker the rest of the app uses
+ * (default http://localhost:5005, set in the Worker settings). The worker (or server.ts)
+ * must expose POST /api/recap/render.
+ */
 export function getRenderServerUrl(): string {
-  try {
-    return (localStorage.getItem(RENDER_URL_KEY) || '').trim().replace(/\/+$/, '');
-  } catch {
-    return '';
-  }
-}
-
-export function setRenderServerUrl(url: string): void {
-  try {
-    localStorage.setItem(RENDER_URL_KEY, url.trim().replace(/\/+$/, ''));
-  } catch {
-    /* storage unavailable */
-  }
+  return WorkerEngineService.getWorkerUrl().replace(/\/+$/, '');
 }
 
 export interface SceneRecapRenderParams {
@@ -91,8 +82,9 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
   } catch (e) {
     const where = base || 'this site';
     throw new Error(
-      `Cannot reach the render server (${where}). Start server.ts on your PC and set its URL ` +
-        `(e.g. http://localhost:3000) as the render server. ${e instanceof Error ? e.message : ''}`
+      `Cannot reach the render worker (${where}). Start vbs-ffmpeg-worker.js on your PC ` +
+        `(default http://localhost:5005). A plain-http LAN address cannot be used from this https site. ` +
+        `${e instanceof Error ? e.message : ''}`
     );
   }
 
