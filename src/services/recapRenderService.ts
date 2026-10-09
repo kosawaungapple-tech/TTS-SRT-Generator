@@ -1,11 +1,16 @@
 import type { GeminiTTSService, RecapPlanScene } from './geminiService';
 import type { TTSConfig } from '../types';
 import { WorkerEngineService } from './workerEngineService';
+import { renderSubtitlePng, type SubtitleStyle } from '../utils/subtitleOverlay';
+import { planSubtitlePieces, type RecapFramingMode } from '../utils/recapGeometry';
+import { splitSentenceIntoCueBlocks } from '../utils/subtitleUtils';
 
 /**
  * Client side of the scene-based recap pipeline:
- *   scenes (from generateRecapPlan) -> one TTS clip per scene -> /api/recap/render
- * The server fits each scene's footage to the real length of its narration.
+ *   scenes (from generateRecapPlan) -> one TTS clip per scene -> subtitle images drawn here
+ *   with the editor's own subtitle code -> /api/recap/render
+ * The render machine fits each scene's footage to the real length of its narration, frames it
+ * like the editor preview and overlays the subtitle images, so no fonts are needed there.
  */
 
 /**
@@ -23,13 +28,16 @@ export interface SceneRecapRenderParams {
   videoFileName?: string;
   scenes: RecapPlanScene[];
   tts: TTSConfig;
+  /** Output frame size, e.g. from getRecapOutputSize(). */
+  outputWidth: number;
+  outputHeight: number;
   aspectRatio?: string;
-  burnSubtitles?: boolean;
-  fontFamily?: string;
-  fontSize?: number;
-  fontColor?: string;
-  strokeColor?: string;
-  fontFile?: Blob;
+  framing: RecapFramingMode;
+  blurAmount: number;
+  /** Bar colour for letterbox / contain. */
+  bgColor: string;
+  /** Subtitle look (same object the editor preview uses). null = no subtitles. */
+  subtitleStyle: SubtitleStyle | null;
   serverUrl?: string;
   onProgress?: (done: number, total: number, message: string) => void;
   onRetry?: (seconds: number, message: string) => void;
@@ -45,12 +53,14 @@ export interface SceneRecapRenderResult {
 export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<SceneRecapRenderResult> {
   const { scenes } = p;
   if (!scenes.length) throw new Error('No scenes to render');
+  const totalSteps = scenes.length * 2 + 1;
+  let step = 0;
 
   // 1) One narration clip per scene, so the server knows each line's real length.
   const audios: Blob[] = [];
   for (let i = 0; i < scenes.length; i++) {
     if (p.signal?.aborted) throw new Error('Cancelled');
-    p.onProgress?.(i, scenes.length + 1, `Voiceover ${i + 1}/${scenes.length}`);
+    p.onProgress?.(step++, totalSteps, `Voiceover ${i + 1}/${scenes.length}`);
     const result = await p.gemini.generateTTS(scenes[i].narration, p.tts, undefined, undefined, p.onRetry);
     if (!result?.audioUrl) throw new Error(`No audio returned for scene ${i + 1}`);
     const blob = await (await fetch(result.audioUrl)).blob();
@@ -58,22 +68,40 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
     audios.push(blob);
   }
 
-  // 2) Send everything to the render server.
-  p.onProgress?.(scenes.length, scenes.length + 1, 'Rendering video on server...');
+  // 2) Subtitle images, drawn here so they look exactly like the editor preview.
+  const subtitleImages: Array<{ scene: number; index: number; blob: Blob }> = [];
+  const sceneSubs: Array<Array<{ from: number; to: number }>> = scenes.map(() => []);
+  if (p.subtitleStyle) {
+    for (let i = 0; i < scenes.length; i++) {
+      if (p.signal?.aborted) throw new Error('Cancelled');
+      p.onProgress?.(step++, totalSteps, `Subtitles ${i + 1}/${scenes.length}`);
+      const pieces = planSubtitlePieces(scenes[i].narration, splitSentenceIntoCueBlocks);
+      for (let j = 0; j < pieces.length; j++) {
+        const blob = await renderSubtitlePng(pieces[j].text, p.outputWidth, p.outputHeight, p.subtitleStyle);
+        subtitleImages.push({ scene: i, index: j, blob });
+        sceneSubs[i].push({ from: pieces[j].from, to: pieces[j].to });
+      }
+    }
+  } else {
+    step += scenes.length;
+  }
+
+  // 3) Send everything to the render server.
+  p.onProgress?.(step, totalSteps, 'Rendering video...');
   const form = new FormData();
   form.append('video', p.videoFile, p.videoFileName || 'video.mp4');
   form.append(
     'scenes',
-    JSON.stringify(scenes.map(s => ({ start: s.start, end: s.end, narration: s.narration })))
+    JSON.stringify(scenes.map((s, i) => ({ start: s.start, end: s.end, narration: s.narration, subs: sceneSubs[i] })))
   );
   audios.forEach((b, i) => form.append(`audio_${i}`, b, `scene_${i}.wav`));
+  subtitleImages.forEach(s => form.append(`sub_${s.scene}_${s.index}`, s.blob, `sub_${s.scene}_${s.index}.png`));
+  form.append('outWidth', String(p.outputWidth));
+  form.append('outHeight', String(p.outputHeight));
   if (p.aspectRatio) form.append('aspectRatio', p.aspectRatio);
-  form.append('burnSubtitles', String(Boolean(p.burnSubtitles)));
-  if (p.fontFamily) form.append('fontFamily', p.fontFamily);
-  if (p.fontSize) form.append('fontSize', String(p.fontSize));
-  if (p.fontColor) form.append('fontColor', p.fontColor);
-  if (p.strokeColor) form.append('strokeColor', p.strokeColor);
-  if (p.fontFile) form.append('fontFile', p.fontFile, 'custom.ttf');
+  form.append('framing', p.framing);
+  form.append('blurAmount', String(p.blurAmount));
+  form.append('bgColor', p.bgColor);
 
   const base = (p.serverUrl ?? getRenderServerUrl()).replace(/\/+$/, '');
   let resp: Response;
@@ -98,7 +126,7 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
     throw new Error(data.error || `Render server returned HTTP ${resp.status}`);
   }
 
-  p.onProgress?.(scenes.length + 1, scenes.length + 1, 'Done');
+  p.onProgress?.(totalSteps, totalSteps, 'Done');
   return {
     downloadUrl: data.downloadUrl.startsWith('http') ? data.downloadUrl : `${base}${data.downloadUrl}`,
     duration: data.duration ?? 0,

@@ -83,7 +83,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       status: 'online',
       engine: 'vbs-ffmpeg-worker',
-      version: '1.1.0',
+      version: '1.2.0',
       ffmpegAvailable: isFfmpegInstalled,
       ffmpegVersion: ffmpegVersionStr,
       platform: os.platform(),
@@ -351,9 +351,9 @@ const server = http.createServer((req, res) => {
         const videoPart = parsed.files['video'];
         if (!videoPart || !videoPart.data || videoPart.data.length === 0) return fail(400, 'No video file provided');
 
-        let scenes;
-        try { scenes = JSON.parse(parsed.fields['scenes'] || '[]'); } catch { return fail(400, 'scenes must be valid JSON'); }
-        if (!Array.isArray(scenes) || scenes.length === 0 || scenes.length > 80) return fail(400, 'scenes must contain 1-80 items');
+        let rawScenes;
+        try { rawScenes = JSON.parse(parsed.fields['scenes'] || '[]'); } catch { return fail(400, 'scenes must be valid JSON'); }
+        if (!Array.isArray(rawScenes) || rawScenes.length === 0 || rawScenes.length > 80) return fail(400, 'scenes must contain 1-80 items');
 
         const stamp = Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         const saveTemp = (name, data) => {
@@ -365,36 +365,34 @@ const server = http.createServer((req, res) => {
 
         const videoPath = saveTemp('video.bin', videoPart.data);
         const audioPaths = [];
-        for (let i = 0; i < scenes.length; i++) {
+        const scenes = [];
+        for (let i = 0; i < rawScenes.length; i++) {
           const a = parsed.files['audio_' + i];
           if (!a || !a.data || a.data.length === 0) return fail(400, 'Missing narration audio for scene ' + i);
           audioPaths.push(saveTemp(`audio_${i}.bin`, a.data));
+          const subs = [];
+          (rawScenes[i].subs || []).slice(0, 30).forEach((s, j) => {
+            const f = parsed.files[`sub_${i}_${j}`];
+            if (f && f.data && f.data.length) subs.push({ from: s.from, to: s.to, file: saveTemp(`sub_${i}_${j}.png`, f.data) });
+          });
+          scenes.push({ start: rawScenes[i].start, end: rawScenes[i].end, narration: rawScenes[i].narration, subs });
         }
 
-        let fontsDir;
-        const fontPart = parsed.files['fontFile'];
-        if (fontPart && fontPart.data && fontPart.data.length) {
-          fontsDir = path.join(UPLOADS_DIR, `recapfont_${stamp}`);
-          fs.mkdirSync(fontsDir, { recursive: true });
-          fs.writeFileSync(path.join(fontsDir, 'custom.ttf'), fontPart.data);
-          tempFiles.push(fontsDir);
-        }
-
+        const framingRaw = parsed.fields['framing'] || 'blurred-fit';
         const outputFilename = `recap_${stamp}.mp4`;
         const outputPath = path.join(OUTPUT_DIR, outputFilename);
-        console.log(`[VBS Worker] Recap render: ${scenes.length} scenes`);
+        console.log(`[VBS Worker] Recap render: ${scenes.length} scenes, ${scenes.reduce((n, s) => n + s.subs.length, 0)} subtitle images, framing=${framingRaw}`);
         const result = await renderRecap({
           videoPath,
           audioPaths,
           scenes,
           outputPath,
+          outWidth: parsed.fields['outWidth'] ? parseInt(parsed.fields['outWidth'], 10) : undefined,
+          outHeight: parsed.fields['outHeight'] ? parseInt(parsed.fields['outHeight'], 10) : undefined,
           aspectRatio: parsed.fields['aspectRatio'] || undefined,
-          burnSubtitles: parsed.fields['burnSubtitles'] === 'true',
-          fontFamily: parsed.fields['fontFamily'] || undefined,
-          fontSize: parsed.fields['fontSize'] ? parseInt(parsed.fields['fontSize'], 10) : undefined,
-          fontColor: parsed.fields['fontColor'] || undefined,
-          strokeColor: parsed.fields['strokeColor'] || undefined,
-          fontsDir
+          framing: ['blurred-fit', 'letterbox', 'cover', 'contain'].includes(framingRaw) ? framingRaw : 'blurred-fit',
+          blurAmount: parsed.fields['blurAmount'] ? parseInt(parsed.fields['blurAmount'], 10) : undefined,
+          bgColor: parsed.fields['bgColor'] || undefined
         });
 
         const host = req.headers.host || `localhost:${PORT}`;
@@ -463,9 +461,10 @@ function parseMultipart(buffer, boundary) {
 
 // ---------------------------------------------------------------------------
 // Scene-based recap renderer (same logic as src/server/recapRender.ts)
-// Each scene's footage is fitted to the real length of its own narration clip,
-// scenes are joined, narration is laid underneath and subtitles are timed from
-// the actual narration lengths.
+// Each scene's footage is fitted to the real length of its own narration clip and framed
+// like the editor preview (blurred background / bars / crop); scenes are joined, narration is
+// laid underneath, and the subtitle PNGs drawn by the browser (same code as the editor
+// preview) are overlaid. No fonts need to be installed on this machine.
 // ---------------------------------------------------------------------------
 const RECAP_RESOLUTIONS = {
   '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350],
@@ -494,55 +493,34 @@ async function probeSize(file) {
   const out = await runCmd('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', file]);
   const [w, h] = out.trim().split(',').map(n => parseInt(n, 10));
   if (!w || !h) throw new Error('Could not read video size');
-  return [w - (w % 2), h - (h % 2)];
+  return [w, h];
 }
 
-function recapSrtTime(sec) {
-  const ms = Math.max(0, Math.round(sec * 1000));
-  const p = (n, l = 2) => String(n).padStart(l, '0');
-  return `${p(Math.floor(ms / 3600000))}:${p(Math.floor((ms % 3600000) / 60000))}:${p(Math.floor((ms % 60000) / 1000))},${p(ms % 1000, 3)}`;
+const evenNum = n => Math.max(2, Math.round(n / 2) * 2);
+
+function ffColor(hex) {
+  return hex && /^#[0-9a-fA-F]{6}$/.test(hex.trim()) ? '0x' + hex.trim().slice(1) : '0x000000';
 }
 
-function splitNarration(text, maxChars = 46) {
-  const sentences = text.split(/(?<=[။!?.\n])\s*/u).map(s => s.trim()).filter(Boolean);
-  const pieces = [];
-  for (const s of sentences) {
-    if ([...s].length <= maxChars) { pieces.push(s); continue; }
-    let cur = '';
-    for (const w of s.split(/\s+/)) {
-      if ([...(cur + ' ' + w)].length > maxChars && cur) { pieces.push(cur.trim()); cur = w; }
-      else cur = cur ? cur + ' ' + w : w;
-    }
-    if (cur.trim()) pieces.push(cur.trim());
+function sceneFilterGraph(o) {
+  const W = o.outW, H = o.outH;
+  const pre = `setpts=(PTS-STARTPTS)*${o.factor.toFixed(6)},fps=${o.fps}`;
+  const post = [o.holdSeconds > 0.02 ? `tpad=stop_mode=clone:stop_duration=${o.holdSeconds.toFixed(3)}` : null, 'format=yuv420p']
+    .filter(Boolean).join(',');
+
+  if (o.keepSourceFrame) return `[0:v]${pre},setsar=1,${post}[v]`;
+  if (o.framing === 'cover') {
+    return `[0:v]${pre},scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,${post}[v]`;
   }
-  return pieces.length ? pieces : [text.trim()];
-}
-
-function buildRecapSrt(items) {
-  const blocks = [];
-  let n = 1;
-  for (const it of items) {
-    if (!it.narration.trim()) continue;
-    const pieces = splitNarration(it.narration);
-    const totalChars = pieces.reduce((a, p) => a + [...p].length, 0) || 1;
-    let t = it.offset;
-    for (const piece of pieces) {
-      const end = Math.min(it.offset + it.duration, t + ([...piece].length / totalChars) * it.duration);
-      blocks.push(`${n++}\n${recapSrtTime(t)} --> ${recapSrtTime(end)}\n${piece}\n`);
-      t = end;
-    }
+  if (o.framing === 'blurred-fit') {
+    const sigma = Math.max(2, Math.round(o.blurAmount / 4));
+    return `[0:v]${pre},split=2[a][b];` +
+      `[a]scale=320:180,gblur=sigma=${sigma},lutyuv=y=val*0.65,eq=saturation=1.2,scale=${W}:${H}[bg];` +
+      `[b]scale=${W}:${H}:force_original_aspect_ratio=decrease[fg];` +
+      `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,${post}[v]`;
   }
-  return blocks.join('\n');
-}
-
-function recapHexToAss(hex, fallback) {
-  const c = (hex || '').replace('#', '').trim();
-  if (!/^[0-9a-fA-F]{6}$/.test(c)) return fallback;
-  return `&H00${c.slice(4, 6)}${c.slice(2, 4)}${c.slice(0, 2)}`.toUpperCase();
-}
-
-function escapeFilterPath(p) {
-  return p.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+  return `[0:v]${pre},scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
+    `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=${ffColor(o.bgColor)},setsar=1,${post}[v]`;
 }
 
 async function renderRecap(opts) {
@@ -552,16 +530,22 @@ async function renderRecap(opts) {
   try {
     const sourceDuration = await probeDuration(videoPath);
     const [srcW, srcH] = await probeSize(videoPath);
-    const res = opts.aspectRatio && RECAP_RESOLUTIONS[opts.aspectRatio] ? RECAP_RESOLUTIONS[opts.aspectRatio] : [srcW, srcH];
-    const [outW, outH] = res;
 
-    const sceneDurations = [], videoParts = [], audioParts = [];
+    let outW, outH;
+    const keepSourceFrame = !opts.outWidth && !(opts.aspectRatio && RECAP_RESOLUTIONS[opts.aspectRatio]);
+    if (opts.outWidth && opts.outHeight) { outW = evenNum(Math.min(4096, opts.outWidth)); outH = evenNum(Math.min(4096, opts.outHeight)); }
+    else if (opts.aspectRatio && RECAP_RESOLUTIONS[opts.aspectRatio]) { [outW, outH] = RECAP_RESOLUTIONS[opts.aspectRatio]; }
+    else { outW = evenNum(srcW); outH = evenNum(srcH); }
+    const framing = opts.framing || 'blurred-fit';
+
+    const sceneDurations = [], speechDurations = [], videoParts = [], audioParts = [];
     for (let i = 0; i < scenes.length; i++) {
       const sc = scenes[i];
       const start = Math.max(0, Math.min(sourceDuration - 0.1, Number(sc.start) || 0));
       const end = Math.max(start + 0.5, Math.min(sourceDuration, Number(sc.end) || start + 5));
       const clipLen = end - start;
-      const target = (await probeDuration(audioPaths[i])) + paddingSeconds;
+      const narrDur = await probeDuration(audioPaths[i]);
+      const target = narrDur + paddingSeconds;
 
       const speed = clipLen / target;
       let cutLen = clipLen, factor, holdSeconds = 0;
@@ -570,23 +554,16 @@ async function renderRecap(opts) {
       else factor = 1 / speed;
 
       const vOut = path.join(work, `v_${i}.mp4`);
-      const vf = [
-        `setpts=(PTS-STARTPTS)*${factor.toFixed(6)}`,
-        `fps=${fps}`,
-        `scale=${outW}:${outH}:force_original_aspect_ratio=decrease`,
-        `pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2:black`,
-        'setsar=1',
-        holdSeconds > 0.02 ? `tpad=stop_mode=clone:stop_duration=${holdSeconds.toFixed(3)}` : null,
-        'format=yuv420p'
-      ].filter(Boolean).join(',');
       await runCmd('ffmpeg', ['-y', '-v', 'error', '-ss', start.toFixed(3), '-t', cutLen.toFixed(3), '-i', videoPath, '-an',
-        '-vf', vf, '-t', target.toFixed(3), '-c:v', 'libx264', '-preset', 'fast', '-crf', '20', '-r', String(fps), vOut]);
+        '-filter_complex', sceneFilterGraph({ factor, fps, outW, outH, framing, keepSourceFrame,
+          blurAmount: opts.blurAmount || 20, bgColor: opts.bgColor || '#000000', holdSeconds }),
+        '-map', '[v]', '-t', target.toFixed(3), '-c:v', 'libx264', '-preset', 'fast', '-crf', '20', '-r', String(fps), vOut]);
 
       const aOut = path.join(work, `a_${i}.wav`);
       await runCmd('ffmpeg', ['-y', '-v', 'error', '-i', audioPaths[i],
         '-af', `apad=pad_dur=${paddingSeconds.toFixed(3)},atrim=0:${target.toFixed(3)},aresample=44100`, '-ac', '2', aOut]);
 
-      videoParts.push(vOut); audioParts.push(aOut); sceneDurations.push(target);
+      videoParts.push(vOut); audioParts.push(aOut); sceneDurations.push(target); speechDurations.push(narrDur);
     }
 
     const writeList = (name, files) => {
@@ -598,37 +575,56 @@ async function renderRecap(opts) {
     await runCmd('ffmpeg', ['-y', '-v', 'error', '-f', 'concat', '-safe', '0', '-i', writeList('v.txt', videoParts), '-c', 'copy', joinedVideo]);
     const joinedAudio = path.join(work, 'joined.wav');
     await runCmd('ffmpeg', ['-y', '-v', 'error', '-f', 'concat', '-safe', '0', '-i', writeList('a.txt', audioParts), '-c', 'copy', joinedAudio]);
+    const totalDuration = sceneDurations.reduce((a, b) => a + b, 0);
 
-    let subtitleFilter = null;
-    if (opts.burnSubtitles) {
-      let offset = 0;
-      const srt = buildRecapSrt(scenes.map((sc, i) => {
-        const it = { offset, duration: sceneDurations[i], narration: sc.narration || '' };
-        offset += sceneDurations[i];
-        return it;
-      }));
-      if (srt.trim()) {
-        const srtPath = path.join(work, 'recap.srt');
-        fs.writeFileSync(srtPath, srt, 'utf-8');
-        const font = (opts.fontFamily || 'Noto Sans Myanmar').split(',')[0].replace(/['",:\\]/g, '').trim() || 'Noto Sans Myanmar';
-        const px = Math.max(12, Math.min(200, Math.round(opts.fontSize || Math.min(outW, outH) * 0.05)));
-        const size = Math.max(4, Math.round((px * 288) / outH));
-        const style = [`FontName=${font}`, `FontSize=${size}`,
-          `PrimaryColour=${recapHexToAss(opts.fontColor, '&H00FFFFFF')}`,
-          `OutlineColour=${recapHexToAss(opts.strokeColor, '&H00000000')}`,
-          'BorderStyle=3', 'Outline=2.5', 'MarginV=40'].join(',');
-        const fontsDirPart = opts.fontsDir ? `:fontsdir='${escapeFilterPath(opts.fontsDir)}'` : '';
-        subtitleFilter = `subtitles='${escapeFilterPath(srtPath)}':original_size=${outW}x${outH}${fontsDirPart}:force_style='${style}'`;
+    // Subtitle track from the browser-drawn PNGs, timed from the real narration lengths.
+    const timeline = [];
+    let offset = 0;
+    scenes.forEach((sc, i) => {
+      const speech = speechDurations[i];
+      let cursor = 0;
+      for (const sub of sc.subs || []) {
+        if (!sub.file || !fs.existsSync(sub.file)) continue;
+        const a = Math.max(cursor, Math.min(1, Number(sub.from) || 0));
+        const b = Math.max(a, Math.min(1, Number(sub.to) || 1));
+        if (b - a <= 0) continue;
+        timeline.push({ file: sub.file, start: offset + a * speech, end: offset + b * speech });
+        cursor = b;
       }
+      offset += sceneDurations[i];
+    });
+
+    let subsList = null;
+    if (timeline.length > 0) {
+      const blank = path.join(work, 'blank.png');
+      await runCmd('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', `color=c=0x00000000:s=${outW}x${outH},format=rgba`, '-frames:v', '1', blank]);
+      const q = f => f.replace(/\\/g, '/').replace(/'/g, "'\\''");
+      const lines = ['ffconcat version 1.0'];
+      let t = 0;
+      for (const seg of timeline) {
+        if (seg.start - t > 0.001) lines.push(`file '${q(blank)}'`, `duration ${(seg.start - t).toFixed(3)}`);
+        const d = Math.max(0.04, seg.end - Math.max(seg.start, t));
+        lines.push(`file '${q(seg.file)}'`, `duration ${d.toFixed(3)}`);
+        t = Math.max(seg.start, t) + d;
+      }
+      if (totalDuration - t > 0.001) lines.push(`file '${q(blank)}'`, `duration ${(totalDuration - t).toFixed(3)}`);
+      lines.push(`file '${q(blank)}'`);
+      subsList = path.join(work, 'subs.txt');
+      fs.writeFileSync(subsList, lines.join('\n'));
     }
 
-    const finalArgs = ['-y', '-v', 'error', '-i', joinedVideo, '-i', joinedAudio, '-map', '0:v:0', '-map', '1:a:0'];
-    if (subtitleFilter) finalArgs.push('-vf', subtitleFilter, '-c:v', 'libx264', '-preset', 'fast', '-crf', '19', '-pix_fmt', 'yuv420p');
-    else finalArgs.push('-c:v', 'copy');
+    const finalArgs = ['-y', '-v', 'error', '-i', joinedVideo];
+    if (subsList) {
+      finalArgs.push('-f', 'concat', '-safe', '0', '-i', subsList, '-i', joinedAudio,
+        '-filter_complex', `[1:v]fps=${fps},format=rgba[s];[0:v][s]overlay=0:0:format=auto:eof_action=pass,format=yuv420p[v]`,
+        '-map', '[v]', '-map', '2:a:0', '-c:v', 'libx264', '-preset', 'fast', '-crf', '19', '-pix_fmt', 'yuv420p');
+    } else {
+      finalArgs.push('-i', joinedAudio, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy');
+    }
     finalArgs.push('-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-shortest', outputPath);
     await runCmd('ffmpeg', finalArgs);
 
-    return { duration: sceneDurations.reduce((a, b) => a + b, 0), sceneDurations };
+    return { duration: totalDuration, sceneDurations };
   } finally {
     try { fs.rmSync(work, { recursive: true, force: true }); } catch {}
   }

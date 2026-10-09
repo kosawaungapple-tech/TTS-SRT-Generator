@@ -1002,6 +1002,7 @@ RULES:
 - Structure logically with rising tension, key plot turns, and dramatic climax.
 - Keep the language spoken, conversational, and thrilling.
 - Do NOT include any scene timestamps, markdown headings, or sound-effect parentheticals.
+- Stay faithful to the source: use only names, events and facts that appear in it. Never invent characters, plot points or endings.
 - Output ONLY the clean voiceover narration text ready to be read aloud.`
       : `သင်သည် မြန်မာ YouTube, TikTok, Facebook ပရိသတ်များအတွက် နာမည်ကျော် Movie Recap / Video Recap ဇာတ်ညွှန်း ရေးသားသူ ပညာရှင်တစ်ဦးဖြစ်သည်။
 အောက်ပါ ရုပ်ရှင်/ဗီဒီယို အကြောင်းအရာများကို အခြေခံ၍ လူကြည့်အများဆုံးဖြစ်စေမည့် အလွန်ဆွဲဆောင်မှုရှိသော မြန်မာစကားပြော Movie Recap ဇာတ်ညွှန်းတစ်ခုကို ရေးသားပေးပါ။
@@ -1018,6 +1019,7 @@ ${transcript}
 - ရုပ်ရှင်ရီကပ်များအတိုင်း သဘာဝကျပြီး နားထောင်ကောင်းသော အပြောစကား (စကားပြောဟန် ရသစုံ) ဖြင့် ရေးသားပါ။
 - ဇာတ်ကွက်အလှည့်အပြောင်းများ၊ သည်းထိတ်ရင်ဖို အခိုက်အတန့်များကို ကွက်ကွက်ကွင်းကွင်း ပေါ်လွင်စေပါ။
 - Timestamps သို့မဟုတ် စင်တင်ညွှန်ကြားချက်များ (ဥပမာ [Scene 1], (Sound effect)) မထည့်ပါနှင့်။
+- မူရင်းအချက်အလက်ထဲတွင် ပါသော အမည်၊ ဖြစ်ရပ်၊ အချက်များကိုသာ သုံးပါ။ မူရင်းတွင် မပါသော ဇာတ်ကောင်၊ ဖြစ်ရပ်၊ ဇာတ်သိမ်းများကို ကိုယ်တိုင် မဖန်တီးပါနှင့်။
 - အသံထွက်ဖတ်ရမည့် မြန်မာစကားပြော ရီကပ် ဇာတ်ညွှန်း သီးသန့်သာ ထုတ်ပေးပါ။`;
     
     const data = await this.geminiRequest(
@@ -1106,9 +1108,15 @@ Constraints:
   }
 
   /**
-   * Plans a scene-by-scene recap in ONE call. Gemini never invents timestamps:
-   * it picks cue IDs from the real transcript, and the start/end seconds are
-   * read back from those cues, so every narration line is tied to real footage.
+   * Plans a scene-by-scene recap in two grounded steps.
+   *
+   *  1. SELECT: Gemini reads the whole timestamped transcript, writes a factual synopsis and
+   *     picks scenes by cue ID (so start/end are real timestamps, never guessed).
+   *  2. WRITE: narration is written scene by scene (in small batches) from the exact lines of
+   *     that scene, the synopsis, the previous narration and, when provided, still frames of the
+   *     footage. This keeps every narration tied to what is actually on screen.
+   *
+   * `getFrames` is optional: given the chosen scenes it returns base64 JPEGs per scene.
    */
   async generateRecapPlan(
     cues: RecapPlanCue[],
@@ -1119,90 +1127,91 @@ Constraints:
       language?: 'mm' | 'en';
       maxScenes?: number;
     } = {},
-    onRetry?: (seconds: number, message: string) => void
+    onRetry?: (seconds: number, message: string) => void,
+    getFrames?: (scenes: Array<{ start: number; end: number }>) => Promise<string[][]>
   ): Promise<RecapPlanScene[]> {
-    const valid = cues.filter(c => c.text && c.text.trim());
+    const valid = cues.filter(c => c.text && c.text.trim()).sort((a, b) => a.id - b.id);
     if (valid.length === 0) throw new Error('Recap planning needs a transcript with timestamps (cues).');
 
     const targetSeconds = Math.max(30, options.targetSeconds ?? 180);
     const sceneCount = Math.max(4, Math.min(options.maxScenes ?? 40, Math.round(targetSeconds / 12)));
-    const lang = options.language === 'en' ? 'English' : 'Burmese (Myanmar Unicode)';
+    const isEn = options.language === 'en';
+    const lang = isEn ? 'English' : 'Burmese (Myanmar Unicode)';
     const style = options.style || 'Cinematic movie recap, engaging and dramatic';
-
-    // Keep the whole video visible to Gemini: shrink each line, then thin out evenly if still too big.
     const fmt = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
-    let lines = valid.map(c => ({ id: c.id, line: `#${c.id} [${fmt(c.start)}] ${c.text.trim().replace(/\s+/g, ' ').slice(0, 140)}` }));
+    const lineOf = (c: RecapPlanCue, max = 140) => `#${c.id} [${fmt(c.start)}] ${c.text.trim().replace(/\s+/g, ' ').slice(0, max)}`;
+
+    const askJson = async <T,>(parts: unknown[], temperature: number): Promise<T> => {
+      let lastErr: unknown = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const data = await this.geminiRequest(
+            GEMINI_MODELS.REWRITE,
+            { contents: [{ parts }], generationConfig: { responseMimeType: 'application/json', temperature } },
+            0,
+            onRetry
+          );
+          const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          return JSON.parse(raw.replace(/```json/gi, '').replace(/```/g, '').trim()) as T;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      throw new Error(`Recap planning failed: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
+    };
+
+    // ---- Step 1: synopsis + scene selection -------------------------------------------------
+    let lines = valid.map(c => lineOf(c));
     const MAX_CHARS = 60000;
-    const total = lines.reduce((a, l) => a + l.line.length + 1, 0);
-    if (total > MAX_CHARS) {
-      const step = Math.ceil(total / MAX_CHARS);
+    const totalChars = lines.reduce((a, l) => a + l.length + 1, 0);
+    if (totalChars > MAX_CHARS) {
+      const step = Math.ceil(totalChars / MAX_CHARS);
       lines = lines.filter((_, i) => i % step === 0);
     }
 
-    const prompt = `You are a professional video recap editor and scriptwriter.
-Below is the timestamped transcript of a source video (${Math.round(totalDurationSeconds)} seconds long). Each line starts with a cue ID.
+    const selectPrompt = `You are a film editor preparing a recap of a source video (${Math.round(totalDurationSeconds)} seconds long).
+Below is its timestamped transcript. Every line is: #cueId [m:ss] text.
 
-TASK: Build a recap of about ${targetSeconds} seconds made of ${sceneCount} scenes.
-- Scene 1 must be a strong hook; the last scene must be the ending/twist.
-- Keep scenes in the same order as the source video (increasing cue IDs, no overlap).
-- Each scene points at a stretch of source footage with "fromCue" and "toCue" (inclusive cue IDs copied from the transcript below).
-- Each scene has a "narration" written in ${lang}: ${style}. 1-3 spoken sentences (about 15-40 words). Write only what is read aloud: no timestamps, no stage directions, no markdown.
-- The narration must describe what happens in THAT footage so voice and picture match.
+DO TWO THINGS:
+1. "synopsis": a factual summary of the whole story in 6-10 English sentences, in story order, using ONLY what the transcript states or clearly implies. Keep the names of people and places exactly as written. Invent nothing. If the transcript is thin or unclear, say so.
+2. "scenes": choose ${sceneCount} scenes for a recap of about ${targetSeconds} seconds. Each scene is {"fromCue":<id>,"toCue":<id>,"beat":"<6-12 English words: what happens>"}.
+   - Cue IDs must be copied from the transcript, in increasing order, without overlap.
+   - Spread the scenes over the WHOLE video, from the opening to the ending; do not stop early.
+   - The first scene is the strongest hook, the last scene is the ending or twist.
+   - Each scene covers 1-12 consecutive cues (about 5-30 seconds of footage). Skip filler, credits and repeated lines.
 
-Return ONLY JSON: {"scenes":[{"fromCue":12,"toCue":15,"narration":"..."}]}
+Return ONLY JSON: {"synopsis":"...","scenes":[{"fromCue":1,"toCue":4,"beat":"..."}]}
 
 TRANSCRIPT:
-${lines.map(l => l.line).join('\n')}`;
+${lines.join('\n')}`;
 
-    type RawScene = { fromCue: number; toCue: number; narration: string };
-    const parseScenes = (rawText: string): RawScene[] => {
-      const clean = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
-      const parsed = JSON.parse(clean);
-      const arr = Array.isArray(parsed) ? parsed : parsed.scenes;
-      if (!Array.isArray(arr)) throw new Error('Gemini did not return a scenes array');
-      return arr.map((x: { fromCue?: unknown; toCue?: unknown; narration?: unknown }) => ({
-        fromCue: Number(x.fromCue),
-        toCue: Number(x.toCue),
-        narration: String(x.narration || '').trim()
-      }));
-    };
+    const selected = await askJson<{ synopsis?: string; scenes?: Array<{ fromCue: number; toCue: number; beat?: string }> }>(
+      [{ text: selectPrompt }],
+      0.3
+    );
+    const synopsis = String(selected.synopsis || '').trim();
+    if (!Array.isArray(selected.scenes) || selected.scenes.length === 0) throw new Error('Recap planning produced no scenes');
 
-    let raw: RawScene[] | null = null;
-    let lastErr: unknown = null;
-    for (let attempt = 0; attempt < 2 && !raw; attempt++) {
-      try {
-        const data = await this.geminiRequest(
-          GEMINI_MODELS.REWRITE,
-          {
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { responseMimeType: 'application/json', temperature: 0.7 }
-          },
-          0,
-          onRetry
-        );
-        raw = parseScenes(data.candidates?.[0]?.content?.parts?.[0]?.text || '');
-      } catch (e) {
-        lastErr = e;
-      }
-    }
-    if (!raw) {
-      const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
-      throw new Error(`Recap planning failed: ${msg}`);
-    }
-
-    // Turn cue IDs into real times; fix overlaps / out-of-range values instead of guessing.
+    // Turn cue IDs into real times; repair overlaps / out-of-range values instead of guessing.
     const byId = new Map(valid.map(c => [c.id, c]));
-    const ids = valid.map(c => c.id).sort((a, b) => a - b);
+    const ids = valid.map(c => c.id);
     const nearest = (id: number) => ids.reduce((best, x) => (Math.abs(x - id) < Math.abs(best - id) ? x : best), ids[0]);
 
-    const scenes: RecapPlanScene[] = [];
+    type Picked = { fromCue: number; toCue: number; start: number; end: number; beat: string };
+    const picked: Picked[] = [];
     let lastTo = -Infinity;
-    for (const r of raw.sort((a, b) => a.fromCue - b.fromCue)) {
-      if (!r.narration || !isFinite(r.fromCue) || !isFinite(r.toCue)) continue;
-      let from = byId.has(r.fromCue) ? r.fromCue : nearest(r.fromCue);
-      let to = byId.has(r.toCue) ? r.toCue : nearest(r.toCue);
+    for (const r of [...selected.scenes].sort((a, b) => Number(a.fromCue) - Number(b.fromCue))) {
+      const f = Number(r.fromCue);
+      const t = Number(r.toCue);
+      if (!isFinite(f) || !isFinite(t)) continue;
+      let from = byId.has(f) ? f : nearest(f);
+      let to = byId.has(t) ? t : nearest(t);
       if (to < from) [from, to] = [to, from];
-      if (from <= lastTo) from = ids.find(i => i > lastTo) ?? from;
+      if (from <= lastTo) {
+        const next = ids.find(i => i > lastTo);
+        if (next === undefined) continue; // nothing left after the previous scene
+        from = next;
+      }
       if (from > to) continue;
       const a = byId.get(from)!;
       const b = byId.get(to)!;
@@ -1210,10 +1219,93 @@ ${lines.map(l => l.line).join('\n')}`;
       let end = Math.min(totalDurationSeconds, Math.max(b.end, start + 2.5));
       end = Math.min(end, start + 45);
       if (end - start < 1) continue;
-      scenes.push({ fromCue: from, toCue: to, start, end, narration: r.narration });
+      picked.push({ fromCue: from, toCue: to, start, end, beat: String(r.beat || '').trim() });
       lastTo = to;
     }
-    if (scenes.length === 0) throw new Error('Recap planning produced no usable scenes');
+    if (picked.length === 0) throw new Error('Recap planning produced no usable scenes');
+
+    // ---- Optional: still frames from the footage of each chosen scene -----------------------
+    let frames: string[][] = [];
+    if (getFrames) {
+      try {
+        frames = await getFrames(picked.map(p => ({ start: p.start, end: p.end })));
+      } catch (e) {
+        console.warn('[Recap] Frame capture failed, continuing with transcript only:', e);
+      }
+    }
+
+    // ---- Step 2: narration, written from each scene's own lines -----------------------------
+    const BATCH = 6;
+    const narrations = new Map<number, string>();
+    const recent: string[] = [];
+
+    for (let from = 0; from < picked.length; from += BATCH) {
+      const batch = picked.slice(from, from + BATCH);
+      const parts: unknown[] = [];
+
+      const scenesText = batch.map((sc, k) => {
+        const idx = from + k;
+        const secs = Math.max(4, Math.min(30, sc.end - sc.start));
+        const target = isEn ? Math.round(secs * 14) : Math.round(secs * 9);
+        const sceneLines = valid
+          .filter(c => c.id >= sc.fromCue && c.id <= sc.toCue)
+          .slice(0, 14)
+          .map(c => lineOf(c, 220))
+          .join('\n');
+        const role = idx === 0 ? ' (OPENING: start with a hook)' : idx === picked.length - 1 ? ' (ENDING: close the story)' : '';
+        return `[scene ${idx + 1}]${role} footage ${fmt(sc.start)}-${fmt(sc.end)} (${Math.round(sc.end - sc.start)}s) | what happens: ${sc.beat || 'n/a'} | target about ${target} characters, never more than ${Math.round(target * 1.4)}\nsource lines:\n${sceneLines || '(no dialogue in this part)'}`;
+      }).join('\n\n');
+
+      const hasFrames = batch.some((_, k) => (frames[from + k] || []).length > 0);
+      const writePrompt = `You write the voiceover narration of a video recap in ${lang}. Style: ${style}.
+
+STORY FACTS you may rely on (summary of the whole video):
+${synopsis || '(not available)'}
+
+NARRATION ALREADY WRITTEN (for continuity, do not repeat it):
+${recent.length ? recent.slice(-2).join('\n') : '(none, this batch starts the recap)'}
+
+For EACH scene below you get the exact transcript of that part of the source video${hasFrames ? ' and still frames from it' : ''}. Write the narration of THAT scene.
+
+STRICT RULES
+- Use only facts found in that scene's source lines${hasFrames ? ', its still frames' : ''} or the story facts above. Never invent names, events, relationships, motives or places. If the source is thin, say less rather than guess.
+- Narration must describe what happens in the scene so voice and picture match. Do not describe events from other scenes.
+- Keep character names and how you refer to them identical across scenes.${isEn ? '' : ' Write foreign names in Burmese script, spelled the same way every time.'}
+- 1-3 spoken sentences per scene, natural storytelling, respecting the target length.
+- Output only words that are read aloud: no timestamps, scene numbers, stage directions or markdown.
+
+Return ONLY JSON: {"scenes":[{"id":<scene number>,"narration":"..."}]}
+
+SCENES:
+${scenesText}`;
+
+      parts.push({ text: writePrompt });
+      batch.forEach((_, k) => {
+        (frames[from + k] || []).slice(0, 2).forEach((b64, n) => {
+          if (!b64) return;
+          parts.push({ text: `Still frame ${n + 1} from scene ${from + k + 1}:` });
+          parts.push({ inlineData: { mimeType: 'image/jpeg', data: b64 } });
+        });
+      });
+
+      const written = await askJson<{ scenes?: Array<{ id: number; narration?: string }> }>(parts, 0.4);
+      for (const w of written.scenes || []) {
+        const text = String(w.narration || '').trim();
+        const idx = Number(w.id) - 1;
+        if (text && idx >= from && idx < from + batch.length) narrations.set(idx, text);
+      }
+      batch.forEach((_, k) => {
+        const t = narrations.get(from + k);
+        if (t) recent.push(t);
+      });
+    }
+
+    const scenes: RecapPlanScene[] = [];
+    picked.forEach((p, idx) => {
+      const narration = narrations.get(idx);
+      if (narration) scenes.push({ fromCue: p.fromCue, toCue: p.toCue, start: p.start, end: p.end, narration });
+    });
+    if (scenes.length === 0) throw new Error('Recap planning produced no narration');
     return scenes;
   }
 

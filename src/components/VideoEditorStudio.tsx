@@ -56,6 +56,9 @@ import {
 } from '../utils/subtitleUtils';
 import { GeminiTTSService } from '../services/geminiService';
 import { renderSceneRecap, getRenderServerUrl } from '../services/recapRenderService';
+import { drawSubtitleOverlay } from '../utils/subtitleOverlay';
+import { captureVideoFrames } from '../utils/videoFrames';
+import { getRecapOutputSize } from '../utils/recapGeometry';
 import { apiChannelManager } from '../services/apiChannelManager';
 import { VOICE_OPTIONS } from '../constants';
 
@@ -737,74 +740,19 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
       targetCtx.restore();
     }
 
-    // 7. Subtitles Overlay
+    // 7. Subtitles Overlay (shared with the server-rendered recap so both look identical)
     const activeCue = activeCueOverride !== undefined ? activeCueOverride : currentActiveCue;
     if (subtitlesEnabled && activeCue && activeCue.text.trim()) {
-      targetCtx.save();
-
-      const scaleMultiplier = canvasW / 1280;
-      const scaledFontSize = Math.round(subFontSize * scaleMultiplier);
-      targetCtx.font = `bold ${scaledFontSize}px ${subFontFamily}`;
-      targetCtx.textAlign = 'center';
-      targetCtx.textBaseline = 'middle';
-
-      // Auto-wrap lines that are too wide for the video frame or contain long unbroken text
-      const rawLines = activeCue.text.split('\n');
-      const maxAllowedWidth = canvasW * 0.86;
-      const lines: string[] = [];
-      rawLines.forEach(l => {
-        const trimmed = l.trim();
-        if (!trimmed) return;
-        if (targetCtx.measureText(trimmed).width <= maxAllowedWidth && trimmed.length <= 36) {
-          lines.push(trimmed);
-        } else {
-          lines.push(...wrapTextIntoLines(trimmed, 30, 2));
-        }
+      drawSubtitleOverlay(targetCtx, canvasW, canvasH, activeCue.text, {
+        fontSize: subFontSize,
+        fontFamily: subFontFamily,
+        fontColor: subFontColor,
+        strokeColor: subStrokeColor,
+        strokeWidth: subStrokeWidth,
+        bgBoxEnabled: subBgBoxEnabled,
+        bgBoxColor: subBgBoxColor,
+        positionY: subPositionY
       });
-      if (lines.length === 0) lines.push(activeCue.text);
-      const lineHeight = scaledFontSize * 1.35;
-      const totalTextHeight = lines.length * lineHeight;
-      const posY = (canvasH * (subPositionY / 100));
-
-      let maxLineWidth = 0;
-      lines.forEach(line => {
-        const m = targetCtx.measureText(line);
-        if (m.width > maxLineWidth) maxLineWidth = m.width;
-      });
-
-      if (subBgBoxEnabled && maxLineWidth > 0) {
-        const boxPaddingX = 24 * scaleMultiplier;
-        const boxPaddingY = 12 * scaleMultiplier;
-        const boxW = maxLineWidth + boxPaddingX * 2;
-        const boxH = totalTextHeight + boxPaddingY * 2;
-        const boxX = (canvasW - boxW) / 2;
-        const boxY = posY - (totalTextHeight / 2) - boxPaddingY;
-        const radius = 12 * scaleMultiplier;
-
-        targetCtx.save();
-        targetCtx.fillStyle = subBgBoxColor;
-        targetCtx.beginPath();
-        targetCtx.roundRect(boxX, boxY, boxW, boxH, radius);
-        targetCtx.fill();
-        targetCtx.restore();
-      }
-
-      lines.forEach((line, lIdx) => {
-        const lineY = posY - (totalTextHeight / 2) + (lIdx * lineHeight) + (lineHeight / 2);
-
-        if (subStrokeWidth > 0) {
-          targetCtx.strokeStyle = subStrokeColor;
-          targetCtx.lineWidth = subStrokeWidth * scaleMultiplier;
-          targetCtx.lineJoin = 'round';
-          targetCtx.miterLimit = 2;
-          targetCtx.strokeText(line, canvasW / 2, lineY);
-        }
-
-        targetCtx.fillStyle = subFontColor;
-        targetCtx.fillText(line, canvasW / 2, lineY);
-      });
-
-      targetCtx.restore();
     }
 
     targetCtx.restore();
@@ -1326,7 +1274,24 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
           style: styleHintMap[recapStyle] || recapStyle,
           language: recapTargetLanguage
         },
-        (seconds, msg) => setSceneRecapStatus(`${msg} (${seconds}s)`)
+        (seconds, msg) => setSceneRecapStatus(`${msg} (${seconds}s)`),
+        async (chosen) => {
+          // Two small stills per scene so the narration is written from what is on screen.
+          setSceneRecapStatus(isMm ? 'ဗီဒီယိုမှ ပုံများ ယူနေသည်...' : 'Capturing video frames...');
+          const result: string[][] = [];
+          for (const sc of chosen) {
+            const span = sc.end - sc.start;
+            result.push(await captureVideoFrames(rawVideoFile, [sc.start + span * 0.3, sc.start + span * 0.7]));
+          }
+          return result;
+        }
+      );
+
+      const videoEl = videoRef.current;
+      const [outputWidth, outputHeight] = getRecapOutputSize(
+        aspectRatio,
+        videoEl?.videoWidth || 1920,
+        videoEl?.videoHeight || 1080
       );
 
       const result = await renderSceneRecap({
@@ -1335,11 +1300,24 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
         videoFileName,
         scenes: plan,
         tts: { voiceId: recapVoice, speed: recapVoiceSpeed, pitch: 0, volume: 100, vocalStyle: 'Expressive' },
+        outputWidth,
+        outputHeight,
         aspectRatio,
-        burnSubtitles: true,
-        fontFamily: subFontFamily,
-        fontColor: subFontColor,
-        strokeColor: subStrokeColor,
+        framing: framingMode,
+        blurAmount,
+        bgColor: customBgColor,
+        subtitleStyle: subtitlesEnabled
+          ? {
+              fontSize: subFontSize,
+              fontFamily: subFontFamily,
+              fontColor: subFontColor,
+              strokeColor: subStrokeColor,
+              strokeWidth: subStrokeWidth,
+              bgBoxEnabled: subBgBoxEnabled,
+              bgBoxColor: subBgBoxColor,
+              positionY: subPositionY
+            }
+          : null,
         onProgress: (done, totalSteps, message) => setSceneRecapStatus(`${message} (${done}/${totalSteps})`),
         onRetry: (seconds, msg) => setSceneRecapStatus(`${msg} (${seconds}s)`)
       });
