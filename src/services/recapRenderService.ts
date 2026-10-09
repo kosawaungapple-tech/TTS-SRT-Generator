@@ -122,6 +122,11 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
   } catch {
     /* non-JSON error page (for example a 404 from a host with no render route) */
   }
+  if (resp.status === 404 && !data.success) {
+    throw new Error(
+      'The render worker has no recap endpoint. Download the latest vbs-ffmpeg-worker.js (v1.3.0) and restart it.'
+    );
+  }
   if (!resp.ok || !data.success || !data.downloadUrl) {
     throw new Error(data.error || `Render server returned HTTP ${resp.status}`);
   }

@@ -8,7 +8,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync, spawn } = require('child_process');
+const { execSync, spawn, spawnSync } = require('child_process');
 
 const PORT = process.env.PORT || 5005;
 const UPLOADS_DIR = path.join(__dirname, 'worker_uploads');
@@ -83,7 +83,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       status: 'online',
       engine: 'vbs-ffmpeg-worker',
-      version: '1.2.0',
+      version: '1.3.0',
       ffmpegAvailable: isFfmpegInstalled,
       ffmpegVersion: ffmpegVersionStr,
       platform: os.platform(),
@@ -214,62 +214,156 @@ const server = http.createServer((req, res) => {
         console.log(`[VBS Worker] Processing video (${(videoPart.data.length / (1024*1024)).toFixed(1)} MB)...`);
 
         // Build FFmpeg arguments
-        const args = ['-y'];
+        let args = ['-y'];
+        const tempSubFiles = [];
+        const useOverlayMode = Boolean(parsedParts.fields['framing']); // new editor: framing + browser-drawn subtitle PNGs
 
-        if (trimStart > 0) {
-          args.push('-ss', String(trimStart));
-        }
+        if (useOverlayMode) {
+          // ---- Editor-matching render: framing like the preview + subtitle PNGs drawn by the browser ----
+          const evenN = n => Math.max(2, Math.round(n / 2) * 2);
+          const outWf = parseInt(parsedParts.fields['outWidth'] || '0', 10);
+          const outHf = parseInt(parsedParts.fields['outHeight'] || '0', 10);
+          const hasFrame = outWf > 0 && outHf > 0 && aspectRatio !== 'original';
+          const W = hasFrame ? evenN(Math.min(4096, outWf)) : 0;
+          const H = hasFrame ? evenN(Math.min(4096, outHf)) : 0;
+          const framingRaw = parsedParts.fields['framing'];
+          const framing = ['blurred-fit', 'letterbox', 'cover', 'contain'].includes(framingRaw) ? framingRaw : 'blurred-fit';
+          const blurAmount = parseInt(parsedParts.fields['blurAmount'] || '20', 10);
+          const bgHex = /^#[0-9a-fA-F]{6}$/.test((parsedParts.fields['bgColor'] || '').trim()) ? '0x' + parsedParts.fields['bgColor'].trim().slice(1) : '0x000000';
 
-        args.push('-i', inputPath);
+          args.push('-ss', String(Math.max(0, trimStart)), '-i', inputPath);
+          let nextIdx = 1;
+          let audioIdx = -1;
+          let subsIdx = -1;
+          if (tempAudioPath) { args.push('-i', tempAudioPath); audioIdx = nextIdx++; }
 
-        if (trimEnd > trimStart) {
-          args.push('-to', String(trimEnd - trimStart));
-        }
-
-        if (tempAudioPath) {
-          args.push('-i', tempAudioPath);
-        }
-
-        const vFilters = [];
-
-        if (features.flip || features.hflip) {
-          vFilters.push('hflip');
-        }
-        if (features.vflip || features.flipVertical) {
-          vFilters.push('vflip');
-        }
-        if (features.colorGrade) {
-          vFilters.push('eq=contrast=1.1:saturation=1.2:brightness=-0.05');
-        }
-
-        if (aspectRatio !== 'original' && aspectRatio !== '16:9') {
-          const resolutions = {
-            '9:16': '1080:1920',
-            '1:1': '1080:1080',
-            '4:5': '1080:1350',
-            '4:3': '1440:1080',
-            '21:9': '2560:1080'
-          };
-          const resStr = resolutions[aspectRatio];
-          if (resStr) {
-            const [tw, th] = resStr.split(':');
-            vFilters.push(`scale=${tw}:${th}:force_original_aspect_ratio=decrease,pad=${tw}:${th}:(ow-iw)/2:(oh-ih)/2:black,setsar=1`);
+          // Subtitle timeline: one transparent full-frame PNG per cue, blank frames in between.
+          let subsMeta = [];
+          try { subsMeta = JSON.parse(parsedParts.fields['subs'] || '[]'); } catch {}
+          const timeline = [];
+          let cursor = 0;
+          subsMeta.forEach((m, i) => {
+            const f = parsedParts.files['sub_' + i];
+            if (!f || !f.data || !f.data.length || !hasFrame) return;
+            const start = Math.max(cursor, Number(m.start) || 0);
+            const endT = Number(m.end) || 0;
+            if (endT - start < 0.04) return;
+            const file = path.join(UPLOADS_DIR, `sub_${timestamp}_${i}.png`);
+            fs.writeFileSync(file, f.data);
+            tempSubFiles.push(file);
+            timeline.push({ file, start, end: endT });
+            cursor = endT;
+          });
+          if (timeline.length > 0) {
+            const blank = path.join(UPLOADS_DIR, `blank_${timestamp}.png`);
+            const mk = spawnSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', `color=c=0x00000000:s=${W}x${H},format=rgba`, '-frames:v', '1', blank]);
+            if (mk.status !== 0) throw new Error('Could not create blank subtitle frame: ' + String(mk.stderr || '').slice(-300));
+            tempSubFiles.push(blank);
+            const q = f => f.replace(/\\/g, '/').replace(/'/g, "'\\''");
+            const lines = ['ffconcat version 1.0'];
+            let t = 0;
+            for (const seg of timeline) {
+              if (seg.start - t > 0.001) lines.push(`file '${q(blank)}'`, `duration ${(seg.start - t).toFixed(3)}`);
+              lines.push(`file '${q(seg.file)}'`, `duration ${(seg.end - seg.start).toFixed(3)}`);
+              t = seg.end;
+            }
+            lines.push(`file '${q(blank)}'`); // the concat demuxer drops the duration of the last entry
+            const listPath = path.join(UPLOADS_DIR, `subs_${timestamp}.txt`);
+            fs.writeFileSync(listPath, lines.join('\n'));
+            tempSubFiles.push(listPath);
+            args.push('-f', 'concat', '-safe', '0', '-i', listPath);
+            subsIdx = nextIdx++;
           }
-        }
 
-        if (tempSrtPath && fs.existsSync(tempSrtPath)) {
-          const escSrt = tempSrtPath.replace(/\\/g, '/').replace(/'/g, "'\\''").replace(/:/g, '\\:');
-          const fontNamePart = fontFamily ? `FontName=${fontFamily},` : '';
-          const fontsDirPart = tempFontPath ? `:fontsdir='${UPLOADS_DIR.replace(/\\/g, '/').replace(/'/g, "'\\''")}'` : '';
-          vFilters.push(`subtitles='${escSrt}'${fontsDirPart}:force_style='${fontNamePart}FontSize=${fontSize},PrimaryColour=${assPrimary},OutlineColour=${assOutline},BorderStyle=3,Outline=2.5,MarginV=40'`);
-        }
+          // Picture chain: flips / grade -> framing like the editor preview -> subtitle overlay
+          const pre = [];
+          if (features.flip || features.hflip) pre.push('hflip');
+          if (features.vflip || features.flipVertical) pre.push('vflip');
+          if (features.colorGrade) pre.push('eq=contrast=1.1:saturation=1.2:brightness=-0.05');
+          const join = (...parts) => parts.filter(Boolean).join(',');
+          let graph;
+          if (!hasFrame) {
+            graph = `[0:v]${join(...pre, 'null')}[vf]`;
+          } else if (framing === 'cover') {
+            graph = `[0:v]${join(...pre, `scale=${W}:${H}:force_original_aspect_ratio=increase`, `crop=${W}:${H}`, 'setsar=1')}[vf]`;
+          } else if (framing === 'blurred-fit') {
+            // Same recipe as the editor preview: whole frame squeezed to 320x180, blurred, darkened, stretched to fill.
+            const sigma = Math.max(2, Math.round(blurAmount / 4));
+            graph = `[0:v]${join(...pre, 'split=2')}[a][b];` +
+              `[a]scale=320:180,gblur=sigma=${sigma},lutyuv=y=val*0.65,eq=saturation=1.2,scale=${W}:${H}[bg];` +
+              `[b]scale=${W}:${H}:force_original_aspect_ratio=decrease[fg];` +
+              `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[vf]`;
+          } else {
+            graph = `[0:v]${join(...pre, `scale=${W}:${H}:force_original_aspect_ratio=decrease`, `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=${bgHex}`, 'setsar=1')}[vf]`;
+          }
+          if (subsIdx >= 0) {
+            graph += `;[${subsIdx}:v]fps=30,format=rgba[s];[vf][s]overlay=0:0:format=auto:eof_action=pass,format=yuv420p[v]`;
+          } else {
+            graph += `;[vf]format=yuv420p[v]`;
+          }
+          args.push('-filter_complex', graph, '-map', '[v]');
+          if (audioIdx >= 0) args.push('-map', `${audioIdx}:a:0`, '-shortest');
+          else args.push('-map', '0:a?');
+          if (trimEnd > trimStart) args.push('-t', String(trimEnd - trimStart));
+          console.log(`[VBS Worker] Overlay render: ${hasFrame ? W + 'x' + H : 'source size'}, framing=${framing}, ${timeline.length} subtitle images`);
+        } else {
 
-        if (vFilters.length > 0) {
-          args.push('-vf', vFilters.join(','));
-        }
+          if (trimStart > 0) {
+            args.push('-ss', String(trimStart));
+          }
 
-        if (tempAudioPath) {
-          args.push('-map', '0:v', '-map', '1:a:0', '-shortest');
+          args.push('-i', inputPath);
+
+          if (trimEnd > trimStart) {
+            args.push('-to', String(trimEnd - trimStart));
+          }
+
+          if (tempAudioPath) {
+            args.push('-i', tempAudioPath);
+          }
+
+          const vFilters = [];
+
+          if (features.flip || features.hflip) {
+            vFilters.push('hflip');
+          }
+          if (features.vflip || features.flipVertical) {
+            vFilters.push('vflip');
+          }
+          if (features.colorGrade) {
+            vFilters.push('eq=contrast=1.1:saturation=1.2:brightness=-0.05');
+          }
+
+          if (aspectRatio !== 'original' && aspectRatio !== '16:9') {
+            const resolutions = {
+              '9:16': '1080:1920',
+              '1:1': '1080:1080',
+              '4:5': '1080:1350',
+              '4:3': '1440:1080',
+              '21:9': '2560:1080'
+            };
+            const resStr = resolutions[aspectRatio];
+            if (resStr) {
+              const [tw, th] = resStr.split(':');
+              vFilters.push(`scale=${tw}:${th}:force_original_aspect_ratio=decrease,pad=${tw}:${th}:(ow-iw)/2:(oh-ih)/2:black,setsar=1`);
+            }
+          }
+
+          if (tempSrtPath && fs.existsSync(tempSrtPath)) {
+            const escSrt = tempSrtPath.replace(/\\/g, '/').replace(/'/g, "'\\''").replace(/:/g, '\\:');
+            const fontNamePart = fontFamily ? `FontName=${fontFamily},` : '';
+            const fontsDirPart = tempFontPath ? `:fontsdir='${UPLOADS_DIR.replace(/\\/g, '/').replace(/'/g, "'\\''")}'` : '';
+            vFilters.push(`subtitles='${escSrt}'${fontsDirPart}:force_style='${fontNamePart}FontSize=${fontSize},PrimaryColour=${assPrimary},OutlineColour=${assOutline},BorderStyle=3,Outline=2.5,MarginV=40'`);
+          }
+
+          if (vFilters.length > 0) {
+            args.push('-vf', vFilters.join(','));
+          }
+
+          if (tempAudioPath) {
+            args.push('-map', '0:v', '-map', '1:a:0', '-shortest');
+          }
+
         }
 
         args.push(
@@ -296,6 +390,7 @@ const server = http.createServer((req, res) => {
           try { if (tempSrtPath && fs.existsSync(tempSrtPath)) fs.unlinkSync(tempSrtPath); } catch {}
           try { if (tempFontPath && fs.existsSync(tempFontPath)) fs.unlinkSync(tempFontPath); } catch {}
           try { if (tempAudioPath && fs.existsSync(tempAudioPath)) fs.unlinkSync(tempAudioPath); } catch {}
+          for (const f of tempSubFiles) { try { fs.unlinkSync(f); } catch {} }
 
           if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
             console.log(`[VBS Worker] SUCCESS! Output size: ${(fs.statSync(outputPath).size / (1024*1024)).toFixed(2)} MB`);

@@ -45,6 +45,17 @@ export class WorkerEngineService {
     }
   }
 
+  /** Compares dotted versions, e.g. isVersionAtLeast('1.2.0', '1.3.0') === false. Unknown version = too old. */
+  public static isVersionAtLeast(version: string | undefined, min: string): boolean {
+    const parse = (v?: string) => (v || '0').split('.').map(n => parseInt(n, 10) || 0);
+    const a = parse(version);
+    const b = parse(min);
+    for (let i = 0; i < 3; i++) {
+      if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+    }
+    return true;
+  }
+
   public static setWorkerUrl(url: string): void {
     const clean = url.trim().replace(/\/+$/, '');
     this.cachedUrl = clean || DEFAULT_WORKER_URL;

@@ -56,7 +56,7 @@ import {
 } from '../utils/subtitleUtils';
 import { GeminiTTSService } from '../services/geminiService';
 import { renderSceneRecap, getRenderServerUrl } from '../services/recapRenderService';
-import { drawSubtitleOverlay } from '../utils/subtitleOverlay';
+import { drawSubtitleOverlay, renderSubtitlePng, type SubtitleStyle } from '../utils/subtitleOverlay';
 import { captureVideoFrames } from '../utils/videoFrames';
 import { getRecapOutputSize } from '../utils/recapGeometry';
 import { apiChannelManager } from '../services/apiChannelManager';
@@ -1918,6 +1918,14 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
               : 'Rendering via Local PC FFmpeg Engine (Zero-Stutter Lossless)...'
           );
 
+          if (!WorkerEngineService.isVersionAtLeast(currentH.version, '1.3.0')) {
+            throw new Error(
+              isMm
+                ? `သင့် PC Worker က ဗားရှင်းဟောင်း (${currentH.version || 'မသိ'}) ဖြစ်နေပါသည်။ vbs-ffmpeg-worker.js v1.3.0 ကို ပြန်ယူပြီး ပြန် run ပါ။`
+                : `Your PC worker is outdated (${currentH.version || 'unknown'}). Download vbs-ffmpeg-worker.js v1.3.0 and restart it.`
+            );
+          }
+
           let fileToSend: File | Blob | null = rawVideoFile;
           if (!fileToSend) {
             setExportStatusText(isMm ? 'ဗီဒီယို အချက်အလက်များ ပြင်ဆင်နေပါသည်...' : 'Preparing video data...');
@@ -1929,33 +1937,58 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
           const formData = new FormData();
           formData.append('video', fileToSend, videoFileName || 'video.mp4');
 
-          if (subtitlesEnabled && cues.length > 0) {
-            const subs: SRTSubtitle[] = cues.map((cue, i) => ({
-              index: i + 1,
-              startTime: cue.startStr,
-              endTime: cue.endStr,
-              text: cue.text
-            }));
-            formData.append('srtContent', generateSRT(subs));
-            formData.append('fontFamily', subFontFamily);
-            formData.append('fontSize', String(subFontSize));
-            formData.append('fontColor', subFontColor);
-            formData.append('strokeColor', subStrokeColor);
+          // Same look as the editor preview: framing + subtitles drawn here (same code as the preview) and
+          // overlaid by the worker, so font, size, colours and ratio match what is on screen.
+          const videoEl = videoRef.current;
+          const [outputWidth, outputHeight] = getRecapOutputSize(
+            aspectRatio,
+            videoEl?.videoWidth || 1920,
+            videoEl?.videoHeight || 1080
+          );
+          formData.append('outWidth', String(outputWidth));
+          formData.append('outHeight', String(outputHeight));
+          formData.append('framing', framingMode);
+          formData.append('blurAmount', String(blurAmount));
+          formData.append('bgColor', customBgColor);
 
-            // If user selected a custom uploaded font, include the font file for FFmpeg
-            const activeCustomFont = userCustomFonts.find(f =>
-              subFontFamily.includes(f.family) || subFontFamily.includes(f.name)
-            );
-            if (activeCustomFont?.url && activeCustomFont.url.startsWith('data:')) {
-              try {
-                const fontResp = await fetch(activeCustomFont.url);
-                const fontBlob = await fontResp.blob();
-                const fontSafeName = `${activeCustomFont.family.replace(/[^a-zA-Z0-9_-]/g, '_')}.ttf`;
-                formData.append('fontFile', fontBlob, fontSafeName);
-              } catch (fontBlobErr) {
-                console.warn('Could not serialize custom font for FFmpeg:', fontBlobErr);
+          if (subtitlesEnabled && cues.length > 0) {
+            const winStart = Math.max(0, trimStart);
+            const winEnd = trimEnd > trimStart ? trimEnd : Infinity;
+            const subtitleStyle: SubtitleStyle = {
+              fontSize: subFontSize,
+              fontFamily: subFontFamily,
+              fontColor: subFontColor,
+              strokeColor: subStrokeColor,
+              strokeWidth: subStrokeWidth,
+              bgBoxEnabled: subBgBoxEnabled,
+              bgBoxColor: subBgBoxColor,
+              positionY: subPositionY
+            };
+            const MAX_SUBTITLE_IMAGES = 1500;
+            const subsMeta: Array<{ start: number; end: number }> = [];
+            const ordered = [...cues].sort((a, b) => a.startSeconds - b.startSeconds);
+            let prevEnd = 0;
+            for (const cue of ordered) {
+              if (!cue.text || !cue.text.trim()) continue;
+              // times relative to the exported part (trim), shifted by the timing offset like the preview
+              const rawStart = Math.max(cue.startSeconds + subTimingOffset, winStart) - winStart;
+              const end = Math.min(cue.endSeconds + subTimingOffset, winEnd) - winStart;
+              const start = Math.max(rawStart, prevEnd);
+              if (end - start < 0.05) continue;
+              if (subsMeta.length >= MAX_SUBTITLE_IMAGES) break;
+              if (subsMeta.length % 20 === 0) {
+                setExportStatusText(
+                  isMm
+                    ? `စာတန်းထိုး ပုံများ ပြင်ဆင်နေသည် (${subsMeta.length}/${ordered.length})...`
+                    : `Preparing subtitle images (${subsMeta.length}/${ordered.length})...`
+                );
               }
+              const png = await renderSubtitlePng(cue.text, outputWidth, outputHeight, subtitleStyle);
+              formData.append(`sub_${subsMeta.length}`, png, `sub_${subsMeta.length}.png`);
+              subsMeta.push({ start, end });
+              prevEnd = end;
             }
+            formData.append('subs', JSON.stringify(subsMeta));
           }
 
           if (voiceoverAudioUrl) {
