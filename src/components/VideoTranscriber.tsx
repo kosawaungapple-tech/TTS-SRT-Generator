@@ -386,7 +386,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
     try {
       const useManaged = isAdmin || apiChannelManager.getSettings().useAdminKeys;
       const gemini = new GeminiTTSService(useManaged ? '' : apiKey, isAdmin);
-      const script = await gemini.generateMovieRecapScript(transcript);
+      const script = await gemini.generateMovieRecapScript(transcript, undefined, { mode: 'quick' });
       setRecapScript(script);
     } catch (err) {
       console.error('[Recap] Error:', err);

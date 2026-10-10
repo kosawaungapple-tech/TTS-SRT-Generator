@@ -5,6 +5,7 @@ import { getIdToken } from "../firebase";
 import { ttsCache } from "./ttsCache";
 import { TTSConfig, AudioResult, SRTSubtitle } from "../types";
 import { GEMINI_MODELS, VOICE_OPTIONS } from "../constants";
+import { generateGroundedRecapScript, type RecapLlm, type RecapStage } from "./recapScriptPipeline";
 
 interface GeminiResponse {
   candidates?: Array<{
@@ -969,7 +970,8 @@ ${linesToTranslate}
   }
 
   /**
-   * Generates a Movie Recap Script from a transcript or synopsis
+   * Generates a story-grounded Movie Recap Script (story bible -> outline -> per-section writing -> edit).
+   * `options.mode === 'quick'` makes a single lightweight call (used for background auto-generation).
    */
   async generateMovieRecapScript(
     transcript: string,
@@ -977,61 +979,61 @@ ${linesToTranslate}
     options?: {
       style?: string;
       tone?: string;
+      /** @deprecated use targetMinutes */
       duration?: string;
+      targetMinutes?: number;
+      sourceSeconds?: number;
       targetLanguage?: 'mm' | 'en';
+      mode?: 'full' | 'quick';
+      frames?: string[];
+      onStage?: (s: RecapStage) => void;
     }
   ): Promise<string> {
-    const style = options?.style || 'ရုပ်ရှင်ဇာတ်ကားပြော ရသစုံ (Cinematic Movie Recap)';
-    const tone = options?.tone || 'ဆွဲဆောင်မှုရှိပြီး စိတ်လှုပ်ရှားဖွယ် (Engaging & Dramatic)';
-    const duration = options?.duration || 'အလယ်အလတ် (၃-၅ မိနစ်စာ / Medium 3-5 Mins)';
-    const isEn = options?.targetLanguage === 'en';
+    const models = [GEMINI_MODELS.SCRIPT, GEMINI_MODELS.REWRITE].filter((m, i, a) => a.indexOf(m) === i);
+    let modelIdx = 0;
 
-    const prompt = isEn
-      ? `You are a master movie & video recap scriptwriter for viral YouTube and TikTok channels.
-Craft an engaging, high-retention video recap voiceover script based on the following content.
+    const llm: RecapLlm = async (prompt, o) => {
+      const parts: unknown[] = [{ text: prompt }];
+      for (const img of o?.images || []) parts.push({ inlineData: { mimeType: 'image/jpeg', data: img } });
+      const config: Record<string, unknown> = { temperature: o?.json ? 0.4 : 0.7 };
+      if (o?.json) config.responseMimeType = 'application/json';
+      let lastErr: unknown = null;
+      while (modelIdx < models.length) {
+        try {
+          const data = await this.geminiRequest(models[modelIdx], { contents: [{ parts }], generationConfig: config }, 0, onRetry);
+          const text = data.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || '').join('') || '';
+          if (!text.trim()) throw new Error('Empty response from Gemini');
+          return text;
+        } catch (e) {
+          lastErr = e;
+          // fall back to the next model only when this one looks unavailable
+          const msg = e instanceof Error ? e.message : String(e);
+          if (modelIdx < models.length - 1 && /404|not found|not supported|unavailable|invalid model/i.test(msg)) {
+            modelIdx++;
+            continue;
+          }
+          throw e;
+        }
+      }
+      throw lastErr instanceof Error ? lastErr : new Error('Script generation failed');
+    };
 
-RECAP STYLE: ${style}
-NARRATIVE TONE: ${tone}
-TARGET LENGTH/DURATION: ${duration}
+    let minutes = options?.targetMinutes;
+    if (minutes === undefined) {
+      const d = options?.duration || '';
+      minutes = /1-2|၁-၂|short/i.test(d) ? 1.5 : /8-10|၈-၁၀|full/i.test(d) ? 9 : 4;
+    }
 
-SOURCE CONTEXT/TRANSCRIPT:
-${transcript}
-
-RULES:
-- Start with an irresistible opening hook.
-- Structure logically with rising tension, key plot turns, and dramatic climax.
-- Keep the language spoken, conversational, and thrilling.
-- Do NOT include any scene timestamps, markdown headings, or sound-effect parentheticals.
-- Stay faithful to the source: use only names, events and facts that appear in it. Never invent characters, plot points or endings.
-- Output ONLY the clean voiceover narration text ready to be read aloud.`
-      : `သင်သည် မြန်မာ YouTube, TikTok, Facebook ပရိသတ်များအတွက် နာမည်ကျော် Movie Recap / Video Recap ဇာတ်ညွှန်း ရေးသားသူ ပညာရှင်တစ်ဦးဖြစ်သည်။
-အောက်ပါ ရုပ်ရှင်/ဗီဒီယို အကြောင်းအရာများကို အခြေခံ၍ လူကြည့်အများဆုံးဖြစ်စေမည့် အလွန်ဆွဲဆောင်မှုရှိသော မြန်မာစကားပြော Movie Recap ဇာတ်ညွှန်းတစ်ခုကို ရေးသားပေးပါ။
-
-ရီကပ်စတိုင် (STYLE): ${style}
-တင်ဆက်ဟန်/လေသံ (TONE): ${tone}
-ကြာချိန်ပမာဏ (TARGET DURATION): ${duration}
-
-မူရင်း အချက်အလက် / စာသားများ (SOURCE CONTEXT):
-${transcript}
-
-လမ်းညွှန်ချက်များ (GUIDELINES):
-- ပထမဆုံး စာကြောင်း ၁-၂ ကြောင်းတွင် ပရိသတ်ကို ချက်ချင်း ဆွဲဆောင်သွားစေမည့် Hook စကားလုံးဖြင့် စတင်ပါ။
-- ရုပ်ရှင်ရီကပ်များအတိုင်း သဘာဝကျပြီး နားထောင်ကောင်းသော အပြောစကား (စကားပြောဟန် ရသစုံ) ဖြင့် ရေးသားပါ။
-- ဇာတ်ကွက်အလှည့်အပြောင်းများ၊ သည်းထိတ်ရင်ဖို အခိုက်အတန့်များကို ကွက်ကွက်ကွင်းကွင်း ပေါ်လွင်စေပါ။
-- Timestamps သို့မဟုတ် စင်တင်ညွှန်ကြားချက်များ (ဥပမာ [Scene 1], (Sound effect)) မထည့်ပါနှင့်။
-- မူရင်းအချက်အလက်ထဲတွင် ပါသော အမည်၊ ဖြစ်ရပ်၊ အချက်များကိုသာ သုံးပါ။ မူရင်းတွင် မပါသော ဇာတ်ကောင်၊ ဖြစ်ရပ်၊ ဇာတ်သိမ်းများကို ကိုယ်တိုင် မဖန်တီးပါနှင့်။
-- အသံထွက်ဖတ်ရမည့် မြန်မာစကားပြော ရီကပ် ဇာတ်ညွှန်း သီးသန့်သာ ထုတ်ပေးပါ။`;
-    
-    const data = await this.geminiRequest(
-      GEMINI_MODELS.REWRITE,
-      { contents: [{ parts: [{ text: prompt }] }] },
-      0,
-      onRetry
-    );
-    
-    const textResult = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!textResult) throw new Error('No script generated by Gemini');
-    return textResult.trim();
+    return generateGroundedRecapScript(llm, transcript, {
+      style: options?.style,
+      tone: options?.tone,
+      language: options?.targetLanguage === 'en' ? 'en' : 'mm',
+      targetMinutes: minutes,
+      sourceSeconds: options?.sourceSeconds,
+      mode: options?.mode,
+      frames: options?.frames,
+      onStage: options?.onStage,
+    });
   }
 
   /**

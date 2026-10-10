@@ -33,6 +33,7 @@ export const GEMINI_MODELS = {
   TTS: 'gemini-3.8-flash-lite-tts',
   TTS_STUDIO: 'gemini-3.8-flash-tts',
   VIDEO: 'gemini-3.1-flash-lite',
+  SCRIPT: 'gemini-3.8-flash',
   TRANSCRIBE: 'gemini-3.5-transcribe'
 };
 

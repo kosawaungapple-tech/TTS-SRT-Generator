@@ -58,6 +58,7 @@ import { GeminiTTSService } from '../services/geminiService';
 import { renderSceneRecap, getRenderServerUrl } from '../services/recapRenderService';
 import { drawSubtitleOverlay, renderSubtitlePng, type SubtitleStyle } from '../utils/subtitleOverlay';
 import { captureVideoFrames } from '../utils/videoFrames';
+import { estimateNarrationSeconds, type RecapStage } from '../services/recapScriptPipeline';
 import { getRecapOutputSize } from '../utils/recapGeometry';
 import { apiChannelManager } from '../services/apiChannelManager';
 import { VOICE_OPTIONS } from '../constants';
@@ -1004,7 +1005,7 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
     if (!recapScript) return { words: 0, chars: 0, estTime: '00:00' };
     const words = recapScript.trim().split(/\s+/).filter(Boolean).length;
     const chars = recapScript.length;
-    const estSec = Math.round((words / 130) * 60);
+    const estSec = estimateNarrationSeconds(recapScript, recapTargetLanguage);
     const m = Math.floor(estSec / 60);
     const s = estSec % 60;
     return {
@@ -1012,7 +1013,7 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
       chars,
       estTime: `${m}:${String(s).padStart(2, '0')}`
     };
-  }, [recapScript]);
+  }, [recapScript, recapTargetLanguage]);
 
   // 1. Auto Recap Script Generator
   const handleGenerateRecapScript = async () => {
@@ -1053,14 +1054,26 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
       summary: 'အနှစ်ချုပ် ဗဟုသုတနှင့် အဓိကအချက်များ (Key story takeaways and educational summaries)'
     };
 
-    const durationMap: Record<string, string> = {
-      short: 'Short (၁-၂ မိနစ် အမြန်ရီကပ် / 150-250 words)',
-      medium: 'Medium (၃-၅ မိနစ် ပုံမှန်ရုပ်ရှင်ရီကပ် / 400-600 words)',
-      full: 'Full Extended (၈-၁၀ မိနစ် အပြည့်အစုံ ရီကပ် / 800+ words)'
-    };
+    const minutesMap: Record<string, number> = { short: 1.5, medium: 4, full: 9 };
 
     try {
       const gemini = getGeminiInstance();
+      // A few real frames help the model name who/what is actually on screen.
+      let frames: string[] = [];
+      if (rawVideoFile && videoDuration > 0) {
+        try {
+          setRecapRetryNotice(isMm ? 'ဗီဒီယိုပုံများ ယူနေပါသည်…' : 'Sampling video frames…');
+          const n = 5;
+          frames = await captureVideoFrames(rawVideoFile, Array.from({ length: n }, (_, i) => (videoDuration * (i + 0.5)) / n));
+        } catch { frames = []; }
+      }
+      const stageText = (st: RecapStage): string => {
+        if (st.stage === 'bible') return isMm ? `၁/၄ ဇာတ်လမ်းကို နားလည်အောင် ဖတ်နေသည် (${st.done}/${st.total})` : `1/4 Reading the story (${st.done}/${st.total})`;
+        if (st.stage === 'outline') return isMm ? '၂/၄ ဇာတ်ကွက်အစီအစဉ် ဆွဲနေသည်' : '2/4 Planning the beats';
+        if (st.stage === 'write') return isMm ? `၃/၄ ဇာတ်ညွှန်း ရေးနေသည် (${st.done}/${st.total})` : `3/4 Writing (${st.done}/${st.total})`;
+        if (st.stage === 'edit') return isMm ? '၄/၄ ပြန်လည်ပြင်ဆင်နေသည်' : '4/4 Polishing';
+        return isMm ? 'ရေးနေသည်…' : 'Writing…';
+      };
       const script = await gemini.generateMovieRecapScript(
         sourceContent,
         (seconds, msg) => {
@@ -1069,8 +1082,11 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
         {
           style: styleMap[recapStyle] || recapStyle,
           tone: 'Engaging, viral, cinematic, and captivating',
-          duration: durationMap[recapDuration] || recapDuration,
-          targetLanguage: recapTargetLanguage
+          targetMinutes: recapStyle === 'tiktok' ? 1 : minutesMap[recapDuration] ?? 4,
+          sourceSeconds: recapSource === 'subtitles' && videoDuration > 0 ? videoDuration : undefined,
+          targetLanguage: recapTargetLanguage,
+          frames,
+          onStage: st => setRecapRetryNotice(stageText(st)),
         }
       );
       setRecapScript(script);
