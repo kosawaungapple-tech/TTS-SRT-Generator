@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, Check, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Clipboard, Mic2, Play, Info, Sparkles, X, Calendar, Layers, Pause, RotateCcw, BookOpen, Eye, EyeOff, Zap, Film, Crosshair } from 'lucide-react';
+import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, Check, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Clipboard, Mic2, Play, Info, Sparkles, X, Calendar, Layers, Pause, RotateCcw, BookOpen, Eye, EyeOff, Zap, Film, Crosshair, Clapperboard } from 'lucide-react';
 import { WelcomePage } from './components/WelcomePage';
 import { Header } from './components/Header';
 import { ApiKeyModal } from './components/ApiKeyModal';
@@ -9,6 +9,7 @@ import { VoiceConfig } from './components/VoiceConfig';
 import { OutputPreview } from './components/OutputPreview';
 import { AdminDashboard } from './components/AdminDashboard';
 import { VideoTranscriber } from './components/VideoTranscriber';
+import { AutoRecapStudio } from './components/AutoRecapStudio';
 import { ThumbnailCreator } from './components/ThumbnailCreator';
 import { VideoEditorStudio, VideoEditorSharedMedia } from './components/VideoEditorStudio';
 import { PrivacyPolicy } from './components/PrivacyPolicy';
@@ -69,7 +70,7 @@ export default function App() {
   const [isAudiobookProcessing, setIsAudiobookProcessing] = useState(false);
   const [isVideoEditorProcessing, setIsVideoEditorProcessing] = useState(false);
   const [videoEditorInitialData, setVideoEditorInitialData] = useState<VideoEditorSharedMedia | null>(null);
-  const [subtitlesSubTab, setSubtitlesSubTab] = useState<'transcriber' | 'video-editor'>('transcriber');
+  const [subtitlesSubTab, setSubtitlesSubTab] = useState<'transcriber' | 'auto-recap' | 'video-editor'>('transcriber');
   const [profile, setProfile] = useState<VBSUserControl | null>(null);
   const [vbsId, setVbsId] = useState<string | null>(localStorage.getItem('VBS_USER_ID'));
   const [userControl, setUserControl] = useState<VBSUserControl | null>(null);
@@ -2460,7 +2461,7 @@ export default function App() {
                 ) : (
                   <div className="space-y-6">
                     {/* Sub-Tabs under AI Subtitles: 1. AI Subtitles (SRT) | 2. Video Editor & Mirror Studio */}
-                    <div className="flex items-center justify-center gap-2 max-w-xl mx-auto bg-black/50 p-1.5 rounded-2xl border border-white/10 backdrop-blur-xl shadow-2xl">
+                    <div className="flex items-center justify-center gap-2 max-w-2xl mx-auto bg-black/50 p-1.5 rounded-2xl border border-white/10 backdrop-blur-xl shadow-2xl">
                       <button
                         type="button"
                         onClick={() => {
@@ -2474,7 +2475,23 @@ export default function App() {
                         }`}
                       >
                         <FileText size={16} />
-                        <span>{language === 'mm' ? 'AI စာတန်းထိုး (SRT Subtitles)' : 'AI Subtitles (SRT)'}</span>
+                        <span>{language === 'mm' ? 'စကားပြော → SRT စာသား' : 'Speech → SRT'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSubtitlesSubTab('auto-recap');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                          subtitlesSubTab === 'auto-recap'
+                            ? 'bg-amber-400 text-black shadow-lg shadow-amber-400/20 scale-[1.02]'
+                            : 'text-slate-400 hover:text-white hover:bg-white/5'
+                        }`}
+                      >
+                        <Clapperboard size={16} />
+                        <span>Auto Recap</span>
                       </button>
 
                       <button
@@ -2490,7 +2507,7 @@ export default function App() {
                         }`}
                       >
                         <Film size={16} />
-                        <span>{language === 'mm' ? 'Video Editor & Mirror 🎬' : 'Video Editor & Mirror 🎬'}</span>
+                        <span>{language === 'mm' ? 'Video Editor & Mirror' : 'Video Editor & Mirror'}</span>
                         {videoEditorInitialData && (
                           <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse" />
                         )}
@@ -2527,6 +2544,15 @@ export default function App() {
                             window.scrollTo({ top: 0, behavior: 'smooth' });
                           }, 100);
                         }}
+                      />
+                    </div>
+
+                    <div className={subtitlesSubTab === 'auto-recap' ? 'block w-full' : 'hidden'}>
+                      <AutoRecapStudio
+                        showToast={showToast}
+                        isAdmin={isVbsAdmin}
+                        isMm={language === 'mm'}
+                        onNavigateToSettings={() => handleTabSwitch('tools')}
                       />
                     </div>
 
