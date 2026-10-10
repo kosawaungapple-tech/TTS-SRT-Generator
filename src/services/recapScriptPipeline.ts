@@ -54,6 +54,22 @@ interface Bible {
 }
 interface Section { title: string; events: number[]; emotion?: string; tease?: string }
 
+const FOREIGN = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u0e00-\u0e7f]/g;
+
+/** Burmese output must be Burmese: no Chinese/Japanese/Korean/Thai text copied from the source dialogue. */
+export function languageOk(text: string, language: 'mm' | 'en'): boolean {
+  if (language === 'en') return (text.match(FOREIGN) || []).length === 0;
+  if ((text.match(FOREIGN) || []).length > 0) return false;
+  const mm = (text.match(/[\u1000-\u109f]/g) || []).length;
+  const latin = (text.match(/[A-Za-z]/g) || []).length;
+  return mm >= latin; // a few Latin names are fine, a mostly-English paragraph is not
+}
+
+const LANG_RULE = (language: 'mm' | 'en') =>
+  language === 'mm'
+    ? 'LANGUAGE: every word you output must be Burmese (မြန်မာ). The video dialogue may be Chinese/English/etc.: understand it and TELL it in Burmese, never copy or quote foreign-language sentences. Write foreign names in Burmese script.'
+    : 'LANGUAGE: every word you output must be English. If the video dialogue is in another language, translate it; never copy foreign-language sentences.';
+
 const CHARS_PER_MIN = { mm: 520, en: 800 };
 
 export function computeTargetChars(
@@ -160,11 +176,14 @@ async function watchVideo(
     const prompt = `You are a film editor WATCHING a video before writing its recap. This is the part from ${fmtT(a)} to ${fmtT(b)} (${frames.length} frames attached in time order).
 Describe what really happens: who is on screen and what they do, where, what changes, and what is said (dialogue below). Use only what the frames and dialogue show; if something is unclear say so instead of guessing.
 Return JSON: {"setting":"place/time/kind of story if visible","characters":[{"name":"name as spoken/shown, or a short visual description like 'the man in the red jacket'","who":"role, short"}],"events":[{"t":<seconds from video start>,"text":"one concrete sentence: who does what, the visible cause/result, and the visible emotion or tension (expression, tone of voice, danger, relief)"}]}
-4-8 events, chronological; do not skip small turning points. Write values in ${language === 'mm' ? 'Burmese' : 'English'}.
+4-8 events, chronological; do not skip small turning points. ${LANG_RULE(language)}
 
 DIALOGUE IN THIS PART:
 ${dialogue || '(none)'}`;
-    const raw = await llm(prompt, { json: true, images: frames });
+    let raw = await llm(prompt, { json: true, images: frames });
+    if (!languageOk(raw, language)) {
+      raw = await llm(prompt + '\n\nYour previous answer contained text in the wrong language. Redo it, fully in the required language.', { json: true, images: frames });
+    }
     const part = extractJson<{ setting?: string; characters?: { name: string; who?: string }[]; events?: { t?: number; text?: string }[] }>(raw);
     settings[i] = String(part.setting || '');
     chars[i] = (part.characters || []).map(c => ({ name: String(c.name), who: String(c.who || '') }));
@@ -215,7 +234,7 @@ async function buildBible(
     const prompt = `You are analysing part ${i + 1}/${chunks.length} of a video's transcript/subtitles${frames?.length && i === 0 ? ' (sample frames attached)' : ''}.
 Extract ONLY what is actually said or shown. Do not guess.
 Return JSON: {"setting":"where/when/what kind of story, one sentence","characters":[{"name":"name or role as used in the source","who":"who they are / relation, short"}],"events":["concrete things that happen, in order, one short sentence each, include who did what and why/result"]}
-Write values in ${language === 'mm' ? 'Burmese (keep names as in the source)' : 'English'}.
+${LANG_RULE(language)}
 
 SOURCE:
 ${chunks[i]}`;
@@ -310,6 +329,7 @@ STORY BIBLE (for names and facts only):
 ${bibleText(bible)}
 
 ${prevTail ? `The narration so far ends with: "${prevTail}"\nContinue naturally from it; do not repeat it.\n` : ''}${opening ? 'The first paragraph is the HOOK: open on the most gripping real situation from the events (no generic praise, no "this movie is about").\n' : ''}${closing ? 'The last paragraph lands the ending exactly as the events say, with one closing line.\n' : ''}
+${LANG_RULE(language)}
 Write each section below using ONLY its allowed events. Every paragraph must list the event numbers it is based on; a paragraph may not state a fact that is not in those events. Add cause→effect, the characters' feelings and the stakes that the events imply, and vivid sensory detail from what is described, but no new facts, names or plot points. Cover EVERY listed event — never skip one. 
 Return JSON: {"sections":[{"section":<number>,"paragraphs":[{"events":[<numbers>],"text":"narration"}]}]}
 
@@ -328,6 +348,7 @@ ${lines}`;
         if (!paras.length) return null;
         // grounded = every paragraph cites only allowed events, and at least one
         if (paras.some(p => p.events.length === 0 || p.events.some(e => !allowed.has(e)))) return null;
+        if (paras.some(p => !languageOk(p.text, language))) return null;
         out.push(paras);
       }
       return out;
@@ -460,6 +481,18 @@ ${source.slice(0, 24000)}`,
     written.forEach(sec => sec.forEach(p => { paragraphs.push(p.text); paraEvents.push(p.events); }));
   }
   opts.onStage?.({ stage: 'write', done: planned.length, total: planned.length });
+
+  // Final guard: any paragraph still in the wrong language is rewritten (never shipped as is).
+  for (let i = 0; i < paragraphs.length; i++) {
+    if (languageOk(paragraphs[i], language)) continue;
+    try {
+      const fixed = (await llm(
+        `${LANG_RULE(language)}\nRewrite this recap narration paragraph entirely in ${language === 'mm' ? 'spoken Burmese' : 'English'}, same meaning, same emotion, no foreign-language text. Output only the paragraph.\n\n${paragraphs[i]}`
+      )).trim();
+      if (fixed && languageOk(fixed, language)) paragraphs[i] = fixed;
+      else paragraphs[i] = paragraphs[i].replace(FOREIGN, '').replace(/\s{2,}/g, ' ').trim() || paragraphs[i];
+    } catch { /* keep */ }
+  }
 
   const draft = paragraphs.join('\n\n');
 
