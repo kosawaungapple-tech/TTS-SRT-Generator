@@ -294,11 +294,6 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
       });
       setActiveSubtitleLang('original');
 
-      // Automatically generate Movie Recap Script
-      if (result.transcript.text) {
-        handleGenerateRecapScript(result.transcript.text);
-      }
-
       showToast(isMm ? 'အချိန်ကိုက် SRT စာတန်းထိုး အောင်မြင်စွာ ထုတ်ယူပြီးပါပြီ! ⚡' : 'SRT subtitles generated successfully!', 'success');
       
       if (userControl?.vbsId) {

@@ -28,6 +28,8 @@ export interface SceneRecapRenderParams {
   videoFileName?: string;
   scenes: RecapPlanScene[];
   tts: TTSConfig;
+  /** Already generated narration (one WAV per scene); skips the TTS step. */
+  audios?: Blob[];
   /** Output frame size, e.g. from getRecapOutputSize(). */
   outputWidth: number;
   outputHeight: number;
@@ -57,8 +59,8 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
   let step = 0;
 
   // 1) One narration clip per scene, so the server knows each line's real length.
-  const audios: Blob[] = [];
-  for (let i = 0; i < scenes.length; i++) {
+  const audios: Blob[] = p.audios && p.audios.length === scenes.length ? [...p.audios] : [];
+  for (let i = 0; i < scenes.length && audios.length < scenes.length; i++) {
     if (p.signal?.aborted) throw new Error('Cancelled');
     p.onProgress?.(step++, totalSteps, `Voiceover ${i + 1}/${scenes.length}`);
     const result = await p.gemini.generateTTS(scenes[i].narration, p.tts, undefined, undefined, p.onRetry);
