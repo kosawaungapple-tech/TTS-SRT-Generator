@@ -17,6 +17,7 @@ export interface LlmCallOptions {
 export type RecapLlm = (prompt: string, opts?: LlmCallOptions) => Promise<string>;
 
 export type RecapStage =
+  | { stage: 'watch'; done: number; total: number }
   | { stage: 'bible'; done: number; total: number }
   | { stage: 'outline' }
   | { stage: 'write'; done: number; total: number }
@@ -34,6 +35,12 @@ export interface RecapScriptOptions {
   /** 'quick' = one call, no grounding stages (used for background auto-generation) */
   mode?: 'full' | 'quick';
   frames?: string[];
+  /** Timed dialogue/subtitles of the source video (enables the per-window "watch" step) */
+  cues?: { start: number; end: number; text: string }[];
+  /** Returns base64 JPEG frames for a time window of the source video. Enables the "watch" step. */
+  getFrames?: (startSec: number, endSec: number) => Promise<string[]>;
+  /** How much of the source the recap should cover: short highlights .4, medium .7, full 1 */
+  coverage?: number;
   onStage?: (s: RecapStage) => void;
 }
 
@@ -50,10 +57,16 @@ export function computeTargetChars(
   language: 'mm' | 'en',
   targetMinutes: number,
   sourceSeconds?: number,
-  eventCount?: number
+  eventCount?: number,
+  coverage?: number
 ): number {
-  let minutes = Math.max(0.5, targetMinutes);
-  if (sourceSeconds && sourceSeconds > 0) minutes = Math.min(minutes, Math.max(0.5, (sourceSeconds / 60) * 0.85));
+  // When the source video length is known the narration is paced to what is on screen:
+  // coverage 1 = tell the whole video at speaking pace, lower = highlights only.
+  if (sourceSeconds && sourceSeconds > 0 && coverage) {
+    const chars = Math.round((sourceSeconds / 60) * CHARS_PER_MIN[language] * coverage);
+    return Math.max(200, chars);
+  }
+  const minutes = Math.max(0.5, targetMinutes);
   let chars = Math.round(minutes * CHARS_PER_MIN[language]);
   // Never pad: a handful of facts cannot honestly fill a long script.
   if (eventCount && eventCount > 0) chars = Math.min(chars, Math.max(300, eventCount * 380));
@@ -110,6 +123,76 @@ function bibleText(b: Bible): string {
   const chars = b.characters.map(c => `- ${c.name}: ${c.who}`).join('\n') || '- (unknown)';
   const ev = b.events.map((e, i) => `E${i + 1}. ${e}`).join('\n');
   return `SETTING: ${b.setting || '(unknown)'}\nCHARACTERS:\n${chars}\nEVENTS (chronological):\n${ev}`;
+}
+
+const fmtT = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+
+/** "Watch" the video window by window: frames + the dialogue spoken in that window -> timed events. */
+async function watchVideo(
+  llm: RecapLlm,
+  opts: RecapScriptOptions,
+  language: 'mm' | 'en'
+): Promise<Bible> {
+  const dur = opts.sourceSeconds as number;
+  const count = Math.max(1, Math.min(20, Math.ceil(dur / 30)));
+  const len = dur / count;
+  const bible: Bible = { setting: '', characters: [], events: [] };
+  const seen = new Set<string>();
+  const perWindow: { t: number; text: string }[][] = new Array(count).fill(null).map(() => []);
+  const chars: { name: string; who: string }[][] = new Array(count).fill(null).map(() => []);
+  const settings: string[] = new Array(count).fill('');
+  let done = 0;
+  opts.onStage?.({ stage: 'watch', done: 0, total: count });
+
+  const runWindow = async (i: number) => {
+    const a = i * len;
+    const b = (i + 1) * len;
+    const frames = (await opts.getFrames!(a, b).catch(() => [])).slice(0, 5);
+    const dialogue = (opts.cues || [])
+      .filter(c => c.start < b && c.end > a)
+      .map(c => `[${fmtT(c.start)}] ${c.text.trim().replace(/\s+/g, ' ')}`)
+      .join('\n');
+    const prompt = `You are a film editor WATCHING a video before writing its recap. This is the part from ${fmtT(a)} to ${fmtT(b)} (${frames.length} frames attached in time order).
+Describe what really happens: who is on screen and what they do, where, what changes, and what is said (dialogue below). Use only what the frames and dialogue show; if something is unclear say so instead of guessing.
+Return JSON: {"setting":"place/time/kind of story if visible","characters":[{"name":"name as spoken/shown, or a short visual description like 'the man in the red jacket'","who":"role, short"}],"events":[{"t":<seconds from video start>,"text":"one concrete sentence: who does what, and the visible cause/result"}]}
+3-6 events, chronological. Write values in ${language === 'mm' ? 'Burmese' : 'English'}.
+
+DIALOGUE IN THIS PART:
+${dialogue || '(none)'}`;
+    const raw = await llm(prompt, { json: true, images: frames });
+    const part = extractJson<{ setting?: string; characters?: { name: string; who?: string }[]; events?: { t?: number; text?: string }[] }>(raw);
+    settings[i] = String(part.setting || '');
+    chars[i] = (part.characters || []).map(c => ({ name: String(c.name), who: String(c.who || '') }));
+    perWindow[i] = (part.events || [])
+      .map(e => ({ t: Number.isFinite(Number(e.t)) ? Math.min(b, Math.max(a, Number(e.t))) : a, text: String(e.text || '').trim() }))
+      .filter(e => e.text);
+    // never end up with an empty window: fall back to the spoken lines
+    if (!perWindow[i].length && dialogue) perWindow[i] = [{ t: a, text: dialogue.split('\n').slice(0, 3).join(' ') }];
+    done++;
+    opts.onStage?.({ stage: 'watch', done, total: count });
+  };
+
+  const queue = Array.from({ length: count }, (_, i) => i);
+  const worker = async () => {
+    while (queue.length) {
+      const i = queue.shift()!;
+      try { await runWindow(i); } catch (e) { if (done === 0 && queue.length === count - 1) throw e; done++; opts.onStage?.({ stage: 'watch', done, total: count }); }
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+
+  for (let i = 0; i < count; i++) {
+    if (!bible.setting && settings[i]) bible.setting = settings[i];
+    for (const c of chars[i]) {
+      const key = c.name.trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      bible.characters.push(c);
+    }
+    for (const e of perWindow[i].sort((x, y) => x.t - y.t)) bible.events.push(`[${fmtT(e.t)}] ${e.text}`);
+  }
+  if (bible.events.length === 0) throw new Error('Could not understand the video content');
+  return bible;
 }
 
 async function buildBible(
@@ -313,9 +396,18 @@ ${source.slice(0, 24000)}`,
     return out.trim();
   }
 
-  const bible = await buildBible(llm, source, language, opts.frames, opts.onStage);
-  const totalChars = computeTargetChars(language, minutes, opts.sourceSeconds, bible.events.length);
-  const sectionCount = Math.max(2, Math.min(10, Math.round(totalChars / (language === 'mm' ? 450 : 700)), bible.events.length));
+  const watching = !!(opts.getFrames && opts.sourceSeconds && opts.sourceSeconds > 0);
+  const bible = watching
+    ? await watchVideo(llm, opts, language)
+    : await buildBible(llm, source, language, opts.frames, opts.onStage);
+  const totalChars = computeTargetChars(
+    language,
+    minutes,
+    opts.sourceSeconds,
+    watching ? undefined : bible.events.length,
+    watching ? opts.coverage ?? 1 : undefined
+  );
+  const sectionCount = Math.max(2, Math.min(14, Math.round(totalChars / (language === 'mm' ? 450 : 700)), bible.events.length));
 
   opts.onStage?.({ stage: 'outline' });
   const sections = await buildOutline(llm, bible, sectionCount);

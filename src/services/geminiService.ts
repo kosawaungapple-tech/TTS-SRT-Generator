@@ -986,6 +986,9 @@ ${linesToTranslate}
       targetLanguage?: 'mm' | 'en';
       mode?: 'full' | 'quick';
       frames?: string[];
+      cues?: { start: number; end: number; text: string }[];
+      getFrames?: (startSec: number, endSec: number) => Promise<string[]>;
+      coverage?: number;
       onStage?: (s: RecapStage) => void;
     }
   ): Promise<string> {
@@ -1032,6 +1035,9 @@ ${linesToTranslate}
       sourceSeconds: options?.sourceSeconds,
       mode: options?.mode,
       frames: options?.frames,
+      cues: options?.cues,
+      getFrames: options?.getFrames,
+      coverage: options?.coverage,
       onStage: options?.onStage,
     });
   }
