@@ -49,7 +49,7 @@ interface Bible {
   characters: { name: string; who: string }[];
   events: string[];
 }
-interface Section { title: string; events: number[] }
+interface Section { title: string; events: number[]; emotion?: string; tease?: string }
 
 const CHARS_PER_MIN = { mm: 520, en: 800 };
 
@@ -109,14 +109,16 @@ function chunkSource(text: string, max = 6000): string[] {
 
 function voiceRules(language: 'mm' | 'en', style: string, tone: string): string {
   if (language === 'en') {
-    return `VOICE: ${style}. Tone: ${tone}. Spoken, punchy, present tense, short sentences. No headings, timestamps, emojis, stage directions or markdown. Never invent names, events or endings.`;
+    return `VOICE: ${style}. Tone: ${tone}. Spoken, punchy, present tense, short sentences. Make the audience FEEL it: show fear, hope, tension and stakes the footage/events actually imply, ask the audience questions, vary rhythm (short lines at peaks), and end each section on a question or teaser that pulls into the next. No headings, timestamps, emojis, stage directions or markdown. Never invent names, events or endings.`;
   }
   return `အသံ/စတိုင်: ${style}။ လေသံ: ${tone}။
 - မြန်မာ ရီကပ်ဇာတ်ကားပြောသူ၏ သဘာဝစကားပြော (…တယ်၊ …ပါတယ်၊ …လိုက်တော့၊ …ပေမယ့်) ကို သုံးပါ။ စာအုပ်စာပေဟန် (၏၊ ၌၊ သည်) မသုံးပါနှင့်။
 - စာကြောင်းတိုတို၊ ပုံရိပ်ပေါ်စေသော ကြိယာများဖြင့် ရေးပါ။ တစ်ကြောင်းတည်းတွင် အကြောင်းအရာ တစ်ခုသာ ထားပါ။
 - အလွတ်အချော့ စကားလုံးများ ("အလွန်စိတ်ဝင်စားဖွယ်", "ထူးဆန်းသော ဇာတ်လမ်း" စသည့် ယေဘုယျချီးမွမ်းစကား) နှင့် ထပ်ခါထပ်ခါ ပြောခြင်း မလုပ်ပါနှင့်။ ဖြစ်ရပ်၊ လုပ်ရပ်၊ အကြောင်းအကျိုး ကိုသာ ပြောပါ။
 - Timestamp၊ ခေါင်းစဉ်၊ [Scene]၊ (Sound effect)၊ emoji၊ markdown မထည့်ပါနှင့်။
-- မူရင်းတွင် မပါသော ဇာတ်ကောင်၊ အမည်၊ ဖြစ်ရပ်၊ ဇာတ်သိမ်း မဖန်တီးပါနှင့်။`;
+- မူရင်းတွင် မပါသော ဇာတ်ကောင်၊ အမည်၊ ဖြစ်ရပ်၊ ဇာတ်သိမ်း မဖန်တီးပါနှင့်။
+- ရသ (EMOTION) ကို အသက်သွင်းပါ: ဇာတ်ကောင်ရဲ့ ကြောက်စိတ်၊ မျှော်လင့်ချက်၊ နှောင်ကြိုးတွေကို ပြောပါ (မျက်နှာအမူအရာ၊ အသံ၊ အခြေအနေကနေ ထင်ရှားတာကိုသာ)။ ပရိသတ်ကို မေးခွန်းမေးပါ ("ဒီလူ ဘာကြောင့် ပြုံးနေတာလဲ?")။ တင်းမာတဲ့နေရာမှာ စာကြောင်းတို၊ သက်သာတဲ့နေရာမှာ ရှည်ပါ။ အပိုင်းတစ်ခုချင်းကို နောက်အပိုင်းကို စိတ်ဝင်စားစေမယ့် မေးခွန်း/အရိပ်အမြွက်ဖြင့် ပိတ်ပါ။
+- စတိုင်ကို သာဓကအတိုင်း ခံစားပါ၊ အကြောင်းအရာကို မကူးပါနှင့်: "တစ်ညတည်းနဲ့ သူ့ဘဝတစ်ခုလုံး ပြောင်းသွားမယ်လို့ ဘယ်သူမှ မထင်ခဲ့ဘူး။ ဒါပေမယ့် တံခါးကို ဖွင့်လိုက်တဲ့အချိန်မှာ သူမြင်လိုက်ရတာက... ဒါကို ကြည့်ပြီး ခြေထောက်တောင် မလှုပ်နိုင်တော့ဘူး။"`;
 }
 
 function bibleText(b: Bible): string {
@@ -154,8 +156,8 @@ async function watchVideo(
       .join('\n');
     const prompt = `You are a film editor WATCHING a video before writing its recap. This is the part from ${fmtT(a)} to ${fmtT(b)} (${frames.length} frames attached in time order).
 Describe what really happens: who is on screen and what they do, where, what changes, and what is said (dialogue below). Use only what the frames and dialogue show; if something is unclear say so instead of guessing.
-Return JSON: {"setting":"place/time/kind of story if visible","characters":[{"name":"name as spoken/shown, or a short visual description like 'the man in the red jacket'","who":"role, short"}],"events":[{"t":<seconds from video start>,"text":"one concrete sentence: who does what, and the visible cause/result"}]}
-3-6 events, chronological. Write values in ${language === 'mm' ? 'Burmese' : 'English'}.
+Return JSON: {"setting":"place/time/kind of story if visible","characters":[{"name":"name as spoken/shown, or a short visual description like 'the man in the red jacket'","who":"role, short"}],"events":[{"t":<seconds from video start>,"text":"one concrete sentence: who does what, the visible cause/result, and the visible emotion or tension (expression, tone of voice, danger, relief)"}]}
+4-8 events, chronological; do not skip small turning points. Write values in ${language === 'mm' ? 'Burmese' : 'English'}.
 
 DIALOGUE IN THIS PART:
 ${dialogue || '(none)'}`;
@@ -252,7 +254,8 @@ async function buildOutline(llm: RecapLlm, bible: Bible, sectionCount: number): 
     const raw = await llm(
       `Plan a recap narration as ${sectionCount} sections (hook first, escalation, turning point, climax, ending).
 Assign EVERY event number below to exactly one section, keeping chronological order (sections may not overlap or skip).
-Return JSON: {"sections":[{"title":"short purpose of the section","events":[1,2,3]}]}
+For each section also give the dominant feeling the audience should have ("emotion", e.g. dread, hope, betrayal, relief, awe) and a one-line cliffhanger/question that pulls into the next section ("tease"; for the last section, the closing punch).
+Return JSON: {"sections":[{"title":"short purpose of the section","emotion":"...","tease":"...","events":[1,2,3]}]}
 
 ${bibleText(bible)}`,
       { json: true }
@@ -263,7 +266,7 @@ ${bibleText(bible)}`,
     for (const s of parsed) {
       const evs = (s.events || []).map(Number).filter(n => Number.isInteger(n) && n >= 1 && n <= count && !used.has(n));
       evs.forEach(n => used.add(n));
-      if (evs.length) clean.push({ title: String(s.title || ''), events: evs });
+      if (evs.length) clean.push({ title: String(s.title || ''), events: evs, emotion: s.emotion ? String(s.emotion) : undefined, tease: s.tease ? String(s.tease) : undefined });
     }
     // add any forgotten events to the nearest section so nothing is lost
     for (let n = 1; n <= count; n++) {
@@ -293,7 +296,7 @@ async function writeBatch(
 ): Promise<Para[][]> {
   const lines = batch.map(b => {
     const evs = b.section.events.map(n => `E${n}. ${bible.events[n - 1]}`).join('\n');
-    return `SECTION ${b.index + 1}/${total} — ${b.section.title}\nTarget length ≈ ${b.chars} characters.\nAllowed events:\n${evs}`;
+    return `SECTION ${b.index + 1}/${total} — ${b.section.title}\nFeeling to evoke: ${b.section.emotion || 'fitting the events'}\nEnd the section with this pull toward what comes next: ${b.section.tease || '(natural cliffhanger)'}\nTarget length ≈ ${b.chars} characters (do not write less than ${Math.round(b.chars * 0.9)}).\nAllowed events:\n${evs}`;
   }).join('\n\n');
   const opening = batch[0].index === 0;
   const closing = batch[batch.length - 1].index === total - 1;
@@ -304,7 +307,7 @@ STORY BIBLE (for names and facts only):
 ${bibleText(bible)}
 
 ${prevTail ? `The narration so far ends with: "${prevTail}"\nContinue naturally from it; do not repeat it.\n` : ''}${opening ? 'The first paragraph is the HOOK: open on the most gripping real situation from the events (no generic praise, no "this movie is about").\n' : ''}${closing ? 'The last paragraph lands the ending exactly as the events say, with one closing line.\n' : ''}
-Write each section below using ONLY its allowed events. Every paragraph must list the event numbers it is based on; a paragraph may not state a fact that is not in those events. Add cause→effect and emotion between events, but no new facts.
+Write each section below using ONLY its allowed events. Every paragraph must list the event numbers it is based on; a paragraph may not state a fact that is not in those events. Add cause→effect, the characters' feelings and the stakes that the events imply, and vivid sensory detail from what is described, but no new facts, names or plot points. Cover EVERY listed event — never skip one. 
 Return JSON: {"sections":[{"section":<number>,"paragraphs":[{"events":[<numbers>],"text":"narration"}]}]}
 
 ${lines}`;
@@ -330,6 +333,13 @@ ${lines}`;
 
   let raw = await llm(prompt, { json: true });
   let res = parse(raw);
+  const want = batch.reduce((n, b) => n + b.chars, 0);
+  const have = (r: Para[][] | null) => (r ? r.flat().reduce((n, p) => n + p.text.length, 0) : 0);
+  if (res && have(res) < want * 0.7) {
+    const raw2 = await llm(prompt + `\n\nIMPORTANT: your previous answer was too short (${have(res)} of ~${want} characters) and flat. Rewrite it fuller: go through every event, add what the characters see, feel and risk, and keep the emotional build-up. Still cite events correctly.`, { json: true });
+    const res2 = parse(raw2);
+    if (res2 && have(res2) > have(res)) { res = res2; raw = raw2; }
+  }
   if (!res) {
     raw = await llm(prompt + '\n\nIMPORTANT: your previous answer cited events outside the allowed list or was malformed. Cite only allowed event numbers and return valid JSON.', { json: true });
     res = parse(raw);
@@ -358,7 +368,7 @@ ${rules}
 FACTS (the only allowed facts):
 ${bibleText(bible)}
 
-Improve the draft: smoother transitions, remove repeated phrases and filler, make the hook sharper, keep every event in the same order, keep roughly the same length (±15%). Do NOT add facts. Output ONLY the final narration text, paragraphs separated by a blank line.
+Improve the draft: smoother transitions, remove repeated phrases and filler, make the hook gripping, sharpen the emotional peaks, keep the rhetorical questions and section-ending teasers, land a memorable closing line, keep every event in the same order, keep roughly the same length (±15%). Do NOT add facts. Output ONLY the final narration text, paragraphs separated by a blank line.
 
 DRAFT:
 ${script}`
