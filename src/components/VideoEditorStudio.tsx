@@ -1058,16 +1058,16 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
 
     try {
       const gemini = getGeminiInstance();
-      // A few real frames help the model name who/what is actually on screen.
-      let frames: string[] = [];
-      if (rawVideoFile && videoDuration > 0) {
-        try {
-          setRecapRetryNotice(isMm ? 'ဗီဒီယိုပုံများ ယူနေပါသည်…' : 'Sampling video frames…');
-          const n = 5;
-          frames = await captureVideoFrames(rawVideoFile, Array.from({ length: n }, (_, i) => (videoDuration * (i + 0.5)) / n));
-        } catch { frames = []; }
-      }
+      // The model "watches" the video window by window: real frames + the dialogue of that window.
+      const canWatch = !!rawVideoFile && videoDuration > 0 && recapSource === 'subtitles';
+      const getFrames = canWatch
+        ? async (a: number, b: number) => {
+            const n = 4;
+            return captureVideoFrames(rawVideoFile as File, Array.from({ length: n }, (_, i) => a + ((b - a) * (i + 0.5)) / n), 448, 0.6);
+          }
+        : undefined;
       const stageText = (st: RecapStage): string => {
+        if (st.stage === 'watch') return isMm ? `ဗီဒီယိုကို ကြည့်နေသည် (${st.done}/${st.total} အပိုင်း)` : `Watching the video (${st.done}/${st.total})`;
         if (st.stage === 'bible') return isMm ? `၁/၄ ဇာတ်လမ်းကို နားလည်အောင် ဖတ်နေသည် (${st.done}/${st.total})` : `1/4 Reading the story (${st.done}/${st.total})`;
         if (st.stage === 'outline') return isMm ? '၂/၄ ဇာတ်ကွက်အစီအစဉ် ဆွဲနေသည်' : '2/4 Planning the beats';
         if (st.stage === 'write') return isMm ? `၃/၄ ဇာတ်ညွှန်း ရေးနေသည် (${st.done}/${st.total})` : `3/4 Writing (${st.done}/${st.total})`;
@@ -1083,9 +1083,11 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
           style: styleMap[recapStyle] || recapStyle,
           tone: 'Engaging, viral, cinematic, and captivating',
           targetMinutes: recapStyle === 'tiktok' ? 1 : minutesMap[recapDuration] ?? 4,
-          sourceSeconds: recapSource === 'subtitles' && videoDuration > 0 ? videoDuration : undefined,
+          sourceSeconds: canWatch ? videoDuration : undefined,
           targetLanguage: recapTargetLanguage,
-          frames,
+          cues: cues.map(c => ({ start: c.startSeconds, end: c.endSeconds, text: c.text })),
+          getFrames,
+          coverage: recapDuration === 'short' ? 0.4 : recapDuration === 'full' ? 1 : 0.7,
           onStage: st => setRecapRetryNotice(stageText(st)),
         }
       );
