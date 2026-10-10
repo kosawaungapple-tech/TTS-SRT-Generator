@@ -11,6 +11,7 @@ import { initializeApp, getApps, getApp } from "firebase-admin/app";
 import firebaseConfig from "./firebase-applet-config.json" with { type: "json" };
 import { GoogleGenAI } from "@google/genai";
 import { MediaResolverService } from "./src/services/mediaResolverService";
+import { registerRecapRoutes } from "./src/server/recapRender";
 
 // Initialize Firebase Admin
 const app = getApps().length 
@@ -52,6 +53,9 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "500mb", extended: true }));
   app.use("/output", express.static("public/output"));
   app.use("/worker", express.static("public/worker"));
+
+  // Scene-based recap renderer (/api/recap/render)
+  registerRecapRoutes(app, upload);
 
   // Worker Script Download Routes
   app.get("/api/worker/download/:type", (req, res) => {

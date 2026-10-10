@@ -55,6 +55,11 @@ import {
   splitSentenceIntoCueBlocks 
 } from '../utils/subtitleUtils';
 import { GeminiTTSService } from '../services/geminiService';
+import { renderSceneRecap, getRenderServerUrl } from '../services/recapRenderService';
+import { drawSubtitleOverlay, renderSubtitlePng, type SubtitleStyle } from '../utils/subtitleOverlay';
+import { captureVideoFrames } from '../utils/videoFrames';
+import { estimateNarrationSeconds, type RecapStage } from '../services/recapScriptPipeline';
+import { getRecapOutputSize } from '../utils/recapGeometry';
 import { apiChannelManager } from '../services/apiChannelManager';
 import { VOICE_OPTIONS } from '../constants';
 
@@ -383,6 +388,8 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
   const [recapAutoDucking, setRecapAutoDucking] = useState<boolean>(true);
   const [recapHighlights, setRecapHighlights] = useState<RecapHighlight[]>([]);
   const [isAnalyzingHighlights, setIsAnalyzingHighlights] = useState<boolean>(false);
+  const [isBuildingSceneRecap, setIsBuildingSceneRecap] = useState<boolean>(false);
+  const [sceneRecapStatus, setSceneRecapStatus] = useState<string>('');
   const [recapRetryNotice, setRecapRetryNotice] = useState<string | null>(null);
 
   // Fast Offscreen Canvas for Blur Optimization
@@ -734,74 +741,19 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
       targetCtx.restore();
     }
 
-    // 7. Subtitles Overlay
+    // 7. Subtitles Overlay (shared with the server-rendered recap so both look identical)
     const activeCue = activeCueOverride !== undefined ? activeCueOverride : currentActiveCue;
     if (subtitlesEnabled && activeCue && activeCue.text.trim()) {
-      targetCtx.save();
-
-      const scaleMultiplier = canvasW / 1280;
-      const scaledFontSize = Math.round(subFontSize * scaleMultiplier);
-      targetCtx.font = `bold ${scaledFontSize}px ${subFontFamily}`;
-      targetCtx.textAlign = 'center';
-      targetCtx.textBaseline = 'middle';
-
-      // Auto-wrap lines that are too wide for the video frame or contain long unbroken text
-      const rawLines = activeCue.text.split('\n');
-      const maxAllowedWidth = canvasW * 0.86;
-      const lines: string[] = [];
-      rawLines.forEach(l => {
-        const trimmed = l.trim();
-        if (!trimmed) return;
-        if (targetCtx.measureText(trimmed).width <= maxAllowedWidth && trimmed.length <= 36) {
-          lines.push(trimmed);
-        } else {
-          lines.push(...wrapTextIntoLines(trimmed, 30, 2));
-        }
+      drawSubtitleOverlay(targetCtx, canvasW, canvasH, activeCue.text, {
+        fontSize: subFontSize,
+        fontFamily: subFontFamily,
+        fontColor: subFontColor,
+        strokeColor: subStrokeColor,
+        strokeWidth: subStrokeWidth,
+        bgBoxEnabled: subBgBoxEnabled,
+        bgBoxColor: subBgBoxColor,
+        positionY: subPositionY
       });
-      if (lines.length === 0) lines.push(activeCue.text);
-      const lineHeight = scaledFontSize * 1.35;
-      const totalTextHeight = lines.length * lineHeight;
-      const posY = (canvasH * (subPositionY / 100));
-
-      let maxLineWidth = 0;
-      lines.forEach(line => {
-        const m = targetCtx.measureText(line);
-        if (m.width > maxLineWidth) maxLineWidth = m.width;
-      });
-
-      if (subBgBoxEnabled && maxLineWidth > 0) {
-        const boxPaddingX = 24 * scaleMultiplier;
-        const boxPaddingY = 12 * scaleMultiplier;
-        const boxW = maxLineWidth + boxPaddingX * 2;
-        const boxH = totalTextHeight + boxPaddingY * 2;
-        const boxX = (canvasW - boxW) / 2;
-        const boxY = posY - (totalTextHeight / 2) - boxPaddingY;
-        const radius = 12 * scaleMultiplier;
-
-        targetCtx.save();
-        targetCtx.fillStyle = subBgBoxColor;
-        targetCtx.beginPath();
-        targetCtx.roundRect(boxX, boxY, boxW, boxH, radius);
-        targetCtx.fill();
-        targetCtx.restore();
-      }
-
-      lines.forEach((line, lIdx) => {
-        const lineY = posY - (totalTextHeight / 2) + (lIdx * lineHeight) + (lineHeight / 2);
-
-        if (subStrokeWidth > 0) {
-          targetCtx.strokeStyle = subStrokeColor;
-          targetCtx.lineWidth = subStrokeWidth * scaleMultiplier;
-          targetCtx.lineJoin = 'round';
-          targetCtx.miterLimit = 2;
-          targetCtx.strokeText(line, canvasW / 2, lineY);
-        }
-
-        targetCtx.fillStyle = subFontColor;
-        targetCtx.fillText(line, canvasW / 2, lineY);
-      });
-
-      targetCtx.restore();
     }
 
     targetCtx.restore();
@@ -1053,7 +1005,7 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
     if (!recapScript) return { words: 0, chars: 0, estTime: '00:00' };
     const words = recapScript.trim().split(/\s+/).filter(Boolean).length;
     const chars = recapScript.length;
-    const estSec = Math.round((words / 130) * 60);
+    const estSec = estimateNarrationSeconds(recapScript, recapTargetLanguage);
     const m = Math.floor(estSec / 60);
     const s = estSec % 60;
     return {
@@ -1061,7 +1013,7 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
       chars,
       estTime: `${m}:${String(s).padStart(2, '0')}`
     };
-  }, [recapScript]);
+  }, [recapScript, recapTargetLanguage]);
 
   // 1. Auto Recap Script Generator
   const handleGenerateRecapScript = async () => {
@@ -1102,14 +1054,26 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
       summary: 'အနှစ်ချုပ် ဗဟုသုတနှင့် အဓိကအချက်များ (Key story takeaways and educational summaries)'
     };
 
-    const durationMap: Record<string, string> = {
-      short: 'Short (၁-၂ မိနစ် အမြန်ရီကပ် / 150-250 words)',
-      medium: 'Medium (၃-၅ မိနစ် ပုံမှန်ရုပ်ရှင်ရီကပ် / 400-600 words)',
-      full: 'Full Extended (၈-၁၀ မိနစ် အပြည့်အစုံ ရီကပ် / 800+ words)'
-    };
+    const minutesMap: Record<string, number> = { short: 1.5, medium: 4, full: 9 };
 
     try {
       const gemini = getGeminiInstance();
+      // A few real frames help the model name who/what is actually on screen.
+      let frames: string[] = [];
+      if (rawVideoFile && videoDuration > 0) {
+        try {
+          setRecapRetryNotice(isMm ? 'ဗီဒီယိုပုံများ ယူနေပါသည်…' : 'Sampling video frames…');
+          const n = 5;
+          frames = await captureVideoFrames(rawVideoFile, Array.from({ length: n }, (_, i) => (videoDuration * (i + 0.5)) / n));
+        } catch { frames = []; }
+      }
+      const stageText = (st: RecapStage): string => {
+        if (st.stage === 'bible') return isMm ? `၁/၄ ဇာတ်လမ်းကို နားလည်အောင် ဖတ်နေသည် (${st.done}/${st.total})` : `1/4 Reading the story (${st.done}/${st.total})`;
+        if (st.stage === 'outline') return isMm ? '၂/၄ ဇာတ်ကွက်အစီအစဉ် ဆွဲနေသည်' : '2/4 Planning the beats';
+        if (st.stage === 'write') return isMm ? `၃/၄ ဇာတ်ညွှန်း ရေးနေသည် (${st.done}/${st.total})` : `3/4 Writing (${st.done}/${st.total})`;
+        if (st.stage === 'edit') return isMm ? '၄/၄ ပြန်လည်ပြင်ဆင်နေသည်' : '4/4 Polishing';
+        return isMm ? 'ရေးနေသည်…' : 'Writing…';
+      };
       const script = await gemini.generateMovieRecapScript(
         sourceContent,
         (seconds, msg) => {
@@ -1118,8 +1082,11 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
         {
           style: styleMap[recapStyle] || recapStyle,
           tone: 'Engaging, viral, cinematic, and captivating',
-          duration: durationMap[recapDuration] || recapDuration,
-          targetLanguage: recapTargetLanguage
+          targetMinutes: recapStyle === 'tiktok' ? 1 : minutesMap[recapDuration] ?? 4,
+          sourceSeconds: recapSource === 'subtitles' && videoDuration > 0 ? videoDuration : undefined,
+          targetLanguage: recapTargetLanguage,
+          frames,
+          onStage: st => setRecapRetryNotice(stageText(st)),
         }
       );
       setRecapScript(script);
@@ -1282,6 +1249,114 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
       showToast('Could not extract highlights', 'error');
     } finally {
       setIsAnalyzingHighlights(false);
+    }
+  };
+
+  // 4b. One-click scene recap: plan scenes from the transcript, voice every scene,
+  // then let the render server fit each clip to its narration and join them.
+  const handleBuildSceneRecap = async () => {
+    if (!rawVideoFile) {
+      showToast(isMm ? 'ဗီဒီယိုဖိုင်ကို အရင် တင်ပါ' : 'Please load the video file first', 'error');
+      return;
+    }
+    if (cues.length === 0) {
+      showToast(
+        isMm ? 'အချိန်ပါသော စာတန်း (transcript) အရင်ရှိရပါမယ်' : 'A timestamped transcript (subtitles) is required first',
+        'error'
+      );
+      return;
+    }
+
+    setIsBuildingSceneRecap(true);
+    try {
+      const gemini = getGeminiInstance();
+      const targetSecondsMap: Record<string, number> = { short: 90, medium: 240, full: 540 };
+      const styleHintMap: Record<string, string> = {
+        cinematic: 'Cinematic movie recap with suspense and high emotion',
+        tiktok: 'Fast viral TikTok pacing, punchy hooks',
+        thriller: 'Dark thriller and mystery with plot twists',
+        action: 'High action momentum and dramatic turns',
+        drama: 'Deep emotional drama',
+        summary: 'Clear summary of the key points'
+      };
+      const total = videoDuration > 0 ? videoDuration : cues[cues.length - 1].endSeconds;
+
+      setSceneRecapStatus(isMm ? 'ဇာတ်ကွက်များ စီစဉ်နေသည်...' : 'Planning scenes...');
+      const plan = await gemini.generateRecapPlan(
+        cues.map((c, i) => ({ id: i + 1, start: c.startSeconds, end: c.endSeconds, text: c.text })),
+        total,
+        {
+          targetSeconds: targetSecondsMap[recapDuration] ?? 240,
+          style: styleHintMap[recapStyle] || recapStyle,
+          language: recapTargetLanguage
+        },
+        (seconds, msg) => setSceneRecapStatus(`${msg} (${seconds}s)`),
+        async (chosen) => {
+          // Two small stills per scene so the narration is written from what is on screen.
+          setSceneRecapStatus(isMm ? 'ဗီဒီယိုမှ ပုံများ ယူနေသည်...' : 'Capturing video frames...');
+          const result: string[][] = [];
+          for (const sc of chosen) {
+            const span = sc.end - sc.start;
+            result.push(await captureVideoFrames(rawVideoFile, [sc.start + span * 0.3, sc.start + span * 0.7]));
+          }
+          return result;
+        }
+      );
+
+      const videoEl = videoRef.current;
+      const [outputWidth, outputHeight] = getRecapOutputSize(
+        aspectRatio,
+        videoEl?.videoWidth || 1920,
+        videoEl?.videoHeight || 1080
+      );
+
+      const result = await renderSceneRecap({
+        gemini,
+        videoFile: rawVideoFile,
+        videoFileName,
+        scenes: plan,
+        tts: { voiceId: recapVoice, speed: recapVoiceSpeed, pitch: 0, volume: 100, vocalStyle: 'Expressive' },
+        outputWidth,
+        outputHeight,
+        aspectRatio,
+        framing: framingMode,
+        blurAmount,
+        bgColor: customBgColor,
+        subtitleStyle: subtitlesEnabled
+          ? {
+              fontSize: subFontSize,
+              fontFamily: subFontFamily,
+              fontColor: subFontColor,
+              strokeColor: subStrokeColor,
+              strokeWidth: subStrokeWidth,
+              bgBoxEnabled: subBgBoxEnabled,
+              bgBoxColor: subBgBoxColor,
+              positionY: subPositionY
+            }
+          : null,
+        onProgress: (done, totalSteps, message) => setSceneRecapStatus(`${message} (${done}/${totalSteps})`),
+        onRetry: (seconds, msg) => setSceneRecapStatus(`${msg} (${seconds}s)`)
+      });
+
+      const a = document.createElement('a');
+      a.href = result.downloadUrl;
+      a.download = `VBS_SceneRecap_${videoFileName.replace(/\.[^/.]+$/, '')}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      showToast(
+        isMm
+          ? `🎬 Scene Recap ဗီဒီယို ပြီးပါပြီ (${plan.length} ဇာတ်ကွက်၊ ${Math.round(result.duration)} စက္ကန့်)`
+          : `🎬 Scene recap ready (${plan.length} scenes, ${Math.round(result.duration)}s)`,
+        'success'
+      );
+    } catch (err) {
+      console.error('[Scene Recap] failed:', err);
+      showToast(err instanceof Error ? err.message : 'Scene recap failed', 'error');
+    } finally {
+      setIsBuildingSceneRecap(false);
+      setSceneRecapStatus('');
     }
   };
 
@@ -1859,6 +1934,14 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
               : 'Rendering via Local PC FFmpeg Engine (Zero-Stutter Lossless)...'
           );
 
+          if (!WorkerEngineService.isVersionAtLeast(currentH.version, '1.3.0')) {
+            throw new Error(
+              isMm
+                ? `သင့် PC Worker က ဗားရှင်းဟောင်း (${currentH.version || 'မသိ'}) ဖြစ်နေပါသည်။ vbs-ffmpeg-worker.js v1.3.0 ကို ပြန်ယူပြီး ပြန် run ပါ။`
+                : `Your PC worker is outdated (${currentH.version || 'unknown'}). Download vbs-ffmpeg-worker.js v1.3.0 and restart it.`
+            );
+          }
+
           let fileToSend: File | Blob | null = rawVideoFile;
           if (!fileToSend) {
             setExportStatusText(isMm ? 'ဗီဒီယို အချက်အလက်များ ပြင်ဆင်နေပါသည်...' : 'Preparing video data...');
@@ -1870,33 +1953,58 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
           const formData = new FormData();
           formData.append('video', fileToSend, videoFileName || 'video.mp4');
 
-          if (subtitlesEnabled && cues.length > 0) {
-            const subs: SRTSubtitle[] = cues.map((cue, i) => ({
-              index: i + 1,
-              startTime: cue.startStr,
-              endTime: cue.endStr,
-              text: cue.text
-            }));
-            formData.append('srtContent', generateSRT(subs));
-            formData.append('fontFamily', subFontFamily);
-            formData.append('fontSize', String(subFontSize));
-            formData.append('fontColor', subFontColor);
-            formData.append('strokeColor', subStrokeColor);
+          // Same look as the editor preview: framing + subtitles drawn here (same code as the preview) and
+          // overlaid by the worker, so font, size, colours and ratio match what is on screen.
+          const videoEl = videoRef.current;
+          const [outputWidth, outputHeight] = getRecapOutputSize(
+            aspectRatio,
+            videoEl?.videoWidth || 1920,
+            videoEl?.videoHeight || 1080
+          );
+          formData.append('outWidth', String(outputWidth));
+          formData.append('outHeight', String(outputHeight));
+          formData.append('framing', framingMode);
+          formData.append('blurAmount', String(blurAmount));
+          formData.append('bgColor', customBgColor);
 
-            // If user selected a custom uploaded font, include the font file for FFmpeg
-            const activeCustomFont = userCustomFonts.find(f =>
-              subFontFamily.includes(f.family) || subFontFamily.includes(f.name)
-            );
-            if (activeCustomFont?.url && activeCustomFont.url.startsWith('data:')) {
-              try {
-                const fontResp = await fetch(activeCustomFont.url);
-                const fontBlob = await fontResp.blob();
-                const fontSafeName = `${activeCustomFont.family.replace(/[^a-zA-Z0-9_-]/g, '_')}.ttf`;
-                formData.append('fontFile', fontBlob, fontSafeName);
-              } catch (fontBlobErr) {
-                console.warn('Could not serialize custom font for FFmpeg:', fontBlobErr);
+          if (subtitlesEnabled && cues.length > 0) {
+            const winStart = Math.max(0, trimStart);
+            const winEnd = trimEnd > trimStart ? trimEnd : Infinity;
+            const subtitleStyle: SubtitleStyle = {
+              fontSize: subFontSize,
+              fontFamily: subFontFamily,
+              fontColor: subFontColor,
+              strokeColor: subStrokeColor,
+              strokeWidth: subStrokeWidth,
+              bgBoxEnabled: subBgBoxEnabled,
+              bgBoxColor: subBgBoxColor,
+              positionY: subPositionY
+            };
+            const MAX_SUBTITLE_IMAGES = 1500;
+            const subsMeta: Array<{ start: number; end: number }> = [];
+            const ordered = [...cues].sort((a, b) => a.startSeconds - b.startSeconds);
+            let prevEnd = 0;
+            for (const cue of ordered) {
+              if (!cue.text || !cue.text.trim()) continue;
+              // times relative to the exported part (trim), shifted by the timing offset like the preview
+              const rawStart = Math.max(cue.startSeconds + subTimingOffset, winStart) - winStart;
+              const end = Math.min(cue.endSeconds + subTimingOffset, winEnd) - winStart;
+              const start = Math.max(rawStart, prevEnd);
+              if (end - start < 0.05) continue;
+              if (subsMeta.length >= MAX_SUBTITLE_IMAGES) break;
+              if (subsMeta.length % 20 === 0) {
+                setExportStatusText(
+                  isMm
+                    ? `စာတန်းထိုး ပုံများ ပြင်ဆင်နေသည် (${subsMeta.length}/${ordered.length})...`
+                    : `Preparing subtitle images (${subsMeta.length}/${ordered.length})...`
+                );
               }
+              const png = await renderSubtitlePng(cue.text, outputWidth, outputHeight, subtitleStyle);
+              formData.append(`sub_${subsMeta.length}`, png, `sub_${subsMeta.length}.png`);
+              subsMeta.push({ start, end });
+              prevEnd = end;
             }
+            formData.append('subs', JSON.stringify(subsMeta));
           }
 
           if (voiceoverAudioUrl) {
@@ -3159,6 +3267,41 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
                     )}
                   </div>
                 )}
+
+                {/* Section 2b: Scene-based Recap Video (plan + per-scene voice + server render) */}
+                <div className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-3">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                    <Film size={14} />
+                    <span>{isMm ? 'Scene Recap ဗီဒီယို တစ်ခါတည်းထုတ်ခြင်း' : 'Scene Recap Video (one click)'}</span>
+                  </span>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    {isMm
+                      ? 'Transcript မှ ဇာတ်ကွက်များကို AI က ရွေးပြီး ဇာတ်ကွက်တစ်ခုချင်းစီကို အသံသွင်း၊ ဗီဒီယိုကို အသံအလျားနှင့် ကိုက်အောင် ညှိကာ ပေါင်းပေးပါမယ်။'
+                      : 'AI picks scenes from the transcript, voices each scene, fits the footage to each voice line, and joins them.'}
+                  </p>
+                  <p className="text-[10px] font-mono text-slate-500 break-all">
+                    {isMm ? 'Render Worker: ' : 'Render worker: '}
+                    {getRenderServerUrl()}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleBuildSceneRecap}
+                    disabled={isBuildingSceneRecap}
+                    className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-black text-xs font-black uppercase tracking-tight flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    {isBuildingSceneRecap ? (
+                      <>
+                        <RefreshCw size={14} className="animate-spin" />
+                        <span>{sceneRecapStatus || (isMm ? 'လုပ်ဆောင်နေသည်...' : 'Working...')}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={14} />
+                        <span>{isMm ? 'Scene Recap ဗီဒီယို ထုတ်မည်' : 'Build Scene Recap Video'}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
 
                 {/* Section 3: Smart Highlights Montage */}
                 <div className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-3.5">
