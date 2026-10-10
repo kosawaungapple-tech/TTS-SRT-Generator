@@ -139,7 +139,13 @@ export class GeminiTTSService {
               // ignore
             }
           }
-          const errorMsg = cleanMsg;
+          // `error` can arrive as an object ({ message, code, status }); everything below expects text.
+          const errorMsg: string =
+            typeof cleanMsg === 'string'
+              ? cleanMsg
+              : (cleanMsg && typeof cleanMsg === 'object' && typeof (cleanMsg as { message?: unknown }).message === 'string')
+                ? (cleanMsg as { message: string }).message
+                : (() => { try { return JSON.stringify(cleanMsg); } catch { return String(cleanMsg); } })();
           
           console.error(`Gemini Proxy Error Response [${modelName}] (${status}):`, data);
 
