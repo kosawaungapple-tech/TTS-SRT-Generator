@@ -31,7 +31,7 @@ import { GeminiTTSService } from '../services/geminiService';
 import { assemblyAiService, AssemblyAITranscriptResponse } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
 import { logActivity } from '../services/activityService';
-import { parseTimestampToSeconds, shiftSrtContent } from '../utils/subtitleUtils';
+import { parseTimestampToSeconds, shiftSrtContent, downloadSrtFile } from '../utils/subtitleUtils';
 import { formatTime } from '../utils/audioUtils';
 import { VBSUserControl, ModalConfig } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -414,15 +414,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
         : 'subtitles';
       
       const effectiveContent = getEffectiveSrt(translatedBurmeseSrt);
-      const blob = new Blob([effectiveContent], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${baseName}_Burmese${timingOffset !== 0 ? `_offset_${timingOffset}s` : ''}.srt`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      downloadSrtFile(effectiveContent, `${baseName}_Burmese${timingOffset !== 0 ? `_offset_${timingOffset}s` : ''}.srt`);
       showToast(isMm ? 'မြန်မာ .SRT ဖိုင်ကို ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ 🇲🇲📝' : 'Burmese .SRT file downloaded!', 'success');
     } catch {
       showToast(isMm ? 'ဒေါင်းလုဒ် မအောင်မြင်ပါ' : 'Download failed', 'error');
@@ -438,15 +430,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
         : 'subtitles';
       
       const effectiveContent = getEffectiveSrt(assemblyResult.srt);
-      const blob = new Blob([effectiveContent], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${baseName}_Original${timingOffset !== 0 ? `_offset_${timingOffset}s` : ''}.srt`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      downloadSrtFile(effectiveContent, `${baseName}_Original${timingOffset !== 0 ? `_offset_${timingOffset}s` : ''}.srt`);
       showToast(isMm ? 'မူရင်း .SRT ဖိုင်ကို ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ 📝' : 'Original .SRT downloaded!', 'success');
     } catch {
       showToast(isMm ? 'ဒေါင်းလုဒ် မအောင်မြင်ပါ' : 'Download failed', 'error');

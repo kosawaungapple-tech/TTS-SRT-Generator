@@ -19,7 +19,7 @@ import {
 import { AudioResult } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { formatTime, formatMyanmarDuration, pcmToWav, detectSilence, trimAudioBuffer, audioBufferToWav, convertWavToMp3 } from '../utils/audioUtils';
-import { generateSRT, generateASS, generateLRC, shiftSubtitles, createSrtBlob } from '../utils/subtitleUtils';
+import { generateSRT, generateASS, generateLRC, shiftSubtitles, createSrtBlob, downloadSrtFile } from '../utils/subtitleUtils';
 
 interface OutputPreviewProps {
   result: AudioResult | null;
@@ -704,7 +704,9 @@ export const OutputPreview: React.FC<OutputPreviewProps> = ({
     }
 
     if (format === 'srt') {
-      downloadFile(generateSRT(subs), `${baseName}.srt`);
+      const srtText = generateSRT(subs);
+      if (!srtText || !srtText.trim()) { showToast("No content to export", "error"); return; }
+      downloadSrtFile(srtText, `${baseName}.srt`);
     } else if (format === 'txt') {
       downloadFile(generateSRT(subs), `${baseName}.txt`);
     } else if (format === 'ass') {
