@@ -408,7 +408,29 @@ export function createSrtBlob(srtContent: string): Blob {
 export function downloadSrtFile(srtContent: string, fileName: string): void {
   if (!srtContent || srtContent.trim().length === 0) return;
   const safeName = fileName.toLowerCase().endsWith('.srt') ? fileName : `${fileName}.srt`;
-  const blob = createSrtBlob(srtContent);
+  const normalized = srtContent.replace(/\r?\n/g, '\r\n');
+  const withBom = normalized.startsWith('\uFEFF') ? normalized : `\uFEFF${normalized}`;
+
+  // iPhone / iPad: a Safari download lands in Files as an untyped file, which CapCut's picker greys out.
+  // The share sheet hands over a properly typed .srt (Save to Files / Open in CapCut).
+  const nav = typeof navigator !== 'undefined' ? navigator : undefined;
+  const isIos = !!nav && (/iPhone|iPad|iPod/.test(nav.userAgent) || (nav.platform === 'MacIntel' && (nav.maxTouchPoints || 0) > 1));
+  if (isIos && nav && typeof nav.share === 'function' && typeof File !== 'undefined') {
+    try {
+      const file = new File([withBom], safeName, { type: 'application/x-subrip' });
+      if (!nav.canShare || nav.canShare({ files: [file] })) {
+        nav.share({ files: [file], title: safeName }).catch((err: unknown) => {
+          if ((err as { name?: string })?.name !== 'AbortError') triggerSrtDownload(withBom, safeName);
+        });
+        return;
+      }
+    } catch { /* fall back to a normal download */ }
+  }
+  triggerSrtDownload(withBom, safeName);
+}
+
+function triggerSrtDownload(content: string, safeName: string): void {
+  const blob = createSrtBlob(content);
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.style.display = 'none';

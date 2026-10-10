@@ -25,7 +25,7 @@ import { DEFAULT_RULES } from './constants';
 import { useLanguage } from './contexts/LanguageContext';
 import { formatDate } from './utils/dateUtils';
 import { formatMyanmarDuration, renderProcessedAudio, pcmToWav } from './utils/audioUtils';
-import { generateOptimizedSubtitles, generateSRT, createSrtBlob } from './utils/subtitleUtils';
+import { generateOptimizedSubtitles, generateSRT, createSrtBlob, downloadSrtFile } from './utils/subtitleUtils';
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId } from './firebase';
 
 type Tab = 'generate' | 'translator' | 'transcriber' | 'video-editor' | 'thumbnail' | 'history' | 'tools' | 'admin' | 'vbs-admin';
@@ -1336,14 +1336,7 @@ export default function App() {
       content = await response.text();
     }
     
-    // Ensure Windows line endings (CRLF) and UTF-8 with BOM (\uFEFF) for 100% CapCut compatibility
-    const blob = createSrtBlob(content);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename.toLowerCase(); // Ensure lowercase .srt
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadSrtFile(content, filename);
   };
 
   const updateHistoryItem = useCallback((id: string, updates: Partial<HistoryItem>) => {
