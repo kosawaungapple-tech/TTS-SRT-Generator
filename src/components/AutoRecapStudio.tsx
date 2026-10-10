@@ -8,6 +8,7 @@ import { captureVideoFrames } from '../utils/videoFrames';
 import { audioBufferToWav } from '../utils/audioUtils';
 import { generateSRT, downloadSrtFile, splitSentenceIntoCueBlocks } from '../utils/subtitleUtils';
 import { getRecapOutputSize, planSubtitlePieces } from '../utils/recapGeometry';
+import { renderSubtitleVideo } from '../utils/subtitleVideo';
 import { VOICE_OPTIONS } from '../constants';
 import type { SRTSubtitle } from '../types';
 
@@ -30,6 +31,7 @@ interface Result {
   voiceoverUrl: string;
   sceneAudios: Blob[];
   srt: string;
+  cues: { start: number; end: number; text: string }[];
   duration: number;
 }
 
@@ -101,6 +103,10 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [rendering, setRendering] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const [overlayBg, setOverlayBg] = useState<'black' | 'green'>('black');
+  const [overlayWithVoice, setOverlayWithVoice] = useState(true);
+  const [overlayBusy, setOverlayBusy] = useState<number | null>(null);
+  const [overlayFile, setOverlayFile] = useState<{ blob: Blob; name: string } | null>(null);
 
   const styleHints: Record<string, string> = useMemo(
     () => ({
@@ -234,10 +240,12 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       const ch = out.getChannelData(0);
       let t = 0;
       const subs: SRTSubtitle[] = [];
+      const cueTimes: { start: number; end: number; text: string }[] = [];
       buffers.forEach((buf, i) => {
         ch.set(buf.getChannelData(0), Math.round(t * rate));
         const pieces = planSubtitlePieces(segments[i].text, splitSentenceIntoCueBlocks);
         pieces.forEach(pc => {
+          cueTimes.push({ start: t + pc.from * buf.duration, end: t + pc.to * buf.duration, text: pc.text });
           subs.push({
             index: subs.length + 1,
             startTime: secToSrt(t + pc.from * buf.duration),
@@ -258,6 +266,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         voiceoverUrl: URL.createObjectURL(voiceoverBlob),
         sceneAudios,
         srt: generateSRT(subs),
+        cues: cueTimes,
         duration: total,
       });
       setProgress({ text: isMm ? 'ပြီးပါပြီ ✅' : 'Done ✅', percent: 100 });
@@ -278,6 +287,66 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     saveBlob(result.voiceoverBlob, `${baseName}_recap_voiceover.wav`);
     setTimeout(() => downloadSrtFile(result.srt, `${baseName}_recap.srt`), 700);
     setTimeout(() => saveBlob(new Blob(['﻿' + result.script], { type: 'text/plain;charset=utf-8' }), `${baseName}_recap_script.txt`), 1400);
+  };
+
+  const buildOverlay = async () => {
+    if (!result) return;
+    setOverlayFile(null);
+    setOverlayBusy(0);
+    try {
+      const portrait = aspect === '9:16';
+      const square = aspect === '1:1';
+      const width = portrait ? 720 : square ? 720 : 1280;
+      const height = portrait ? 1280 : square ? 720 : 720;
+      let audio: AudioBuffer | undefined;
+      if (overlayWithVoice) {
+        const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        const c = new Ctx();
+        audio = await c.decodeAudioData(await result.voiceoverBlob.arrayBuffer());
+        void c.close();
+      }
+      const { blob, ext } = await renderSubtitleVideo({
+        subtitles: result.cues,
+        audio,
+        duration: result.duration,
+        width,
+        height,
+        background: overlayBg,
+        style: {
+          fontSize: 44,
+          fontFamily: '"Noto Sans Myanmar", "Padauk", sans-serif',
+          fontColor: '#ffffff',
+          strokeColor: '#000000',
+          strokeWidth: 0,
+          bgBoxEnabled: false,
+          bgBoxColor: 'rgba(0,0,0,0.6)',
+          positionY: portrait ? 80 : 86,
+        },
+        onProgress: f => setOverlayBusy(f),
+      });
+      setOverlayFile({ blob, name: `${baseName}_subtitle_overlay.${ext}` });
+      showToast(isMm ? 'Subtitle Overlay ဗီဒီယို ပြီးပါပြီ' : 'Subtitle overlay video ready', 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Overlay render failed', 'error');
+    } finally {
+      setOverlayBusy(null);
+    }
+  };
+
+  // On iPhone the share sheet's "Save Video" puts the file in Photos, which is where CapCut picks media from.
+  const saveOverlay = () => {
+    if (!overlayFile) return;
+    const nav = navigator;
+    try {
+      const f = new File([overlayFile.blob], overlayFile.name, { type: overlayFile.blob.type || 'video/mp4' });
+      if (typeof nav.share === 'function' && (!nav.canShare || nav.canShare({ files: [f] }))) {
+        nav.share({ files: [f], title: overlayFile.name }).catch(err => {
+          if ((err as { name?: string })?.name !== 'AbortError') saveBlob(overlayFile.blob, overlayFile.name);
+        });
+        return;
+      }
+    } catch { /* fall through */ }
+    saveBlob(overlayFile.blob, overlayFile.name);
   };
 
   const buildVideo = async () => {
@@ -449,6 +518,37 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           <p className="text-[11px] text-slate-500">
             {isMm ? 'Voiceover နဲ့ SRT က အချိန်တူညီပါတယ် — CapCut ထဲမှာ နှစ်ခုစလုံးကို အစကနေ တင်လိုက်ရုံပါ။' : 'The voiceover and SRT share one timeline — drop both at 0:00 in CapCut.'}
           </p>
+
+          <div className="rounded-xl border border-sky-400/30 bg-sky-400/5 p-3 space-y-2">
+            <div className="text-xs font-bold text-sky-300">{isMm ? '📱 iPhone / Android CapCut သုံးမယ်ဆိုရင်' : '📱 Using CapCut on a phone?'}</div>
+            <p className="text-[11px] text-slate-300 leading-relaxed">
+              {isMm
+                ? 'CapCut ဖုန်းအက်ပ်က SRT/စာတန်းဖိုင်ကို လုံးဝ import မလုပ်နိုင်ပါဘူး (CapCut ရဲ့ တရားဝင်ပြောချက်)၊ ဖိုင်ရွေးတဲ့စာမျက်နှာမှာ မှိန်နေတာ ဒါကြောင့်ပါ။ ဗီဒီယိုပဲ ရွေးလို့ရပါတယ်။ ဒါကြောင့် စာတန်းကို ဗီဒီယိုအဖြစ် ထုတ်ပေးပါတယ် — CapCut မှာ Overlay အဖြစ်ထည့်ပြီး Blend = Screen (အနက်ရောင်နောက်ခံ) သို့ Chroma key (အစိမ်းရောင်) သုံးပါ။ SRT ကို PC (CapCut Desktop / Web) မှာပဲ ထည့်လို့ရပါတယ်။'
+                : 'The CapCut phone app cannot import subtitle files at all (per CapCut), which is why they are greyed out — only videos are selectable. So here the subtitles come as a video: add it as an Overlay and set Blend = Screen (black) or Chroma key (green). SRT import works on CapCut Desktop / Web only.'}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <select className={`${field} !w-auto`} value={overlayBg} onChange={e => setOverlayBg(e.target.value as 'black' | 'green')}>
+                <option value="black">{isMm ? 'အနက်ရောင် (Blend: Screen)' : 'Black (Blend: Screen)'}</option>
+                <option value="green">{isMm ? 'အစိမ်းရောင် (Chroma key)' : 'Green (Chroma key)'}</option>
+              </select>
+              <label className="text-[11px] text-slate-300 flex items-center gap-1.5">
+                <input type="checkbox" checked={overlayWithVoice} onChange={e => setOverlayWithVoice(e.target.checked)} />
+                {isMm ? 'Voiceover အသံပါထည့်' : 'Include voiceover'}
+              </label>
+            </div>
+            <button type="button" onClick={buildOverlay} disabled={overlayBusy !== null} className="w-full py-2.5 rounded-xl bg-sky-400 text-black text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-60">
+              {overlayBusy !== null ? <Loader2 size={14} className="animate-spin" /> : <Film size={14} />}
+              {overlayBusy !== null
+                ? `${isMm ? 'ထုတ်နေသည်… ဒီစာမျက်နှာကို မပိတ်ပါနဲ့' : 'Rendering… keep this page open'} ${Math.round(overlayBusy * 100)}%`
+                : isMm ? 'Subtitle Overlay ဗီဒီယို ထုတ်မည်' : 'Make subtitle overlay video'}
+            </button>
+            {overlayFile && (
+              <button type="button" onClick={saveOverlay} className="w-full py-2.5 rounded-xl bg-emerald-500 text-black text-xs font-bold flex items-center justify-center gap-1.5">
+                <Download size={14} />
+                {isMm ? 'သိမ်းမည် (iPhone: "Save Video" ကိုရွေးပါ)' : 'Save (iPhone: choose "Save Video")'}
+              </button>
+            )}
+          </div>
 
           <textarea readOnly value={result.script} className="w-full h-56 bg-black/60 border border-white/10 rounded-xl p-3 text-xs text-slate-200 leading-relaxed" />
 

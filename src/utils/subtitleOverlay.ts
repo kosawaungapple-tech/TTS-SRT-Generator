@@ -100,7 +100,7 @@ export function drawSubtitleOverlay(
 }
 
 /** Make sure the page has the font ready before drawing it on a canvas. */
-async function ensureFont(style: SubtitleStyle, canvasW: number, sample: string): Promise<void> {
+export async function ensureFont(style: SubtitleStyle, canvasW: number, sample: string): Promise<void> {
   try {
     const size = Math.round(style.fontSize * (canvasW / 1280));
     await document.fonts.load(`bold ${size}px ${style.fontFamily}`, sample);
