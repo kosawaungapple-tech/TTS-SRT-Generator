@@ -5,7 +5,7 @@ import { getIdToken } from "../firebase";
 import { ttsCache } from "./ttsCache";
 import { TTSConfig, AudioResult, SRTSubtitle } from "../types";
 import { GEMINI_MODELS, VOICE_OPTIONS } from "../constants";
-import { generateGroundedRecapScript, type RecapLlm, type RecapStage } from "./recapScriptPipeline";
+import { generateGroundedRecap, type RecapLlm, type RecapStage, type RecapSegment } from "./recapScriptPipeline";
 
 interface GeminiResponse {
   candidates?: Array<{
@@ -976,6 +976,14 @@ ${linesToTranslate}
   async generateMovieRecapScript(
     transcript: string,
     onRetry?: (seconds: number, message: string) => void,
+    options?: Parameters<GeminiTTSService['generateMovieRecap']>[2]
+  ): Promise<string> {
+    return (await this.generateMovieRecap(transcript, onRetry, options)).text;
+  }
+
+  async generateMovieRecap(
+    transcript: string,
+    onRetry?: (seconds: number, message: string) => void,
     options?: {
       style?: string;
       tone?: string;
@@ -991,7 +999,7 @@ ${linesToTranslate}
       coverage?: number;
       onStage?: (s: RecapStage) => void;
     }
-  ): Promise<string> {
+  ): Promise<{ text: string; segments?: RecapSegment[] }> {
     const models = [GEMINI_MODELS.SCRIPT, GEMINI_MODELS.REWRITE].filter((m, i, a) => a.indexOf(m) === i);
     let modelIdx = 0;
 
@@ -1027,7 +1035,7 @@ ${linesToTranslate}
       minutes = /1-2|၁-၂|short/i.test(d) ? 1.5 : /8-10|၈-၁၀|full/i.test(d) ? 9 : 4;
     }
 
-    return generateGroundedRecapScript(llm, transcript, {
+    return generateGroundedRecap(llm, transcript, {
       style: options?.style,
       tone: options?.tone,
       language: options?.targetLanguage === 'en' ? 'en' : 'mm',

@@ -391,6 +391,9 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
   const [isBuildingSceneRecap, setIsBuildingSceneRecap] = useState<boolean>(false);
   const [sceneRecapStatus, setSceneRecapStatus] = useState<string>('');
   const [recapRetryNotice, setRecapRetryNotice] = useState<string | null>(null);
+  // Time-aligned paragraphs produced by watching the video (valid while the script text is unedited)
+  const [recapSegments, setRecapSegments] = useState<{ start: number; end: number; text: string }[] | null>(null);
+  const [recapSegmentsText, setRecapSegmentsText] = useState<string>('');
 
   // Fast Offscreen Canvas for Blur Optimization
   const blurCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1074,7 +1077,15 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
         if (st.stage === 'edit') return isMm ? '၄/၄ ပြန်လည်ပြင်ဆင်နေသည်' : '4/4 Polishing';
         return isMm ? 'ရေးနေသည်…' : 'Writing…';
       };
-      const script = await gemini.generateMovieRecapScript(
+      if (!canWatch) {
+        showToast(
+          isMm
+            ? 'ဗီဒီယိုဖိုင်ကို တင်မထားလို့ (သို့) အရင်းအမြစ်က Subtitles မဟုတ်လို့ ဗီဒီယိုကို မကြည့်နိုင်ပါ — စာသားကိုပဲ အခြေခံပြီး ရေးပါမယ်'
+            : 'Video file not loaded (or source is not Subtitles) — writing from text only, without watching the video',
+          'error'
+        );
+      }
+      const recap = await gemini.generateMovieRecap(
         sourceContent,
         (seconds, msg) => {
           setRecapRetryNotice(`${msg} (${seconds}s)`);
@@ -1091,10 +1102,13 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
           onStage: st => setRecapRetryNotice(stageText(st)),
         }
       );
+      const script = recap.text;
       setRecapScript(script);
+      setRecapSegments(recap.segments || null);
+      setRecapSegmentsText(recap.segments ? script.trim() : '');
       setRecapRetryNotice(null);
       showToast(
-        isMm ? '🎉 Auto Recap ဇာတ်ညွှန်း အောင်မြင်စွာ ထုတ်ယူပြီးပါပြီ!' : '🎉 Auto Recap Script generated successfully!',
+        isMm ? (recap.segments ? `🎉 ဗီဒီယိုကြည့်ပြီး ဇာတ်ကွက် ${recap.segments.length} ပိုင်းနဲ့ အချိန်ကိုက် ရေးပြီးပါပြီ — "Build Scene Recap Video" နှိပ်ပါ` : '🎉 Auto Recap ဇာတ်ညွှန်း အောင်မြင်စွာ ထုတ်ယူပြီးပါပြီ!') : '🎉 Auto Recap Script generated successfully!',
         'success'
       );
     } catch (err) {
@@ -1261,7 +1275,8 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
       showToast(isMm ? 'ဗီဒီယိုဖိုင်ကို အရင် တင်ပါ' : 'Please load the video file first', 'error');
       return;
     }
-    if (cues.length === 0) {
+    const useSegments = !!recapSegments?.length && recapScript.trim() === recapSegmentsText;
+    if (cues.length === 0 && !useSegments) {
       showToast(
         isMm ? 'အချိန်ပါသော စာတန်း (transcript) အရင်ရှိရပါမယ်' : 'A timestamped transcript (subtitles) is required first',
         'error'
@@ -1281,10 +1296,14 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
         drama: 'Deep emotional drama',
         summary: 'Clear summary of the key points'
       };
-      const total = videoDuration > 0 ? videoDuration : cues[cues.length - 1].endSeconds;
+      const total = videoDuration > 0 ? videoDuration : cues[cues.length - 1]?.endSeconds ?? 0;
 
+      // Script made by watching the video: every paragraph already knows its footage -> use it as is.
+      const plan = useSegments
+        ? recapSegments!.map((sg, i) => ({ fromCue: i, toCue: i, start: sg.start, end: sg.end, narration: sg.text }))
+        : await (async () => {
       setSceneRecapStatus(isMm ? 'ဇာတ်ကွက်များ စီစဉ်နေသည်...' : 'Planning scenes...');
-      const plan = await gemini.generateRecapPlan(
+      return await gemini.generateRecapPlan(
         cues.map((c, i) => ({ id: i + 1, start: c.startSeconds, end: c.endSeconds, text: c.text })),
         total,
         {
@@ -1304,6 +1323,7 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
           return result;
         }
       );
+        })();
 
       const videoEl = videoRef.current;
       const [outputWidth, outputHeight] = getRecapOutputSize(

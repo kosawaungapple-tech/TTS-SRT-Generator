@@ -44,7 +44,10 @@ export interface RecapScriptOptions {
   onStage?: (s: RecapStage) => void;
 }
 
+export interface RecapSegment { start: number; end: number; text: string }
+
 interface Bible {
+  times?: number[];
   setting: string;
   characters: { name: string; who: string }[];
   events: string[];
@@ -136,9 +139,9 @@ async function watchVideo(
   language: 'mm' | 'en'
 ): Promise<Bible> {
   const dur = opts.sourceSeconds as number;
-  const count = Math.max(1, Math.min(20, Math.ceil(dur / 30)));
+  const count = Math.max(1, Math.min(30, Math.ceil(dur / 20)));
   const len = dur / count;
-  const bible: Bible = { setting: '', characters: [], events: [] };
+  const bible: Bible = { setting: '', characters: [], events: [], times: [] };
   const seen = new Set<string>();
   const perWindow: { t: number; text: string }[][] = new Array(count).fill(null).map(() => []);
   const chars: { name: string; who: string }[][] = new Array(count).fill(null).map(() => []);
@@ -149,7 +152,7 @@ async function watchVideo(
   const runWindow = async (i: number) => {
     const a = i * len;
     const b = (i + 1) * len;
-    const frames = (await opts.getFrames!(a, b).catch(() => [])).slice(0, 5);
+    const frames = (await opts.getFrames!(a, b).catch(() => [])).slice(0, 6);
     const dialogue = (opts.cues || [])
       .filter(c => c.start < b && c.end > a)
       .map(c => `[${fmtT(c.start)}] ${c.text.trim().replace(/\s+/g, ' ')}`)
@@ -191,7 +194,7 @@ ${dialogue || '(none)'}`;
       seen.add(key);
       bible.characters.push(c);
     }
-    for (const e of perWindow[i].sort((x, y) => x.t - y.t)) bible.events.push(`[${fmtT(e.t)}] ${e.text}`);
+    for (const e of perWindow[i].sort((x, y) => x.t - y.t)) { bible.events.push(`[${fmtT(e.t)}] ${e.text}`); bible.times!.push(e.t); }
   }
   if (bible.events.length === 0) throw new Error('Could not understand the video content');
   return bible;
@@ -379,11 +382,16 @@ ${script}`
   return script;
 }
 
-export async function generateGroundedRecapScript(
+export async function generateGroundedRecapScript(llm: RecapLlm, source: string, opts: RecapScriptOptions = {}): Promise<string> {
+  return (await generateGroundedRecap(llm, source, opts)).text;
+}
+
+/** Same as generateGroundedRecapScript, but when the video was watched every paragraph also carries its video time range. */
+export async function generateGroundedRecap(
   llm: RecapLlm,
   source: string,
   opts: RecapScriptOptions = {}
-): Promise<string> {
+): Promise<{ text: string; segments?: RecapSegment[] }> {
   const language = opts.language || 'mm';
   const style = opts.style || 'Cinematic movie recap';
   const tone = opts.tone || 'Engaging, dramatic';
@@ -403,7 +411,7 @@ ${source.slice(0, 24000)}`,
       { images: opts.frames?.slice(0, 4) }
     );
     if (!out.trim()) throw new Error('No script generated');
-    return out.trim();
+    return { text: out.trim() };
   }
 
   const watching = !!(opts.getFrames && opts.sourceSeconds && opts.sourceSeconds > 0);
@@ -417,30 +425,64 @@ ${source.slice(0, 24000)}`,
     watching ? undefined : bible.events.length,
     watching ? opts.coverage ?? 1 : undefined
   );
-  const sectionCount = Math.max(2, Math.min(14, Math.round(totalChars / (language === 'mm' ? 450 : 700)), bible.events.length));
+  const sectionCount = watching
+    ? Math.max(3, Math.min(24, Math.round(((opts.sourceSeconds as number) * (opts.coverage ?? 1)) / 25), bible.events.length))
+    : Math.max(2, Math.min(14, Math.round(totalChars / (language === 'mm' ? 450 : 700)), bible.events.length));
 
   opts.onStage?.({ stage: 'outline' });
   const sections = await buildOutline(llm, bible, sectionCount);
 
   const totalEvents = sections.reduce((n, s) => n + s.events.length, 0) || 1;
+  // When the video was watched, a section's share of the narration follows the time its events span on screen.
+  const startOf = (sec: Section) => Math.min(...sec.events.map(n => bible.times?.[n - 1] ?? 0));
+  const spans = sections.map((sec, i) => {
+    const next = i + 1 < sections.length ? startOf(sections[i + 1]) : (opts.sourceSeconds as number);
+    return Math.max(3, next - startOf(sec));
+  });
+  const spanSum = spans.reduce((a, b) => a + b, 0) || 1;
   const planned = sections.map((section, index) => ({
     index,
     section,
-    chars: Math.max(120, Math.round((totalChars * section.events.length) / totalEvents)),
+    chars: Math.max(
+      120,
+      Math.round(watching ? (totalChars * spans[index]) / spanSum : (totalChars * section.events.length) / totalEvents)
+    ),
   }));
 
   const paragraphs: string[] = [];
+  const paraEvents: number[][] = [];
   const BATCH = 3;
   for (let i = 0; i < planned.length; i += BATCH) {
     opts.onStage?.({ stage: 'write', done: i, total: planned.length });
     const batch = planned.slice(i, i + BATCH);
     const tail = paragraphs.length ? paragraphs[paragraphs.length - 1].slice(-160) : '';
     const written = await writeBatch(llm, bible, batch, planned.length, tail, rules, language);
-    written.forEach(sec => sec.forEach(p => paragraphs.push(p.text)));
+    written.forEach(sec => sec.forEach(p => { paragraphs.push(p.text); paraEvents.push(p.events); }));
   }
   opts.onStage?.({ stage: 'write', done: planned.length, total: planned.length });
 
   const draft = paragraphs.join('\n\n');
+
+  if (watching && bible.times) {
+    // Time-align: every paragraph starts where the first event it tells happens on screen.
+    const dur = opts.sourceSeconds as number;
+    const MIN_GAP = 2;
+    const starts: number[] = [];
+    paragraphs.forEach((_, i) => {
+      const ts = paraEvents[i].map(n => bible.times![n - 1]).filter(t => Number.isFinite(t));
+      let st = ts.length ? Math.min(...ts) : i ? starts[i - 1] + MIN_GAP : 0;
+      if (i === 0) st = 0;
+      if (i > 0) st = Math.max(st, starts[i - 1] + MIN_GAP);
+      starts.push(Math.min(st, Math.max(0, dur - MIN_GAP)));
+    });
+    const segments: RecapSegment[] = paragraphs.map((text, i) => ({
+      start: starts[i],
+      end: i + 1 < paragraphs.length ? Math.max(starts[i] + 1, starts[i + 1]) : dur,
+      text,
+    })).filter(sg => sg.end - sg.start >= 0.5);
+    if (segments.length) return { text: draft, segments };
+  }
+
   opts.onStage?.({ stage: 'edit' });
-  return editPass(llm, bible, draft, rules);
+  return { text: await editPass(llm, bible, draft, rules) };
 }
