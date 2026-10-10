@@ -103,6 +103,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [rendering, setRendering] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const [errorInfo, setErrorInfo] = useState<string | null>(null);
+  const stageRef = useRef('start');
   const [overlayBg, setOverlayBg] = useState<'black' | 'green'>('black');
   const [overlayWithVoice, setOverlayWithVoice] = useState(true);
   const [overlayBusy, setOverlayBusy] = useState<number | null>(null);
@@ -144,6 +146,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setBusy(true);
+    setErrorInfo(null);
+    stageRef.current = 'start';
     setResult(null);
     setVideoUrl(null);
     try {
@@ -156,6 +160,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           onNavigateToSettings?.();
           return;
         }
+        stageRef.current = '1 listen (AssemblyAI)';
         setProgress({ text: isMm ? '၁/၄ စကားပြောကို နားထောင်နေသည်…' : '1/4 Listening to the speech…', percent: 3 });
         const tr = await assemblyAiService.processToSrt({
           apiKey: key,
@@ -171,6 +176,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
 
       // ---- 2. Watch + write ------------------------------------------------------------------
       const g = gemini();
+      stageRef.current = '2 watch/write (Gemini)';
       const recap = await g.generateMovieRecap(
         cues.map((c, i) => `[${i + 1}] ${c.text}`).join('\n'),
         (s, msg) => setProgress(p => ({ text: `${msg} (${s}s)`, percent: p?.percent ?? 30 })),
@@ -215,6 +221,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       }
 
       // ---- 3. Voice every scene --------------------------------------------------------------
+      stageRef.current = '3 voiceover (Gemini TTS)';
       const sceneAudios: Blob[] = [];
       for (let i = 0; i < segments.length; i++) {
         if (ctrl.signal.aborted) throw new Error('Cancelled');
@@ -229,6 +236,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       }
 
       // ---- 4. Join voiceover + build the SRT on the same timeline ---------------------------
+      stageRef.current = '4 join audio';
       setProgress({ text: isMm ? '၄/၄ Voiceover နဲ့ SRT ပေါင်းနေသည်' : '4/4 Joining voiceover and subtitles', percent: 93 });
       const Ctx = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
       const ctx = new Ctx();
@@ -273,7 +281,9 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       showToast(isMm ? '🎉 Auto Recap ပြီးပါပြီ — Voiceover နဲ့ SRT ကို ဒေါင်းလို့ရပါပြီ' : '🎉 Recap ready — download the voiceover and SRT', 'success');
     } catch (e) {
       console.error('[AutoRecap]', e);
-      showToast(e instanceof Error ? e.message : 'Auto recap failed', 'error');
+      const msg = e instanceof Error ? e.message : String(e);
+      setErrorInfo(`[${stageRef.current}] ${msg}`);
+      showToast(msg, 'error');
       setProgress(null);
     } finally {
       setBusy(false);
@@ -491,6 +501,13 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           {busy ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
           {busy ? (isMm ? 'လုပ်ဆောင်နေသည်…' : 'Working…') : isMm ? 'Auto Recap စတင်မည်' : 'Start Auto Recap'}
         </button>
+
+        {errorInfo && (
+          <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-[11px] text-red-200 break-words select-all">
+            <div className="font-bold mb-1">{isMm ? '❌ Error — ဒီစာကို ကူးပြီး ပို့ပေးပါ' : '❌ Error — copy this text'}</div>
+            {errorInfo}
+          </div>
+        )}
 
         {progress && (
           <div className="space-y-1">

@@ -163,6 +163,7 @@ async function watchVideo(
   const chars: { name: string; who: string }[][] = new Array(count).fill(null).map(() => []);
   const settings: string[] = new Array(count).fill('');
   let done = 0;
+  const failed: string[] = [];
   opts.onStage?.({ stage: 'watch', done: 0, total: count });
 
   const runWindow = async (i: number) => {
@@ -200,10 +201,15 @@ ${dialogue || '(none)'}`;
   const worker = async () => {
     while (queue.length) {
       const i = queue.shift()!;
-      try { await runWindow(i); } catch (e) { if (done === 0 && queue.length === count - 1) throw e; done++; opts.onStage?.({ stage: 'watch', done, total: count }); }
+      try { await runWindow(i); } catch (e1) {
+        try { await runWindow(i); } catch (e2) {
+          failed.push(`${fmtT(i * len)}: ${e2 instanceof Error ? e2.message : String(e2)}`);
+          done++; opts.onStage?.({ stage: 'watch', done, total: count });
+        }
+      }
     }
   };
-  await Promise.all([worker(), worker(), worker()]);
+  await Promise.all([worker(), worker()]);
 
   for (let i = 0; i < count; i++) {
     if (!bible.setting && settings[i]) bible.setting = settings[i];
@@ -215,7 +221,7 @@ ${dialogue || '(none)'}`;
     }
     for (const e of perWindow[i].sort((x, y) => x.t - y.t)) { bible.events.push(`[${fmtT(e.t)}] ${e.text}`); bible.times!.push(e.t); }
   }
-  if (bible.events.length === 0) throw new Error('Could not understand the video content');
+  if (bible.events.length === 0) throw new Error(`Could not understand the video content. ${failed.slice(0, 2).join(' | ')}`);
   return bible;
 }
 
