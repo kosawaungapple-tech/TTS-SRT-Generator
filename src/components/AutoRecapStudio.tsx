@@ -232,9 +232,9 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         cues.map((c, i) => `[${i + 1}] ${c.text}`).join('\n'),
         (s, msg) => setProgress(p => ({ text: `${msg} (${s}s)`, percent: p?.percent ?? 30 })),
         {
-          style: styleHints[style],
+          style: 'Cinematic recap that follows the story itself: infer the genre and mood (drama, thriller, action, comedy, romance...) from what actually happens and let it shift scene by scene. Never impose a genre the footage does not show.',
           tone: 'Engaging, emotional, cinematic and captivating',
-          targetMinutes: style === 'tiktok' ? 1 : length === 'short' ? 1.5 : length === 'full' ? 9 : 4,
+          targetMinutes: length === 'short' ? 1.5 : length === 'full' ? 9 : 4,
           sourceSeconds: duration,
           targetLanguage: language,
           cues,
@@ -559,26 +559,6 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           <p className="mt-2 text-[11.5px] leading-relaxed text-slate-500">
             {isMm ? 'ဗီဒီယိုကြည့်တာကို Gemini က အမြဲလုပ်ပြီး ရေးတဲ့အဆင့်ကို Groq နဲ့ မြန်စေနိုင်သည်။ Groq မအောင်မြင်ရင် Gemini ကို အလိုအလျောက်ပြောင်းသုံးမည်။' : 'Gemini always watches the video; Groq can write the script faster. Falls back to Gemini automatically if Groq fails.'}
           </p>
-        </div>
-
-        {/* Style chips */}
-        <div className="mt-6">
-          <Label>{isMm ? 'Script style' : 'Script style'}</Label>
-          <div className="flex flex-wrap gap-2">
-            {styles.map(st => (
-              <button
-                key={st.id}
-                type="button"
-                onClick={() => setStyle(st.id)}
-                className={`flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12.5px] font-semibold border transition-all ${
-                  style === st.id ? 'bg-amber-400 text-black border-amber-400 shadow-lg shadow-amber-400/25' : 'bg-white/[0.04] text-slate-300 border-white/10 hover:border-white/25'
-                }`}
-              >
-                <span>{st.emoji}</span>
-                {st.name}
-              </button>
-            ))}
-          </div>
         </div>
 
         {/* Coverage */}
