@@ -533,10 +533,14 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
   // Active Cue for live video/audio player overlay
   const activeCue = useMemo<SrtCue | null>(() => {
     if (!currentDisplayedCues || currentDisplayedCues.length === 0) return null;
-    return currentDisplayedCues.find(c => {
+    // Hold the last cue briefly after it ends (up to the next cue) so short pauses do not blank the preview.
+    const HOLD = 1.2;
+    return currentDisplayedCues.find((c, i) => {
       const startSec = parseTimestampToSeconds(c.start);
       const endSec = parseTimestampToSeconds(c.end);
-      return playbackTime >= startSec && playbackTime <= endSec;
+      const next = currentDisplayedCues[i + 1];
+      const nextStart = next ? parseTimestampToSeconds(next.start) : Infinity;
+      return playbackTime >= startSec && playbackTime <= Math.max(endSec, Math.min(endSec + HOLD, nextStart - 0.01));
     }) || null;
   }, [currentDisplayedCues, playbackTime]);
 
