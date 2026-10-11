@@ -27,7 +27,7 @@ import { useLanguage } from './contexts/LanguageContext';
 import { formatDate } from './utils/dateUtils';
 import { formatMyanmarDuration, renderProcessedAudio, pcmToWav } from './utils/audioUtils';
 import { generateOptimizedSubtitles, generateSRT, createSrtBlob, downloadSrtFile } from './utils/subtitleUtils';
-import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId } from './firebase';
+import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId, getDocs } from './firebase';
 
 type Tab = 'generate' | 'translator' | 'transcriber' | 'video-editor' | 'thumbnail' | 'history' | 'tools' | 'admin' | 'vbs-admin';
 
@@ -983,6 +983,39 @@ export default function App() {
       setError(`Verification failed: ${msg}`);
     } finally {
       setIsVerifyingCode(false);
+    }
+  };
+
+  // Google Play / App Store requirement: users must be able to delete their account and data in-app.
+  const handleDeleteAccount = async () => {
+    const code = accessCode || localStorage.getItem('vbs_access_code') || '';
+    if (!code) return;
+    if (code === 'saw_vlogs_2026') {
+      alert('Owner account cannot be deleted from the app.');
+      return;
+    }
+    const ok = window.confirm(
+      language === 'mm'
+        ? 'သင့်အကောင့်နှင့် သိမ်းထားသော data (history) အားလုံးကို အပြီးအပိုင် ဖျက်မည်။ ပြန်မရနိုင်ပါ။ ဆက်လုပ်မလား?'
+        : 'This permanently deletes your account and saved data (history). This cannot be undone. Continue?'
+    );
+    if (!ok) return;
+    try {
+      const snap = await getDocs(query(collection(db, 'history'), where('userId', '==', code)));
+      await Promise.all(snap.docs.map(d => deleteDoc(d.ref)));
+      const ids = Array.from(new Set([code, getCurrentUserId() || code]));
+      await Promise.all(ids.flatMap(id => [
+        deleteDoc(doc(db, 'sessions', id)).catch(() => {}),
+        deleteDoc(doc(db, 'user_controls', id)).catch(() => {}),
+        deleteDoc(doc(db, 'users', id)).catch(() => {}),
+      ]));
+      try { await auth.currentUser?.delete(); } catch { /* anonymous/recent-login errors are non-fatal */ }
+      localStorage.clear();
+      await handleLogout();
+      alert(language === 'mm' ? 'အကောင့်ကို ဖျက်ပြီးပါပြီ။' : 'Your account has been deleted.');
+    } catch (e) {
+      console.error('[VBS] delete account failed', e);
+      alert(language === 'mm' ? 'ဖျက်မရပါ။ နောက်မှ ပြန်ကြိုးစားပါ။' : 'Could not delete the account. Please try again later.');
     }
   };
 
@@ -3127,6 +3160,12 @@ export default function App() {
                             className="px-8 py-4 bg-rose-500/10 text-rose-500 border border-rose-500/20 rounded-[16px] font-bold text-sm hover:bg-rose-500 hover:text-white transition-all flex items-center justify-center gap-3 shadow-sm"
                           >
                             <LogOut size={18} /> Sign Out
+                          </button>
+                          <button
+                            onClick={handleDeleteAccount}
+                            className="px-8 py-4 bg-transparent text-slate-400 border border-slate-500/30 rounded-[16px] font-bold text-sm hover:text-rose-500 hover:border-rose-500/40 transition-all flex items-center justify-center gap-3"
+                          >
+                            {language === 'mm' ? 'အကောင့်နှင့် data ဖျက်မည်' : 'Delete Account & Data'}
                           </button>
                         </div>
                       </div>

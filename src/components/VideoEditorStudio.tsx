@@ -44,6 +44,7 @@ import {
 } from 'lucide-react';
 import { WorkerEngineService, WorkerHealthInfo } from '../services/workerEngineService';
 import { FfmpegWorkerManager } from './FfmpegWorkerManager';
+import { isNativeApp } from '../utils/platform';
 import { useLanguage } from '../contexts/LanguageContext';
 import { SRTSubtitle, AudioResult, VBSUserControl, ModalConfig, CustomFont } from '../types';
 import { formatTime } from '../utils/audioUtils';
@@ -4842,7 +4843,7 @@ export const VideoEditorStudio: React.FC<VideoEditorStudioProps> = ({
               </button>
             </div>
 
-            <FfmpegWorkerManager onToast={(msg, type) => showToast(msg, type)} />
+            {!isNativeApp() && <FfmpegWorkerManager onToast={(msg, type) => showToast(msg, type)} />}
           </div>
         </div>
       )}
