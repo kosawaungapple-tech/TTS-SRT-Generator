@@ -80,7 +80,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnter }) => {
           <div className="inline-flex items-center gap-3 px-5 py-2 bg-white/[0.03] border border-white/10 rounded-full backdrop-blur-2xl shadow-2xl">
             <Sparkles size={16} className="text-amber-400 animate-pulse" />
             <span className="text-[10px] font-black tracking-[0.3em] uppercase text-slate-400">
-              {language === 'mm' ? 'မြန်မာနိုင်ငံ၏ အပိုင်နိုင်ဆုံး AI စနစ်' : 'VLOGS BY SAW • PREMIUM AI STUDIO'}
+              {language === 'mm' ? 'VLOGS BY SAW • မြန်မာ AI စတူဒီယို' : 'VLOGS BY SAW • PREMIUM AI STUDIO'}
             </span>
           </div>
         </motion.div>
@@ -95,10 +95,10 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnter }) => {
             </span>
           </h1>
           <p className="text-xl md:text-2xl font-medium text-slate-400 tracking-tight max-w-2xl mx-auto leading-relaxed">
-            {language === 'mm' ? 'အစွမ်းထက်ဆုံး AI အသံထုတ်စနစ်' : 'Professional Narration & Cinematic Content Tools.'}
+            {language === 'mm' ? 'အသံ၊ စာတန်းထိုး၊ Recap ဗီဒီယို — တစ်နေရာတည်းမှာ' : 'Voiceover, subtitles and recap videos in one place.'}
             <br />
             <span className="text-slate-600 text-base">
-              {language === 'mm' ? 'Professional Narration & Cinematic Content Tools.' : 'Engineered for high-end movie recappers and storytellers.'}
+              {language === 'mm' ? 'ရုပ်ရှင် Recap လုပ်သူများနှင့် ဇာတ်လမ်းပြောပြသူများအတွက် ဖန်တီးထားသည်' : 'Built for movie recappers and storytellers.'}
             </span>
           </p>
         </motion.div>
@@ -130,20 +130,20 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnter }) => {
         >
           <FeatureCard 
             icon={<Mic className="text-amber-400" />}
-            title={language === 'mm' ? 'AI အသံဖန်တီးမှု' : 'AI VOICE GENERATION'}
-            desc={language === 'mm' ? 'သဘာဝကျသောအသံများ' : 'Natural human-like Burmese narratives'}
+            title={language === 'mm' ? 'AI အသံဖတ်ပေးခြင်း' : 'AI VOICE GENERATION'}
+            desc={language === 'mm' ? 'သဘာဝကျသော မြန်မာအသံဖြင့် ဇာတ်ညွှန်းကို ဖတ်ပေးသည်' : 'Natural human-like Burmese narratives'}
             delay={0.1}
           />
           <FeatureCard 
             icon={<Type className="text-amber-400" />}
             title={language === 'mm' ? 'အလိုအလျောက် စာတန်းထိုး' : 'AUTO SUBTITLES'}
-            desc={language === 'mm' ? 'တိကျမြန်ဆန်သော SRT' : 'Timed SRT subtitle synthesis'}
+            desc={language === 'mm' ? 'အချိန်ကိုက် SRT စာတန်းကို မြန်မာလို ထုတ်ပေးသည်' : 'Timed SRT subtitle synthesis'}
             delay={0.2}
           />
           <FeatureCard 
             icon={<Clapperboard className="text-amber-400" />}
-            title={language === 'mm' ? 'ရုပ်ရှင်အဆင့်မီ အရည်အသွေး' : 'CINEMATIC QUALITY'}
-            desc={language === 'mm' ? 'ပရော်ဖက်ရှင်နယ် အဆင့်' : 'Studio-grade output for movie recaps'}
+            title={language === 'mm' ? 'Auto Recap' : 'AUTO RECAP'}
+            desc={language === 'mm' ? 'ဗီဒီယိုကြည့်ပြီး ဇာတ်ညွှန်း၊ အသံ၊ SRT ကို တစ်ခါတည်း ထုတ်ပေးသည်' : 'Watches your video, then writes the script, voice and SRT'}
             delay={0.3}
           />
         </motion.div>
@@ -157,7 +157,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnter }) => {
         className="absolute bottom-12 flex flex-col items-center gap-4"
       >
         <p className="text-slate-700 font-black text-[9px] tracking-[0.6em] uppercase">
-          PROFESSIONAL AI CONTENT SUITE • V3
+          VLOGS BY SAW • AI CONTENT STUDIO
         </p>
       </motion.div>
     </div>

@@ -10,7 +10,6 @@ import { OutputPreview } from './components/OutputPreview';
 import { AdminDashboard } from './components/AdminDashboard';
 import { VideoTranscriber } from './components/VideoTranscriber';
 import { AutoRecapStudio } from './components/AutoRecapStudio';
-import { ThumbnailCreator } from './components/ThumbnailCreator';
 import { PrivacyPolicy } from './components/PrivacyPolicy';
 import { TermsOfService } from './components/TermsOfService';
 import { AnnouncementPanel } from './components/AnnouncementPanel';
@@ -2207,22 +2206,6 @@ export default function App() {
                 isProcessing={isTranscriberProcessing || isVideoEditorProcessing}
               />
               <NavTab
-                id="thumbnail"
-                active={activeTab === 'thumbnail'}
-                onClick={() => {
-                  if (!canUseThumbnail) {
-                    showToast(isPremium ? t('thumbnailFeature.temporarilyDisabled') : t('thumbnailFeature.premiumRequired'), "error");
-                    return;
-                  }
-                  handleTabSwitch('thumbnail');
-                }}
-                icon={<BookOpen size={18} />}
-                label={t('nav.thumbnail') || 'အသံစာအုပ်'}
-                tooltip={canUseThumbnail ? t('tooltips.thumbnail') : t('thumbnailFeature.locked')}
-                locked={!canUseThumbnail}
-                isProcessing={isAudiobookProcessing}
-              />
-              <NavTab
                 id="history"
                 active={activeTab === 'history'}
                 onClick={() => handleTabSwitch('history')}
@@ -2561,26 +2544,6 @@ export default function App() {
                     </div>
                   </div>
                 )}
-              </div>
-
-              {/* Tab 3: Story Audiobook Studio / Thumbnail */}
-              <div
-                id="tab-panel-thumbnail"
-                role="tabpanel"
-                aria-hidden={activeTab !== 'thumbnail'}
-                className={activeTab === 'thumbnail' ? 'block' : 'hidden'}
-              >
-                 <ThumbnailCreator 
-                   showToast={showToast}
-                   openModal={openModal}
-                   getApiKey={getEffectiveApiKey}
-                   isAdmin={isVbsAdmin}
-                   isPremium={isPremium}
-                   userControl={userControl}
-                   onNavigateToSettings={() => handleTabSwitch('tools')}
-                   onProcessingStateChange={setIsAudiobookProcessing}
-                   customFonts={globalSettings.fonts}
-                 />
               </div>
 
               {/* Tab 4: History / Batch Queue */}
