@@ -876,16 +876,25 @@ export class GeminiTTSService {
 
     const isDirectOriginal = style.includes('မူရင်းအတိုင်း') || style.toLowerCase().includes('direct') || style.toLowerCase().includes('original');
 
-    for (let c = 0; c < totalChunks; c++) {
-      const chunkCues = cues.slice(c * CHUNK_SIZE, (c + 1) * CHUNK_SIZE);
-      const linesToTranslate = chunkCues.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.text}`).join('\n');
-      const progressPercent = Math.min(95, Math.round(((c + 1) / totalChunks) * 90));
-
-      if (onProgress) {
-        onProgress(`မြန်မာဘာသာသို့ အချိန်ကိုက် ပြန်ဆိုနေပါသည်... (${c + 1}/${totalChunks})`, progressPercent);
+    // Reads "[12] text", "[12]: text", "12. text", "12) text" and joins wrapped continuation lines.
+    const parseNumbered = (raw: string, allowed: Set<number>): Map<number, string> => {
+      const out = new Map<number, string>();
+      let current = -1;
+      const cleaned = raw.trim().replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '');
+      for (const line of cleaned.split('\n').map(l => l.trim()).filter(Boolean)) {
+        const m = line.match(/^\[?(\d+)\]?\s*[:.)\-–]?\s*(.*)$/);
+        if (m && allowed.has(parseInt(m[1], 10)) && (line.startsWith('[') || /^\d+\s*[:.)\-–]/.test(line))) {
+          current = parseInt(m[1], 10);
+          out.set(current, m[2].trim());
+        } else if (current > 0) {
+          out.set(current, `${out.get(current) || ''} ${line}`.trim());
+        }
       }
+      for (const [k, v] of [...out]) if (!v) out.delete(k);
+      return out;
+    };
 
-      const prompt = `
+    const buildPrompt = (list: SrtSourceCue[]) => `
 You are a master Burmese (Myanmar) subtitle translator and localization expert.
 Translate each numbered dialogue/narration line into natural, high-quality spoken Burmese for video subtitles.
 
@@ -895,47 +904,53 @@ ${isDirectOriginal
   : '- NATURAL CINEMATIC: Translate into expressive, vivid, and culturally natural Burmese storytelling style appropriate for film, video recaps, and podcasts.'}
 
 CRITICAL RULES:
-1. Output format MUST be strictly: "[ID] Burmese translation"
-2. Translate EVERY ID from ${chunkCues[0].id} to ${chunkCues[chunkCues.length - 1].id}. Do NOT combine, merge, or skip IDs.
-3. Keep speaker labels if present in parentheses like "(Speaker 1): ".
-4. Return ONLY the numbered Burmese translations without markdown blocks or preamble.
+1. Output format MUST be strictly: "[ID] Burmese translation" — one line per ID.
+2. Translate EVERY one of these IDs: ${list.map(c => c.id).join(', ')}. Do NOT combine, merge, or skip IDs, even for very short lines, names, sounds or exclamations.
+3. The answer must be Burmese script only (names in Burmese letters). Never leave Chinese/Japanese/Korean/Thai/English sentences untranslated.
+4. Keep speaker labels if present in parentheses like "(Speaker 1): ".
+5. Return ONLY the numbered Burmese translations without markdown blocks or preamble.
 
 INPUT LINES:
-${linesToTranslate}
+${list.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.text}`).join('\n')}
 `;
 
+    const FOREIGN_SCRIPT = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u0e00-\u0e7f]/;
+    const isGood = (cue: SrtSourceCue, t: string | undefined) =>
+      !!t && t.trim().length > 0 && !FOREIGN_SCRIPT.test(t);
+
+    const translateList = async (list: SrtSourceCue[]) => {
       const data = await this.geminiRequest(
         GEMINI_MODELS.TRANSLATE,
-        { contents: [{ parts: [{ text: prompt }] }] },
+        { contents: [{ parts: [{ text: buildPrompt(list) }] }] },
         0,
         onRetry
       );
+      const raw = (data.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || '').join('') || '');
+      const got = parseNumbered(raw, new Set(list.map(c => c.id)));
+      for (const cue of list) {
+        const t = got.get(cue.id);
+        if (isGood(cue, t)) translatedMap.set(cue.id, t as string);
+      }
+    };
 
-      let chunkResult = (data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
-      chunkResult = chunkResult.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
-
-      // Parse [ID] responses
-      const returnedLines = chunkResult.split('\n').map(l => l.trim()).filter(Boolean);
-      for (const line of returnedLines) {
-        const idMatch = line.match(/^\[(\d+)\]\s*(.*)$/);
-        if (idMatch) {
-          const id = parseInt(idMatch[1], 10);
-          const trans = idMatch[2].trim();
-          if (id && trans) {
-            translatedMap.set(id, trans);
-          }
-        }
+    for (let c = 0; c < totalChunks; c++) {
+      const chunkCues = cues.slice(c * CHUNK_SIZE, (c + 1) * CHUNK_SIZE);
+      const progressPercent = Math.min(95, Math.round(((c + 1) / totalChunks) * 90));
+      if (onProgress) {
+        onProgress(`မြန်မာဘာသာသို့ အချိန်ကိုက် ပြန်ဆိုနေပါသည်... (${c + 1}/${totalChunks})`, progressPercent);
       }
 
-      // Fallback for any cue in this chunk that missed [ID] matching
-      chunkCues.forEach((cue, index) => {
-        if (!translatedMap.has(cue.id)) {
-          if (index < returnedLines.length) {
-            const cleanLine = returnedLines[index].replace(/^\[\d+\]\s*/, '').trim();
-            if (cleanLine) translatedMap.set(cue.id, cleanLine);
-          }
+      await translateList(chunkCues);
+
+      // Anything skipped or left untranslated is asked again in small batches, then one by one.
+      for (const size of [8, 1]) {
+        const missing = chunkCues.filter(cue => !translatedMap.has(cue.id));
+        if (missing.length === 0) break;
+        if (onProgress) onProgress(`ကျန်နေသော စာတန်း ${missing.length} ကြောင်း ပြန်ဆိုနေပါသည်...`, progressPercent);
+        for (let i = 0; i < missing.length; i += size) {
+          try { await translateList(missing.slice(i, i + size)); } catch { /* try the next round */ }
         }
-      });
+      }
 
       if (c < totalChunks - 1) {
         await new Promise(r => setTimeout(r, 400));
@@ -958,7 +973,30 @@ ${linesToTranslate}
       const speakerPrefix = cue.speaker ? `[Speaker ${cue.speaker}]: ` : '';
       const finalCueText = `${speakerPrefix}${translated}`;
 
-      finalSrtBlocks.push(`${i + 1}\r\n${cue.timeLine}\r\n${finalCueText}`);
+      // Burmese usually takes longer to read than the original line takes to say: keep each cue on screen
+      // long enough (without overlapping the next one) and bridge tiny gaps so the subtitle never blinks off.
+      let timeLine = cue.timeLine;
+      const tm = cue.timeLine.match(/(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)/);
+      if (tm) {
+        const toS = (h: string, m: string, sec: string, ms: string) => +h * 3600 + +m * 60 + +sec + +ms.padEnd(3, '0').slice(0, 3) / 1000;
+        const st = toS(tm[1], tm[2], tm[3], tm[4]);
+        const en = toS(tm[5], tm[6], tm[7], tm[8]);
+        const nx = cues[i + 1]?.timeLine.match(/(\d+):(\d+):(\d+)[,.](\d+)/);
+        const nextStart = nx ? toS(nx[1], nx[2], nx[3], nx[4]) : Infinity;
+        let newEnd = Math.max(en, st + Math.min(7, translated.replace(/\s+/g, '').length / 14));
+        if (nextStart - newEnd < 0.8 && nextStart > newEnd) newEnd = nextStart - 0.04;
+        newEnd = Math.min(newEnd, nextStart - 0.04);
+        if (newEnd > en + 0.02) {
+          const fmtT = (t: number) => {
+            const ms = Math.round(t * 1000);
+            const p2 = (n: number, l = 2) => String(n).padStart(l, '0');
+            return `${p2(Math.floor(ms / 3600000))}:${p2(Math.floor((ms % 3600000) / 60000))}:${p2(Math.floor((ms % 60000) / 1000))},${p2(ms % 1000, 3)}`;
+          };
+          timeLine = `${fmtT(st)} --> ${fmtT(newEnd)}`;
+        }
+      }
+
+      finalSrtBlocks.push(`${i + 1}\r\n${timeLine}\r\n${finalCueText}`);
       narrativeScriptPieces.push(translated);
     }
 
