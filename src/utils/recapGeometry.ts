@@ -32,7 +32,9 @@ export interface SubtitlePiece {
  */
 export function planSubtitlePieces(
   narration: string,
-  splitBlocks: (sentence: string, maxChars: number, maxLineChars: number) => string[][]
+  splitBlocks: (sentence: string, maxChars: number, maxLineChars: number) => string[][],
+  maxChars = 52,
+  maxLineChars = 30
 ): SubtitlePiece[] {
   const sentences = narration
     .split(/[။\n]+|(?<=[.!?])\s+/u)
@@ -41,7 +43,7 @@ export function planSubtitlePieces(
 
   const texts: string[] = [];
   for (const sentence of sentences) {
-    for (const lines of splitBlocks(sentence, 52, 30)) {
+    for (const lines of splitBlocks(sentence, maxChars, maxLineChars)) {
       const joined = lines.join('\n').trim();
       if (joined) texts.push(joined);
     }
