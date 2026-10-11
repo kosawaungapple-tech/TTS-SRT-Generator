@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Clapperboard, Upload, Download, Sparkles, Mic, FileText, Film, Loader2, CheckCircle2, Eye, MessageSquareText } from 'lucide-react';
+import { Clapperboard, Upload, Download, Sparkles, Mic, FileText, Film, Loader2, CheckCircle2, Eye, MessageSquareText, ChevronDown, RefreshCw, Smartphone, Globe2, Gauge, Layers } from 'lucide-react';
 import { GeminiTTSService, type RecapPlanScene } from '../services/geminiService';
 import { assemblyAiService } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
@@ -86,6 +86,44 @@ async function getVideoDuration(file: File): Promise<number> {
   });
 }
 
+const Label: React.FC<{ icon?: React.ReactNode; children: React.ReactNode }> = ({ icon, children }) => (
+  <div className="flex items-center gap-1.5 mb-2 text-[11.5px] font-semibold text-slate-400">
+    {icon}
+    <span className="border-b border-dotted border-slate-600 pb-px">{children}</span>
+  </div>
+);
+
+const Select: React.FC<{ icon?: React.ReactNode; value: string; onChange: (v: string) => void; children: React.ReactNode }> = ({ icon, value, onChange, children }) => (
+  <div className="relative">
+    {icon && <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base leading-none pointer-events-none">{icon}</span>}
+    <select
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      className={`w-full appearance-none rounded-2xl bg-white/[0.04] border border-white/10 py-3.5 pr-10 text-[13px] font-medium text-white shadow-inner shadow-black/30 transition focus:outline-none focus:border-amber-400/60 focus:bg-white/[0.07] ${icon ? 'pl-11' : 'pl-4'}`}
+    >
+      {children}
+    </select>
+    <ChevronDown size={16} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+  </div>
+);
+
+const Segmented = <T extends string>({ value, onChange, options }: { value: T; onChange: (v: T) => void; options: { id: T; label: string; sub?: string }[] }) => (
+  <div className="grid gap-1 p-1 rounded-2xl bg-black/50 border border-white/10" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
+    {options.map(o => (
+      <button
+        key={o.id}
+        type="button"
+        onClick={() => onChange(o.id)}
+        className={`rounded-xl py-2.5 px-2 text-[12px] font-bold transition-all ${value === o.id ? 'bg-white text-slate-900 shadow-md shadow-black/40' : 'text-slate-400 hover:text-white'}`}
+      >
+        <div>{o.label}</div>
+        {o.sub && <div className={`text-[10px] font-medium mt-0.5 ${value === o.id ? 'text-slate-500' : 'text-slate-500'}`}>{o.sub}</div>}
+      </button>
+    ))}
+  </div>
+);
+
+
 export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onNavigateToSettings }) => {
   const [file, setFile] = useState<File | null>(null);
   const [duration, setDuration] = useState(0);
@@ -105,6 +143,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const abortRef = useRef<AbortController | null>(null);
   const [errorInfo, setErrorInfo] = useState<string | null>(null);
   const stageRef = useRef('start');
+  const [thumb, setThumb] = useState<string | null>(null);
   const [overlayBg, setOverlayBg] = useState<'black' | 'green'>('black');
   const [overlayWithVoice, setOverlayWithVoice] = useState(true);
   const [overlayBusy, setOverlayBusy] = useState<number | null>(null);
@@ -131,7 +170,15 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     setFile(f);
     setResult(null);
     setVideoUrl(null);
-    setDuration(f ? await getVideoDuration(f) : 0);
+    setThumb(null);
+    const d = f ? await getVideoDuration(f) : 0;
+    setDuration(d);
+    if (f && d > 0) {
+      try {
+        const [img] = await captureVideoFrames(f, [Math.min(d * 0.1, 5)], 360, 0.7);
+        if (img) setThumb(`data:image/jpeg;base64,${img}`);
+      } catch { /* thumbnail is optional */ }
+    }
   };
 
   const run = async () => {
@@ -201,8 +248,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                   : st.stage === 'outline'
                     ? isMm ? '၂/၄ ဇာတ်ကွက်စီစဉ်နေသည်' : '2/4 Planning the beats'
                     : isMm ? '၂/၄ ရေးနေသည်' : '2/4 Writing';
-            const frac = st.stage === 'watch' ? st.done / Math.max(1, st.total) * 0.25 : st.stage === 'write' ? 0.25 + st.done / Math.max(1, st.total) * 0.2 : 0.25;
-            setProgress({ text: t, percent: 25 + Math.round(frac * 100) });
+            const frac = st.stage === 'watch' ? (st.done / Math.max(1, st.total)) * 0.6 : st.stage === 'write' ? 0.6 + (st.done / Math.max(1, st.total)) * 0.4 : 0.6;
+            setProgress({ text: t, percent: 25 + Math.round(frac * 25) });
           },
         }
       );
@@ -411,177 +458,297 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     }
   };
 
-  const card = 'bg-slate-900/60 border border-white/10 rounded-2xl p-4 space-y-3';
-  const label = 'text-[11px] font-bold text-slate-400 block mb-1';
-  const field = 'w-full bg-black/80 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400/50';
+  // ---- UI helpers ---------------------------------------------------------------------------
+  const activeStep = !progress ? 0 : progress.percent < 25 ? 1 : progress.percent < 50 ? 2 : progress.percent < 93 ? 3 : 4;
+  const steps = [
+    { n: 1, label: isMm ? 'နားထောင်' : 'Listen', hidden: mode !== 'speech' },
+    { n: 2, label: isMm ? 'ကြည့်+ရေး' : 'Watch & write', hidden: false },
+    { n: 3, label: isMm ? 'အသံသွင်း' : 'Voice', hidden: false },
+    { n: 4, label: isMm ? 'ပေါင်း' : 'Join', hidden: false },
+  ].filter(x => !x.hidden);
+
+  const fmt = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+
+  const styles: { id: string; emoji: string; name: string }[] = [
+    { id: 'cinematic', emoji: '🎬', name: 'Cinematic' },
+    { id: 'tiktok', emoji: '⚡', name: 'Fast Recap' },
+    { id: 'thriller', emoji: '🕵️', name: 'Thriller' },
+    { id: 'action', emoji: '💥', name: 'Action' },
+    { id: 'drama', emoji: '💔', name: 'Drama' },
+    { id: 'summary', emoji: '📚', name: 'Summary' },
+  ];
+
+  const panel = 'rounded-[28px] border border-white/10 bg-gradient-to-b from-slate-900/90 to-black/90 p-5 sm:p-6 shadow-2xl shadow-black/50';
 
   return (
-    <div className="max-w-4xl mx-auto space-y-4">
-      <div className={card}>
-        <div className="flex items-center gap-2 text-amber-400 font-bold text-sm">
-          <Clapperboard size={18} />
-          <span>{isMm ? 'Auto Recap — ဗီဒီယိုကို ကြည့်ပြီး Recap ဇာတ်ညွှန်း + Voiceover + SRT ထုတ်ပေးမည်' : 'Auto Recap — watch the video, write the script, voice it, export SRT'}</span>
-        </div>
-
-        <label className="block border-2 border-dashed border-white/15 rounded-2xl p-6 text-center cursor-pointer hover:border-amber-400/50 transition-colors">
-          <input type="file" accept="video/*" className="hidden" onChange={e => pickFile(e.target.files?.[0] || null)} />
-          <Upload className="mx-auto text-amber-400 mb-2" size={28} />
-          <div className="text-sm text-white font-bold">{file ? file.name : isMm ? 'Recap လုပ်မယ့် ဗီဒီယိုကို ရွေးပါ' : 'Choose the video to recap'}</div>
-          {file && duration > 0 && <div className="text-[11px] text-slate-400 mt-1">{Math.floor(duration / 60)}:{String(Math.floor(duration % 60)).padStart(2, '0')}</div>}
-        </label>
-
-        <div>
-          <span className={label}>{isMm ? 'ဒီဗီဒီယိုက ဘာအမျိုးအစားလဲ' : 'What kind of video is it?'}</span>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <button type="button" onClick={() => setMode('speech')} className={`text-left rounded-xl p-3 border text-xs transition-all ${mode === 'speech' ? 'border-amber-400 bg-amber-400/10 text-white' : 'border-white/10 text-slate-400'}`}>
-              <div className="flex items-center gap-1.5 font-bold mb-1"><MessageSquareText size={14} />{isMm ? 'စကားပြော Video' : 'Talking video'}</div>
-              {isMm ? 'အသံထဲက စကားကို အရင်နားထောင်ပြီး (AssemblyAI) ပုံနဲ့ တွဲကြည့်ကာ Recap လုပ်မည်' : 'Listens to the speech first, then watches the picture'}
-            </button>
-            <button type="button" onClick={() => setMode('visual')} className={`text-left rounded-xl p-3 border text-xs transition-all ${mode === 'visual' ? 'border-amber-400 bg-amber-400/10 text-white' : 'border-white/10 text-slate-400'}`}>
-              <div className="flex items-center gap-1.5 font-bold mb-1"><Eye size={14} />{isMm ? 'Recap ထားပြီးသား / အသံမပါ Video' : 'Already-recapped / silent video'}</div>
-              {isMm ? 'စကားမနားထောင်ဘဲ ပုံကိုပဲ ကြည့်ပြီး Recap အသစ် ပြန်လုပ်မည်' : 'Skips the speech and recaps from the picture only'}
-            </button>
+    <div className="max-w-2xl mx-auto space-y-5">
+      <div className={panel}>
+        {/* Header */}
+        <div className="flex items-center gap-3.5 mb-6">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-300 to-orange-500 grid place-items-center shadow-lg shadow-amber-500/30">
+            <Clapperboard size={22} className="text-black" />
+          </div>
+          <div>
+            <h2 className="text-lg font-extrabold text-white leading-tight">Auto Recap</h2>
+            <p className="text-[12px] text-slate-400">{isMm ? 'ဗီဒီယိုကို ကြည့်ပြီး ဇာတ်ညွှန်း · Voiceover · SRT ထုတ်ပေးမည်' : 'Watches your video → script · voiceover · SRT'}</p>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        {/* Video */}
+        {!file ? (
+          <label className="group block rounded-3xl border-2 border-dashed border-white/15 bg-white/[0.02] px-5 py-9 text-center cursor-pointer transition hover:border-amber-400/60 hover:bg-amber-400/[0.04]">
+            <input type="file" accept="video/*" className="hidden" onChange={e => pickFile(e.target.files?.[0] || null)} />
+            <div className="mx-auto mb-3 w-14 h-14 rounded-2xl bg-amber-400/10 border border-amber-400/30 grid place-items-center group-hover:scale-105 transition">
+              <Upload className="text-amber-400" size={24} />
+            </div>
+            <div className="text-[15px] font-bold text-white">{isMm ? 'Recap လုပ်မယ့် ဗီဒီယိုကို ရွေးပါ' : 'Choose the video to recap'}</div>
+            <div className="text-[12px] text-slate-500 mt-1">MP4 · MOV · WebM</div>
+          </label>
+        ) : (
+          <div className="flex items-center gap-3.5 rounded-3xl bg-white/[0.04] border border-white/10 p-3">
+            <div className="w-24 h-16 rounded-2xl overflow-hidden bg-black grid place-items-center shrink-0 border border-white/10">
+              {thumb ? <img src={thumb} alt="" className="w-full h-full object-cover" /> : <Film size={20} className="text-slate-600" />}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-bold text-white truncate">{file.name}</div>
+              <div className="flex items-center gap-2 mt-1.5 text-[11px] text-slate-400">
+                <span className="px-2 py-0.5 rounded-full bg-white/10">{duration > 0 ? fmt(duration) : '…'}</span>
+                <span className="px-2 py-0.5 rounded-full bg-white/10">{(file.size / 1048576).toFixed(1)} MB</span>
+              </div>
+            </div>
+            <label className="shrink-0 w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 grid place-items-center cursor-pointer transition" title={isMm ? 'ပြောင်းမည်' : 'Change'}>
+              <input type="file" accept="video/*" className="hidden" onChange={e => pickFile(e.target.files?.[0] || null)} />
+              <RefreshCw size={16} className="text-slate-200" />
+            </label>
+          </div>
+        )}
+
+        {/* What kind of video */}
+        <div className="mt-6">
+          <Label icon={<Layers size={12} />}>{isMm ? 'ဗီဒီယိုအမျိုးအစား' : 'What to make'}</Label>
+          <Segmented
+            value={mode}
+            onChange={setMode}
+            options={[
+              { id: 'speech', label: isMm ? '🎙 စကားပြော Video' : '🎙 Talking video' },
+              { id: 'visual', label: isMm ? '👁 ပုံကိုကြည့်ပြီး' : '👁 Picture only' },
+            ]}
+          />
+          <p className="mt-2 text-[11.5px] leading-relaxed text-slate-500">
+            {mode === 'speech'
+              ? isMm ? 'အသံထဲက စကားကို အရင်နားထောင် (AssemblyAI) ပြီး ပုံနဲ့တွဲကြည့်ကာ Recap လုပ်မည်။' : 'Listens to the speech first, then reads it together with the picture.'
+              : isMm ? 'Recap ထားပြီးသား / အသံမပါ ဗီဒီယိုအတွက် — စကားမနားထောင်ဘဲ ပုံကိုပဲကြည့်ပြီး Recap အသစ် ပြန်လုပ်မည်။' : 'For already-recapped or silent videos — skips the speech, works from the picture only.'}
+          </p>
+        </div>
+
+        {/* Style chips */}
+        <div className="mt-6">
+          <Label>{isMm ? 'Script style' : 'Script style'}</Label>
+          <div className="flex flex-wrap gap-2">
+            {styles.map(st => (
+              <button
+                key={st.id}
+                type="button"
+                onClick={() => setStyle(st.id)}
+                className={`flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12.5px] font-semibold border transition-all ${
+                  style === st.id ? 'bg-amber-400 text-black border-amber-400 shadow-lg shadow-amber-400/25' : 'bg-white/[0.04] text-slate-300 border-white/10 hover:border-white/25'
+                }`}
+              >
+                <span>{st.emoji}</span>
+                {st.name}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Coverage */}
+        <div className="mt-6">
+          <Label icon={<Gauge size={12} />}>{isMm ? 'ဘယ်လောက် ပါမလဲ' : 'Coverage'}</Label>
+          <Segmented
+            value={length}
+            onChange={setLength}
+            options={[
+              { id: 'short', label: isMm ? 'အဓိက' : 'Highlights', sub: '40%' },
+              { id: 'medium', label: isMm ? 'ပုံမှန်' : 'Standard', sub: '70%' },
+              { id: 'full', label: isMm ? 'အပြည့်' : 'Whole video', sub: '100%' },
+            ]}
+          />
+        </div>
+
+        {/* Selects */}
+        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-5">
+          <div>
+            <Label icon={<Globe2 size={12} />}>{isMm ? 'Recap ဘာသာစကား' : 'Language'}</Label>
+            <Select icon={language === 'mm' ? '🇲🇲' : '🇬🇧'} value={language} onChange={v => setLanguage(v as 'mm' | 'en')}>
+              <option value="mm">Burmese · မြန်မာ</option>
+              <option value="en">English</option>
+            </Select>
+          </div>
+          <div>
+            <Label icon={<Mic size={12} />}>{isMm ? 'AI အသံရှင်' : 'Voice'}</Label>
+            <Select icon={VOICE_OPTIONS.find(v => v.id === voice)?.gender === 'female' ? '👩' : '👨'} value={voice} onChange={setVoice}>
+              {VOICE_OPTIONS.map(v => (
+                <option key={v.id} value={v.id}>{v.name}</option>
+              ))}
+            </Select>
+          </div>
           {mode === 'speech' && (
-            <div className="col-span-2 sm:col-span-1">
-              <label className={label}>{isMm ? 'စကားပြော ဘာသာစကား' : 'Spoken language'}</label>
-              <select className={field} value={spokenLang} onChange={e => setSpokenLang(e.target.value)}>
-                <option value="auto">{isMm ? '✨ Auto Detect' : '✨ Auto detect'}</option>
+            <div>
+              <Label>{isMm ? 'စကားပြော ဘာသာစကား' : 'Spoken language'}</Label>
+              <Select icon="✨" value={spokenLang} onChange={setSpokenLang}>
+                <option value="auto">Auto detect</option>
                 <option value="en">English</option><option value="th">Thai</option><option value="ja">Japanese</option>
                 <option value="ko">Korean</option><option value="zh">Chinese</option><option value="es">Spanish</option>
                 <option value="fr">French</option><option value="de">German</option>
-              </select>
+              </Select>
             </div>
           )}
           <div>
-            <label className={label}>{isMm ? 'Recap စတိုင်' : 'Style'}</label>
-            <select className={field} value={style} onChange={e => setStyle(e.target.value)}>
-              <option value="cinematic">🎬 Cinematic</option><option value="tiktok">⚡ TikTok / Reels</option>
-              <option value="thriller">🕵️ Thriller</option><option value="action">💥 Action</option>
-              <option value="drama">💔 Drama</option><option value="summary">📚 Summary</option>
-            </select>
+            <Label>{isMm ? 'Aspect (ဗီဒီယိုထုတ်ရင်)' : 'Aspect (video export)'}</Label>
+            <Select icon="📐" value={aspect} onChange={setAspect}>
+              <option value="original">Auto</option><option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option>
+            </Select>
           </div>
-          <div>
-            <label className={label}>{isMm ? 'ပါဝင်မှု' : 'Coverage'}</label>
-            <select className={field} value={length} onChange={e => setLength(e.target.value as 'short' | 'medium' | 'full')}>
-              <option value="short">{isMm ? 'အဓိကအချိန်ကာလ (၄၀%)' : 'Highlights (40%)'}</option>
-              <option value="medium">{isMm ? 'ပုံမှန် (၇၀%)' : 'Standard (70%)'}</option>
-              <option value="full">{isMm ? 'ဗီဒီယိုတစ်ခုလုံး (၁၀၀%)' : 'Whole video (100%)'}</option>
-            </select>
-          </div>
-          <div>
-            <label className={label}>{isMm ? 'Recap ဘာသာစကား' : 'Recap language'}</label>
-            <select className={field} value={language} onChange={e => setLanguage(e.target.value as 'mm' | 'en')}>
-              <option value="mm">🇲🇲 မြန်မာ</option><option value="en">🇬🇧 English</option>
-            </select>
-          </div>
-          <div>
-            <label className={label}>{isMm ? 'AI အသံရှင်' : 'Voice'}</label>
-            <select className={field} value={voice} onChange={e => setVoice(e.target.value)}>
-              {VOICE_OPTIONS.map(v => (
-                <option key={v.id} value={v.id}>{v.gender === 'female' ? '👩' : '👨'} {v.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className={label}>{isMm ? 'အသံနှုန်း' : 'Speed'} {speed.toFixed(2)}x</label>
-            <input type="range" min={0.8} max={1.3} step={0.05} value={speed} onChange={e => setSpeed(Number(e.target.value))} className="w-full" />
+          <div className="sm:col-span-2">
+            <div className="flex items-center justify-between mb-2">
+              <Label>{isMm ? 'အသံနှုန်း' : 'Voice speed'}</Label>
+              <span className="mb-2 px-2.5 py-0.5 rounded-full bg-amber-400/15 text-amber-300 text-[12px] font-mono font-bold">{speed.toFixed(2)}x</span>
+            </div>
+            <input type="range" min={0.8} max={1.3} step={0.05} value={speed} onChange={e => setSpeed(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
           </div>
         </div>
 
+        {/* Start */}
         <button
           type="button"
           onClick={run}
           disabled={busy || !file}
-          className="w-full py-3 rounded-xl bg-amber-400 text-black font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+          className="mt-7 w-full h-14 rounded-2xl bg-gradient-to-r from-amber-300 via-amber-400 to-orange-500 text-black text-[15px] font-extrabold flex items-center justify-center gap-2.5 shadow-xl shadow-amber-500/25 transition active:scale-[0.99] disabled:opacity-40 disabled:shadow-none"
         >
-          {busy ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+          {busy ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
           {busy ? (isMm ? 'လုပ်ဆောင်နေသည်…' : 'Working…') : isMm ? 'Auto Recap စတင်မည်' : 'Start Auto Recap'}
         </button>
 
         {errorInfo && (
-          <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-[11px] text-red-200 break-words select-all">
+          <div className="mt-4 rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-[12px] text-red-200 break-words select-all">
             <div className="font-bold mb-1">{isMm ? '❌ Error — ဒီစာကို ကူးပြီး ပို့ပေးပါ' : '❌ Error — copy this text'}</div>
             {errorInfo}
           </div>
         )}
 
         {progress && (
-          <div className="space-y-1">
-            <div className="text-[11px] text-slate-300">{progress.text}</div>
-            <div className="h-1.5 bg-white/10 rounded-full overflow-hidden"><div className="h-full bg-amber-400 transition-all" style={{ width: `${progress.percent}%` }} /></div>
+          <div className="mt-5 rounded-2xl bg-white/[0.03] border border-white/10 p-4">
+            <div className="flex items-center justify-between gap-1 mb-3">
+              {steps.map((st, i) => {
+                const done = activeStep > st.n || progress.percent >= 100;
+                const now = activeStep === st.n && progress.percent < 100;
+                return (
+                  <React.Fragment key={st.n}>
+                    <div className="flex flex-col items-center gap-1.5 min-w-0">
+                      <div className={`w-8 h-8 rounded-full grid place-items-center text-[12px] font-bold transition ${done ? 'bg-emerald-400 text-black' : now ? 'bg-amber-400 text-black ring-4 ring-amber-400/25 animate-pulse' : 'bg-white/10 text-slate-500'}`}>
+                        {done ? '✓' : st.n}
+                      </div>
+                      <span className={`text-[10px] font-semibold ${now ? 'text-amber-300' : done ? 'text-emerald-300' : 'text-slate-500'}`}>{st.label}</span>
+                    </div>
+                    {i < steps.length - 1 && <div className={`h-px flex-1 mb-5 ${done ? 'bg-emerald-400/60' : 'bg-white/10'}`} />}
+                  </React.Fragment>
+                );
+              })}
+            </div>
+            <div className="text-[12px] text-slate-300 mb-2">{progress.text}</div>
+            <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+              <div className="h-full rounded-full bg-gradient-to-r from-amber-300 to-orange-500 transition-all duration-500" style={{ width: `${progress.percent}%` }} />
+            </div>
           </div>
         )}
       </div>
 
       {result && (
-        <div className={card}>
-          <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
-            <CheckCircle2 size={18} />
-            <span>{isMm ? `ပြီးပါပြီ — ${result.segments.length} ပိုင်း၊ ${Math.floor(result.duration / 60)}:${String(Math.floor(result.duration % 60)).padStart(2, '0')}` : `Done — ${result.segments.length} parts, ${Math.floor(result.duration / 60)}:${String(Math.floor(result.duration % 60)).padStart(2, '0')}`}</span>
+        <div className={panel}>
+          <div className="flex items-center gap-3 mb-5">
+            <div className="w-11 h-11 rounded-2xl bg-emerald-400/15 border border-emerald-400/30 grid place-items-center">
+              <CheckCircle2 size={22} className="text-emerald-400" />
+            </div>
+            <div>
+              <div className="text-[15px] font-extrabold text-white">{isMm ? 'Recap ပြီးပါပြီ' : 'Your recap is ready'}</div>
+              <div className="text-[12px] text-slate-400">{result.segments.length} {isMm ? 'ပိုင်း' : 'parts'} · {fmt(result.duration)}</div>
+            </div>
           </div>
 
-          <audio controls src={result.voiceoverUrl} className="w-full" />
+          <audio controls src={result.voiceoverUrl} className="w-full mb-4" />
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <button type="button" onClick={() => saveBlob(result.voiceoverBlob, `${baseName}_recap_voiceover.wav`)} className="py-2.5 rounded-xl bg-purple-600 text-white text-xs font-bold flex items-center justify-center gap-1.5"><Mic size={14} />Voiceover (.wav)</button>
-            <button type="button" onClick={() => downloadSrtFile(result.srt, `${baseName}_recap.srt`)} className="py-2.5 rounded-xl bg-amber-400 text-black text-xs font-bold flex items-center justify-center gap-1.5"><FileText size={14} />SRT (.srt)</button>
-            <button type="button" onClick={() => saveBlob(new Blob(['﻿' + result.script], { type: 'text/plain;charset=utf-8' }), `${baseName}_recap_script.txt`)} className="py-2.5 rounded-xl bg-slate-700 text-white text-xs font-bold flex items-center justify-center gap-1.5"><FileText size={14} />Script (.txt)</button>
-            <button type="button" onClick={downloadAll} className="py-2.5 rounded-xl bg-emerald-500 text-black text-xs font-bold flex items-center justify-center gap-1.5"><Download size={14} />{isMm ? 'အားလုံးဒေါင်း' : 'Download all'}</button>
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              { icon: <Mic size={18} />, name: 'Voiceover', ext: '.wav', tone: 'from-violet-500 to-purple-700 text-white', onClick: () => saveBlob(result.voiceoverBlob, `${baseName}_recap_voiceover.wav`) },
+              { icon: <FileText size={18} />, name: 'Subtitles', ext: '.srt', tone: 'from-amber-300 to-orange-500 text-black', onClick: () => downloadSrtFile(result.srt, `${baseName}_recap.srt`) },
+              { icon: <FileText size={18} />, name: 'Script', ext: '.txt', tone: 'from-slate-600 to-slate-800 text-white', onClick: () => saveBlob(new Blob(['﻿' + result.script], { type: 'text/plain;charset=utf-8' }), `${baseName}_recap_script.txt`) },
+            ].map(d => (
+              <button key={d.name} type="button" onClick={d.onClick} className={`rounded-2xl bg-gradient-to-br ${d.tone} p-3.5 text-left shadow-lg shadow-black/40 transition active:scale-[0.98]`}>
+                <div className="mb-3 opacity-90">{d.icon}</div>
+                <div className="text-[13px] font-extrabold leading-tight">{d.name}</div>
+                <div className="text-[11px] opacity-70 font-mono">{d.ext}</div>
+              </button>
+            ))}
           </div>
-          <p className="text-[11px] text-slate-500">
-            {isMm ? 'Voiceover နဲ့ SRT က အချိန်တူညီပါတယ် — CapCut ထဲမှာ နှစ်ခုစလုံးကို အစကနေ တင်လိုက်ရုံပါ။' : 'The voiceover and SRT share one timeline — drop both at 0:00 in CapCut.'}
+          <button type="button" onClick={downloadAll} className="mt-3 w-full h-12 rounded-2xl bg-emerald-400 text-black text-[14px] font-extrabold flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition active:scale-[0.99]">
+            <Download size={17} />
+            {isMm ? 'အားလုံး တစ်ခါတည်း ဒေါင်းမည်' : 'Download all'}
+          </button>
+          <p className="mt-3 text-[11.5px] leading-relaxed text-slate-500">
+            {isMm ? 'Voiceover နဲ့ SRT က အချိန်တူညီပါတယ် — CapCut Desktop/Web မှာ နှစ်ခုစလုံးကို 0:00 မှာ တင်လိုက်ရုံပါ။' : 'Voiceover and SRT share one timeline — drop both at 0:00 in CapCut Desktop / Web.'}
           </p>
 
-          <div className="rounded-xl border border-sky-400/30 bg-sky-400/5 p-3 space-y-2">
-            <div className="text-xs font-bold text-sky-300">{isMm ? '📱 iPhone / Android CapCut သုံးမယ်ဆိုရင်' : '📱 Using CapCut on a phone?'}</div>
-            <p className="text-[11px] text-slate-300 leading-relaxed">
-              {isMm
-                ? 'CapCut ဖုန်းအက်ပ်က SRT/စာတန်းဖိုင်ကို လုံးဝ import မလုပ်နိုင်ပါဘူး (CapCut ရဲ့ တရားဝင်ပြောချက်)၊ ဖိုင်ရွေးတဲ့စာမျက်နှာမှာ မှိန်နေတာ ဒါကြောင့်ပါ။ ဗီဒီယိုပဲ ရွေးလို့ရပါတယ်။ ဒါကြောင့် စာတန်းကို ဗီဒီယိုအဖြစ် ထုတ်ပေးပါတယ် — CapCut မှာ Overlay အဖြစ်ထည့်ပြီး Blend = Screen (အနက်ရောင်နောက်ခံ) သို့ Chroma key (အစိမ်းရောင်) သုံးပါ။ SRT ကို PC (CapCut Desktop / Web) မှာပဲ ထည့်လို့ရပါတယ်။'
-                : 'The CapCut phone app cannot import subtitle files at all (per CapCut), which is why they are greyed out — only videos are selectable. So here the subtitles come as a video: add it as an Overlay and set Blend = Screen (black) or Chroma key (green). SRT import works on CapCut Desktop / Web only.'}
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <select className={`${field} !w-auto`} value={overlayBg} onChange={e => setOverlayBg(e.target.value as 'black' | 'green')}>
-                <option value="black">{isMm ? 'အနက်ရောင် (Blend: Screen)' : 'Black (Blend: Screen)'}</option>
-                <option value="green">{isMm ? 'အစိမ်းရောင် (Chroma key)' : 'Green (Chroma key)'}</option>
-              </select>
-              <label className="text-[11px] text-slate-300 flex items-center gap-1.5">
-                <input type="checkbox" checked={overlayWithVoice} onChange={e => setOverlayWithVoice(e.target.checked)} />
-                {isMm ? 'Voiceover အသံပါထည့်' : 'Include voiceover'}
-              </label>
-            </div>
-            <button type="button" onClick={buildOverlay} disabled={overlayBusy !== null} className="w-full py-2.5 rounded-xl bg-sky-400 text-black text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-60">
-              {overlayBusy !== null ? <Loader2 size={14} className="animate-spin" /> : <Film size={14} />}
-              {overlayBusy !== null
-                ? `${isMm ? 'ထုတ်နေသည်… ဒီစာမျက်နှာကို မပိတ်ပါနဲ့' : 'Rendering… keep this page open'} ${Math.round(overlayBusy * 100)}%`
-                : isMm ? 'Subtitle Overlay ဗီဒီယို ထုတ်မည်' : 'Make subtitle overlay video'}
-            </button>
-            {overlayFile && (
-              <button type="button" onClick={saveOverlay} className="w-full py-2.5 rounded-xl bg-emerald-500 text-black text-xs font-bold flex items-center justify-center gap-1.5">
-                <Download size={14} />
-                {isMm ? 'သိမ်းမည် (iPhone: "Save Video" ကိုရွေးပါ)' : 'Save (iPhone: choose "Save Video")'}
+          <details className="mt-5 group rounded-2xl border border-sky-400/25 bg-sky-400/[0.05]">
+            <summary className="flex items-center gap-2 cursor-pointer list-none px-4 py-3.5 text-[13px] font-bold text-sky-300">
+              <Smartphone size={16} />
+              {isMm ? 'ဖုန်း CapCut မှာ သုံးမလား? (SRT မရလို့)' : 'Using CapCut on a phone?'}
+              <ChevronDown size={16} className="ml-auto transition group-open:rotate-180" />
+            </summary>
+            <div className="px-4 pb-4 space-y-3">
+              <p className="text-[12px] leading-relaxed text-slate-300">
+                {isMm
+                  ? 'CapCut ဖုန်းအက်ပ်က စာတန်းဖိုင် (SRT) ကို import မလုပ်နိုင်ပါဘူး၊ ဗီဒီယိုပဲ ရွေးလို့ရတယ်။ ဒါကြောင့် စာတန်းကို ဗီဒီယိုအဖြစ် ထုတ်ပေးပါတယ်။ CapCut မှာ Overlay အဖြစ်ထည့်ပြီး Blend = Screen (အနက်) သို့ Chroma key (အစိမ်း) သုံးပါ။'
+                  : 'The CapCut phone app cannot import subtitle files — only videos. So the subtitles come as a video: add it as an Overlay and set Blend = Screen (black) or Chroma key (green).'}
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <Select value={overlayBg} onChange={v => setOverlayBg(v as 'black' | 'green')}>
+                  <option value="black">{isMm ? 'အနက် · Screen' : 'Black · Screen'}</option>
+                  <option value="green">{isMm ? 'အစိမ်း · Chroma key' : 'Green · Chroma key'}</option>
+                </Select>
+                <label className="flex items-center gap-2 rounded-2xl bg-white/[0.04] border border-white/10 px-4 text-[12px] text-slate-200">
+                  <input type="checkbox" checked={overlayWithVoice} onChange={e => setOverlayWithVoice(e.target.checked)} className="accent-sky-400" />
+                  {isMm ? 'အသံပါထည့်' : 'With voice'}
+                </label>
+              </div>
+              <button type="button" onClick={buildOverlay} disabled={overlayBusy !== null} className="w-full h-12 rounded-2xl bg-sky-400 text-black text-[13px] font-extrabold flex items-center justify-center gap-2 disabled:opacity-60">
+                {overlayBusy !== null ? <Loader2 size={16} className="animate-spin" /> : <Film size={16} />}
+                {overlayBusy !== null
+                  ? `${isMm ? 'ထုတ်နေသည်… စာမျက်နှာကို မပိတ်ပါနဲ့' : 'Rendering… keep this page open'} ${Math.round(overlayBusy * 100)}%`
+                  : isMm ? 'Subtitle Overlay ဗီဒီယို ထုတ်မည်' : 'Make subtitle overlay video'}
               </button>
-            )}
+              {overlayFile && (
+                <button type="button" onClick={saveOverlay} className="w-full h-12 rounded-2xl bg-emerald-400 text-black text-[13px] font-extrabold flex items-center justify-center gap-2">
+                  <Download size={16} />
+                  {isMm ? 'သိမ်းမည် (iPhone: "Save Video")' : 'Save (iPhone: "Save Video")'}
+                </button>
+              )}
+            </div>
+          </details>
+
+          <div className="mt-5">
+            <Label>{isMm ? 'Recap ဇာတ်ညွှန်း' : 'Script'}</Label>
+            <textarea readOnly value={result.script} className="w-full h-64 rounded-2xl bg-black/50 border border-white/10 p-4 text-[13px] leading-[1.9] text-slate-200 focus:outline-none" />
           </div>
 
-          <textarea readOnly value={result.script} className="w-full h-56 bg-black/60 border border-white/10 rounded-xl p-3 text-xs text-slate-200 leading-relaxed" />
-
-          <div className="border-t border-white/10 pt-3 space-y-2">
-            <div className="flex items-center gap-2 flex-wrap">
-              <select className={`${field} !w-auto`} value={aspect} onChange={e => setAspect(e.target.value)}>
-                <option value="original">Original</option><option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option>
-              </select>
-              <button type="button" onClick={buildVideo} disabled={!!rendering || !result.hasVideoTimes} className="flex-1 py-2.5 rounded-xl bg-sky-500 text-black text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-50">
-                {rendering ? <Loader2 size={14} className="animate-spin" /> : <Film size={14} />}
-                {rendering || (isMm ? 'Recap ဗီဒီယိုပါ ထုတ်မည် (PC Worker လိုသည်)' : 'Also render the recap video (needs PC worker)')}
-              </button>
-            </div>
+          <div className="mt-5 pt-5 border-t border-white/10">
+            <Label icon={<Film size={12} />}>{isMm ? 'Recap ဗီဒီယိုပါ လိုချင်ရင် (PC Worker လိုသည်)' : 'Recap video (needs PC worker)'}</Label>
+            <button type="button" onClick={buildVideo} disabled={!!rendering || !result.hasVideoTimes} className="w-full h-12 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 text-white text-[13px] font-bold flex items-center justify-center gap-2 disabled:opacity-50 transition">
+              {rendering ? <Loader2 size={16} className="animate-spin" /> : <Film size={16} />}
+              {rendering || (isMm ? 'Recap ဗီဒီယို ထုတ်မည်' : 'Render recap video')}
+            </button>
             {videoUrl && (
-              <a href={videoUrl} download={`${baseName}_recap.mp4`} className="block text-center py-2.5 rounded-xl bg-emerald-500 text-black text-xs font-bold">
-                <Download size={14} className="inline mr-1" />{isMm ? 'Recap ဗီဒီယို ဒေါင်းမည် (.mp4)' : 'Download recap video (.mp4)'}
+              <a href={videoUrl} download={`${baseName}_recap.mp4`} className="mt-3 flex items-center justify-center gap-2 h-12 rounded-2xl bg-emerald-400 text-black text-[13px] font-extrabold">
+                <Download size={16} />{isMm ? 'Recap ဗီဒီယို ဒေါင်းမည် (.mp4)' : 'Download recap video (.mp4)'}
               </a>
             )}
           </div>
