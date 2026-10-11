@@ -978,7 +978,8 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
                     <span>Voice Studio</span>
                   </button>
 
-                  {/* Open in Video Editor Studio */}
+                  {/* Open in Video Editor Studio (only when the host provides it) */}
+                  {onSendToVideoEditor && (
                   <button
                     type="button"
                     onClick={() => {
@@ -997,6 +998,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
                     <Film size={14} />
                     <span>{isMm ? 'Video Editor 🎬' : 'Video Editor 🎬'}</span>
                   </button>
+                  )}
 
                   {/* Download Text Transcript / Recap */}
                   <button
