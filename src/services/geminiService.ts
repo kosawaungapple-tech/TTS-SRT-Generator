@@ -1,5 +1,6 @@
 import { formatTime, pcmToWav } from "../utils/audioUtils";
-import { generateOptimizedSubtitles, generateSubtitlesFromTimestamps, generateSRT } from "../utils/subtitleUtils";
+import { generateOptimizedSubtitles, generateSubtitlesFromTimestamps, generateSRT, splitSentenceIntoCueBlocks } from "../utils/subtitleUtils";
+import { planSubtitlePieces } from "../utils/recapGeometry";
 import { apiChannelManager, isPlausibleApiKey } from "./apiChannelManager";
 import { getIdToken } from "../firebase";
 import { ttsCache } from "./ttsCache";
@@ -996,7 +997,53 @@ ${list.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.te
         }
       }
 
-      finalSrtBlocks.push(`${i + 1}\r\n${timeLine}\r\n${finalCueText}`);
+      // One long translated line becomes several short on-screen pieces (max 2 short lines each),
+      // each shown for its share of the cue's time, so the picture is never covered by a wall of text.
+      const tw = timeLine.match(/(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)/);
+      let pieces = tw ? planSubtitlePieces(translated, splitSentenceIntoCueBlocks, 44, 24) : [];
+      if (tw && pieces.length > 1) {
+        const toS2 = (h: string, m: string, sec: string, ms: string) => +h * 3600 + +m * 60 + +sec + +ms.padEnd(3, '0').slice(0, 3) / 1000;
+        const a0 = toS2(tw[1], tw[2], tw[3], tw[4]);
+        const b0 = toS2(tw[5], tw[6], tw[7], tw[8]);
+        const total = Math.max(0.1, b0 - a0);
+        // never flash pieces shorter than ~0.9s: merge neighbours when the cue is too short for them all
+        const maxPieces = Math.max(1, Math.floor(total / 0.9));
+        while (pieces.length > maxPieces) {
+          let k = 0;
+          let best = Infinity;
+          for (let j = 0; j < pieces.length - 1; j++) {
+            const w = (pieces[j].to - pieces[j].from) + (pieces[j + 1].to - pieces[j + 1].from);
+            if (w < best) { best = w; k = j; }
+          }
+          pieces.splice(k, 2, { text: `${pieces[k].text}\n${pieces[k + 1].text}`, from: pieces[k].from, to: pieces[k + 1].to });
+        }
+        const fmtP = (t: number) => {
+          const ms = Math.round(t * 1000);
+          const p2 = (n: number, l = 2) => String(n).padStart(l, '0');
+          return `${p2(Math.floor(ms / 3600000))}:${p2(Math.floor((ms % 3600000) / 60000))}:${p2(Math.floor((ms % 60000) / 1000))},${p2(ms % 1000, 3)}`;
+        };
+        // share the cue's time by text length, but give every piece at least MIN seconds
+        const MIN = 0.9;
+        const share = pieces.map(pc => pc.to - pc.from);
+        const dur = share.map(w => w * total);
+        for (let pass = 0; pass < 4; pass++) {
+          const fixed = dur.map(d => d < MIN);
+          const fixedSum = fixed.reduce((n, f) => n + (f ? MIN : 0), 0);
+          const freeIdx = dur.map((_, j) => j).filter(j => !fixed[j]);
+          const freeSum = freeIdx.reduce((n, j) => n + share[j], 0) || 1;
+          dur.forEach((_, j) => { dur[j] = fixed[j] ? MIN : ((total - fixedSum) * share[j]) / freeSum; });
+          if (dur.every(d => d >= MIN - 1e-6)) break;
+        }
+        const startsAt: number[] = [];
+        dur.reduce((acc, d, j) => { startsAt[j] = acc; return acc + d; }, a0);
+        pieces.forEach((pc, pi) => {
+          const ps = startsAt[pi];
+          const pe = pi === pieces.length - 1 ? b0 : startsAt[pi] + dur[pi] - 0.02;
+          finalSrtBlocks.push(`${finalSrtBlocks.length + 1}\r\n${fmtP(ps)} --> ${fmtP(pe)}\r\n${pi === 0 ? speakerPrefix : ''}${pc.text}`);
+        });
+      } else {
+        finalSrtBlocks.push(`${finalSrtBlocks.length + 1}\r\n${timeLine}\r\n${finalCueText}`);
+      }
       narrativeScriptPieces.push(translated);
     }
 
