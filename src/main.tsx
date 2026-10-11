@@ -4,6 +4,9 @@ import App from './App.tsx';
 import './index.css';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LanguageProvider } from './contexts/LanguageContext';
+import { installNativeApiBase } from './utils/platform';
+
+installNativeApiBase();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
