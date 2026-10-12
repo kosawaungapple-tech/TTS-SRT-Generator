@@ -364,13 +364,74 @@ export class GeminiTTSService {
     return chunks;
   }
 
+  // ---- Gemini custom voices (voice replication, Gemini 3.8 Flash TTS) -----------------------------
+  private async voicesRequest(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const token = await getIdToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const r = await fetch('/api/gemini/voices', { method: 'POST', headers, body: JSON.stringify({ ...payload, apiKey: this.apiKey }) });
+    const data = await r.json().catch(() => ({} as Record<string, unknown>));
+    if (!r.ok) {
+      const e = (data as { error?: unknown }).error;
+      const msg = typeof e === 'string' ? e : (e as { message?: string } | undefined)?.message || r.statusText;
+      throw new Error(`Custom voice error (${r.status}): ${msg}`);
+    }
+    return data;
+  }
+
+  /** Creates a stored custom voice from a reference sample and the owner's consent recording (both 24 kHz mono WAV, base64). */
+  async createCustomVoice(sourceAudio: string, consentAudio: string, displayName?: string): Promise<string> {
+    const data = await this.voicesRequest({ action: 'create', sourceAudio, consentAudio, displayName });
+    const id = (data.id as string) || ((data.replicated_voice as { id?: string } | undefined)?.id) || (data.key as string) || '';
+    if (!id) throw new Error('Google did not return a voice id');
+    return id;
+  }
+
+  async deleteCustomVoice(voiceId: string): Promise<void> {
+    if (!voiceId.startsWith('voice_')) return;
+    await this.voicesRequest({ action: 'delete', voice: voiceId });
+  }
+
+  private async speakWithCustomVoice(voice: string, text: string, style: string): Promise<GeminiResponse> {
+    const data = await this.voicesRequest({ action: 'speak', voice, text, style: style || undefined });
+    // Find the audio item: steps[].content[] with type 'audio' (or output_audio)
+    let audioB64 = '';
+    let mime = '';
+    const steps = (data.steps as Array<{ type?: string; content?: Array<{ type?: string; data?: string; mime_type?: string }> }>) || [];
+    for (const st of steps) {
+      for (const c of st.content || []) {
+        if (c.type === 'audio' && c.data) { audioB64 = c.data; mime = c.mime_type || ''; }
+      }
+    }
+    if (!audioB64) audioB64 = (data.output_audio as { data?: string } | undefined)?.data || '';
+    if (!audioB64) throw new Error('No audio returned for the custom voice');
+    // If it is a WAV file, hand the raw PCM on (the shared pipeline wraps PCM itself).
+    const bin = atob(audioB64);
+    if (bin.startsWith('RIFF')) {
+      let pos = 12;
+      let dataStart = 44;
+      let dataLen = bin.length - 44;
+      while (pos + 8 <= bin.length) {
+        const id = bin.substr(pos, 4);
+        const len = bin.charCodeAt(pos + 4) | (bin.charCodeAt(pos + 5) << 8) | (bin.charCodeAt(pos + 6) << 16) | (bin.charCodeAt(pos + 7) << 24);
+        if (id === 'data') { dataStart = pos + 8; dataLen = Math.min(len >>> 0, bin.length - dataStart); break; }
+        pos += 8 + len + (len % 2);
+      }
+      audioB64 = btoa(bin.substr(dataStart, dataLen));
+      mime = 'audio/L16;rate=24000';
+    }
+    return { candidates: [{ content: { parts: [{ inlineData: { data: audioB64, mimeType: mime || 'audio/L16;rate=24000' } }] } }] };
+  }
+
   private async generateSingleTTS(text: string, config: TTSConfig, onRetry?: (seconds: number, message: string) => void): Promise<AudioResult> {
     const voice = VOICE_OPTIONS.find(v => v.id === config.voiceId) || VOICE_OPTIONS.find(v => v.voiceName === 'Leda') || VOICE_OPTIONS[0];
     const styleInstruction = config.styleInstruction?.trim() || '';
+    const customVoiceId = /^voice(key)?_/.test(config.voiceProfile || '') ? (config.voiceProfile as string) : '';
+    const cacheVoiceId = customVoiceId || config.voiceId;
 
     // Check Cache First
     try {
-      const cached = await ttsCache.get(text, config.voiceId, styleInstruction);
+      const cached = await ttsCache.get(text, cacheVoiceId, styleInstruction);
       if (cached) {
         console.log(`TTS Service: Cache hit for "${text.substring(0, 30)}..."`);
         // If it's a valid object URL from a previous session, it might be revoked.
@@ -402,7 +463,8 @@ export class GeminiTTSService {
       : audioText;
 
     let selectedModel = config.selectedModel || GEMINI_MODELS.TTS;
-    const hasAudioInput = !!config.voiceProfile;
+    // Legacy base64 audio profiles are ignored; a custom voice is a Gemini voice id (voice_... / voicekey_...).
+    const hasAudioInput = false;
 
     if (hasAudioInput) {
       textWithInstruction = `Task: Perform Text-to-Speech synthesis. Read the following text aloud using the voice tone/style from the attached audio reference. Output format MUST BE AUDIO.
@@ -451,7 +513,9 @@ export class GeminiTTSService {
       isTts: true
     };
 
-    const data = await this.geminiRequest(selectedModel, body, 0, onRetry);
+    const data: GeminiResponse = customVoiceId
+      ? await this.speakWithCustomVoice(customVoiceId, audioText, combinedInstruction)
+      : await this.geminiRequest(selectedModel, body, 0, onRetry);
     
     // Search all parts in the candidate content to find inlineData
     const responseParts = data.candidates?.[0]?.content?.parts || [];
@@ -558,7 +622,7 @@ export class GeminiTTSService {
     };
 
     // Save to Cache (non-blocking)
-    ttsCache.set(text, config.voiceId, styleInstruction, result).catch(e => console.warn("TTS Service: Cache save failed", e));
+    ttsCache.set(text, cacheVoiceId, styleInstruction, result).catch(e => console.warn("TTS Service: Cache save failed", e));
 
     return result;
   }
