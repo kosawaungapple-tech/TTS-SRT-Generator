@@ -163,7 +163,7 @@ export const CustomVoiceProfile: React.FC<CustomVoiceProfileProps> = ({ onProfil
       </p>
 
       <div className="space-y-2">
-        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{mm ? '၁) အသံနမူနာ (၁၀–၂၀ စက္ကန့်၊ ကြည်ကြည်လင်လင်)' : '1) Voice sample (10–20s, clear speech)'}</p>
+        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{sample ? '✅ ' : ''}{mm ? '၁) အသံနမူနာ (၁၀–၂၀ စက္ကန့်၊ ကြည်ကြည်လင်လင်)' : '1) Voice sample (10–20s, clear speech)'}</p>
         <div className="flex gap-3">
           <RecBtn which="sample" />
           <label className="flex flex-1 items-center justify-center gap-2 p-4 rounded-2xl border-2 border-dashed bg-white/5 border-white/10 text-slate-400 hover:border-amber-400/50 hover:text-amber-500 cursor-pointer transition-all text-[11px] font-bold uppercase tracking-wider">
@@ -181,12 +181,19 @@ export const CustomVoiceProfile: React.FC<CustomVoiceProfileProps> = ({ onProfil
       </div>
 
       <div className="space-y-2">
-        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{mm ? '၂) အောက်ပါစာကြောင်းကို အသံထွက်ဖတ်ပြီး သွင်းပါ' : '2) Record yourself reading this sentence'}</p>
+        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{consent ? '✅ ' : ''}{mm ? '၂) အောက်ပါစာကြောင်းကို အသံထွက်ဖတ်ပြီး သွင်းပါ' : '2) Record yourself reading this sentence'}</p>
         <p className="text-xs text-amber-300 bg-amber-400/5 border border-amber-400/10 rounded-xl p-3 leading-relaxed">“{CONSENT_SENTENCE}”</p>
         <RecBtn which="consent" />
         {consent && <audio src={consent.url} controls className="h-8 w-full" />}
       </div>
 
+      {!busy && (!sample || !consent) && (
+        <p className="text-[11px] text-amber-300 bg-amber-400/5 border border-amber-400/10 rounded-xl p-3 leading-relaxed">
+          {mm
+            ? `ခလုတ်ကို နှိပ်နိုင်ရန် လိုအပ်နေသေးသည် — ${!sample ? '၁) အသံနမူနာ' : ''}${!sample && !consent ? ' နှင့် ' : ''}${!consent ? '၂) သဘောတူစာကြောင်း အသံသွင်းခြင်း' : ''} ကို သွင်းပါ။`
+            : `Still needed before you can create the voice: ${!sample ? 'step 1 (voice sample)' : ''}${!sample && !consent ? ' and ' : ''}${!consent ? 'step 2 (consent recording)' : ''}.`}
+        </p>
+      )}
       <button
         type="button"
         onClick={createVoice}
