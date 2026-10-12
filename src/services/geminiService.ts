@@ -1177,26 +1177,31 @@ ${list.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.te
     }
   ): Promise<{ text: string; segments?: RecapSegment[] }> {
     const models = [GEMINI_MODELS.SCRIPT, GEMINI_MODELS.REWRITE].filter((m, i, a) => a.indexOf(m) === i);
-    let modelIdx = 0;
+    // When the main model is overloaded (503/429) do not sit through long retry back-offs on every call:
+    // try it once more, then use the lite model and skip the main one for a while.
+    let primaryBadUntil = 0;
+    const OVERLOAD = /503|overloaded|high demand|unavailable|429|quota|404|not found|not supported|invalid model/i;
 
     const llm: RecapLlm = async (prompt, o) => {
       const parts: unknown[] = [{ text: prompt }];
       for (const img of o?.images || []) parts.push({ inlineData: { mimeType: 'image/jpeg', data: img } });
       const config: Record<string, unknown> = { temperature: o?.json ? 0.4 : 0.7 };
       if (o?.json) config.responseMimeType = 'application/json';
+      const order = Date.now() < primaryBadUntil && models.length > 1 ? models.slice(1) : models;
       let lastErr: unknown = null;
-      while (modelIdx < models.length) {
+      for (let k = 0; k < order.length; k++) {
+        const isPrimary = order[k] === models[0] && models.length > 1;
         try {
-          const data = await this.geminiRequest(models[modelIdx], { contents: [{ parts }], generationConfig: config }, 0, onRetry);
+          // retryCount 4 of 5 = a single quick retry for the main model; the last model gets the full back-off
+          const data = await this.geminiRequest(order[k], { contents: [{ parts }], generationConfig: config }, isPrimary ? 4 : 0, onRetry);
           const text = data.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || '').join('') || '';
           if (!text.trim()) throw new Error('Empty response from Gemini');
           return text;
         } catch (e) {
           lastErr = e;
-          // fall back to the next model when this one is unavailable, overloaded (503) or out of quota
           const msg = e instanceof Error ? e.message : String(e);
-          if (modelIdx < models.length - 1 && /404|not found|not supported|unavailable|invalid model|503|overloaded|high demand|429|quota/i.test(msg)) {
-            modelIdx++;
+          if (k < order.length - 1 && OVERLOAD.test(msg)) {
+            if (isPrimary) primaryBadUntil = Date.now() + 90_000;
             continue;
           }
           throw e;
