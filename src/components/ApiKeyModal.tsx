@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import { X, Eye, EyeOff, Plus, Trash2, ShieldCheck, ExternalLink, AlertCircle, Zap, Check } from 'lucide-react';
 import { apiChannelManager, ApiChannel } from '../services/apiChannelManager';
 import { assemblyAiService } from '../services/assemblyAiService';
-import { groqService, GROQ_MODELS } from '../services/groqService';
 
 interface ApiKeyModalProps {
   isOpen: boolean;
@@ -45,21 +44,6 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role,
     assemblyAiService.clearStoredApiKey();
     setAssemblyKey('');
   };
-
-  // Groq API Key State (Auto Recap writing engine)
-  const [groqKey, setGroqKey] = useState(() => groqService.getKey());
-  const [newGroqKey, setNewGroqKey] = useState('');
-  const [groqModel, setGroqModel] = useState(() => groqService.getModel());
-  const [groqSaved, setGroqSaved] = useState(false);
-  const handleSaveGroqKey = () => {
-    if (!newGroqKey.trim()) return;
-    groqService.setKey(newGroqKey);
-    setGroqKey(newGroqKey.trim());
-    setNewGroqKey('');
-    setGroqSaved(true);
-    setTimeout(() => setGroqSaved(false), 2500);
-  };
-  const handleClearGroqKey = () => { groqService.clearKey(); groqService.setEngine('gemini'); setGroqKey(''); };
 
   useEffect(() => {
     const handleUpdate = () => {
@@ -421,65 +405,6 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, role,
                         )}
                       </div>
                     )}
-
-                    {/* Groq API Key Section (fast script writing for Auto Recap) */}
-                    <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-                          <Zap size={14} className="text-orange-400" />
-                          <span>Groq API Key (Auto Recap – fast script writing)</span>
-                        </label>
-                        {groqKey && (
-                          <span className="text-[10px] font-bold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full flex items-center gap-1">
-                            <Check size={10} /> Connected
-                          </span>
-                        )}
-                      </div>
-                      {groqKey ? (
-                        <div className="space-y-2">
-                          <div className="p-4 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 flex items-center justify-between">
-                            <div className="font-mono text-[11px] text-slate-400 truncate pr-3">{maskKey(groqKey)}</div>
-                            <button type="button" onClick={handleClearGroqKey} className="p-2 bg-rose-500/10 text-rose-500 rounded-lg hover:bg-rose-500 hover:text-white transition-all" title="Delete Key">
-                              <Trash2 size={15} />
-                            </button>
-                          </div>
-                          <select
-                            value={groqModel}
-                            onChange={(e) => { setGroqModel(e.target.value); groqService.setModel(e.target.value); }}
-                            className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-800 dark:text-slate-200 outline-none"
-                          >
-                            {GROQ_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
-                          </select>
-                          <p className="text-[10px] text-slate-400">Auto Recap tab ထဲမှာ “Writing engine” ကို Groq ရွေးပါ။ ဗီဒီယိုကြည့်တဲ့အဆင့်ကို Gemini ကပဲ လုပ်ပါမယ်။</p>
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          <div className="flex gap-2">
-                            <input
-                              type="password"
-                              value={newGroqKey}
-                              onChange={(e) => setNewGroqKey(e.target.value)}
-                              placeholder="Paste Groq API Key (gsk_...)"
-                              className="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-800 dark:text-slate-200 focus:ring-2 focus:ring-amber-400/20 outline-none transition-all font-mono"
-                            />
-                            <button
-                              type="button"
-                              onClick={handleSaveGroqKey}
-                              disabled={!newGroqKey.trim()}
-                              className="bg-amber-400 disabled:opacity-50 text-black px-4 rounded-xl font-bold text-xs hover:bg-amber-300 transition-all flex items-center gap-1.5 shrink-0"
-                            >
-                              <Check size={14} />
-                              <span>Save</span>
-                            </button>
-                          </div>
-                          {groqSaved && <p className="text-[11px] text-emerald-400 font-medium">Groq Key saved!</p>}
-                          <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-[10px] text-slate-400 hover:text-amber-500 transition-colors w-fit font-medium">
-                            <ExternalLink size={10} />
-                            <span>Groq Key အခမဲ့ရယူရန် →</span>
-                          </a>
-                        </div>
-                      )}
-                    </div>
 
                     {/* AssemblyAI API Key Section (For Video Recap & Auto-SRT) */}
                     <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
