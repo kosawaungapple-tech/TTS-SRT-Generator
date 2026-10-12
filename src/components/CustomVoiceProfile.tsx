@@ -105,7 +105,14 @@ export const CustomVoiceProfile: React.FC<CustomVoiceProfileProps> = ({ onProfil
       setSample(null);
       setConsent(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/paid quota tier|tier 1/i.test(msg)) {
+        setError(mm
+          ? 'Google က Voice cloning ကို Paid Tier 1 အကောင့်မှသာ ခွင့်ပြုထားပါသည်။ Google AI Studio မှာ ဒီ API key ရဲ့ project ကို Billing (ကတ်) ချိတ်ပြီး Tier 1 ဖြစ်အောင် လုပ်ပေးပါ၊ ပြီးမှ ပြန်စမ်းပါ။ (' + msg + ')'
+          : 'Google only allows voice cloning on Paid Tier 1 or higher. In Google AI Studio, link billing to this API key\'s project to reach Tier 1, then try again. (' + msg + ')');
+      } else {
+        setError(msg);
+      }
     } finally {
       setBusy(false);
     }
