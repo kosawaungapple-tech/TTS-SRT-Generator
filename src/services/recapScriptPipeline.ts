@@ -209,7 +209,7 @@ ${dialogue || '(none)'}`;
       }
     }
   };
-  await Promise.all([worker(), worker()]);
+  await Promise.all([worker(), worker(), worker()]);
 
   for (let i = 0; i < count; i++) {
     if (!bible.setting && settings[i]) bible.setting = settings[i];
@@ -459,9 +459,12 @@ async function editParagraphs(
 ): Promise<string[]> {
   const out = [...paragraphs];
   const W = 8;
-  for (let i = 0; i < paragraphs.length; i += W) {
+  const starts: number[] = [];
+  for (let i = 0; i < paragraphs.length; i += W) starts.push(i);
+  // windows are independent (context comes from the original previous paragraph), so run them in parallel
+  await Promise.all(starts.map(async i => {
     const part = paragraphs.slice(i, i + W);
-    const prev = i > 0 ? out[i - 1].slice(-200) : '';
+    const prev = i > 0 ? paragraphs[i - 1].slice(-200) : '';
     try {
       const raw = await llm(
         `You are the final editor of a recap voice-over. Edit the numbered paragraphs below.
@@ -478,11 +481,11 @@ ${part.map((t, k) => `${k + 1}. ${t}`).join('\n\n')}`,
         { json: true }
       );
       const edited = extractJson<{ paragraphs?: string[] }>(raw).paragraphs?.map(x => String(x).trim());
-      if (!edited || edited.length !== part.length) continue;
+      if (!edited || edited.length !== part.length) return;
       const ok = edited.every((t, k) => t && t.length >= part[k].length * 0.7 && t.length <= part[k].length * 1.35 && languageOk(t, language));
       if (ok) edited.forEach((t, k) => { out[i + k] = t; });
     } catch { /* keep the original paragraphs of this window */ }
-  }
+  }));
   return out;
 }
 
