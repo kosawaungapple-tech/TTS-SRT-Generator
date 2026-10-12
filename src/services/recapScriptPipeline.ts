@@ -409,6 +409,83 @@ ${script}`
   return script;
 }
 
+/**
+ * The video is watched window by window, so the same person is often named differently
+ * ("the man in the red jacket" / "Li Wei" / "the boss"). Merge them into one canonical name
+ * and rewrite the events, so the script keeps calling each character the same thing.
+ */
+async function unifyCharacters(llm: RecapLlm, bible: Bible, language: 'mm' | 'en'): Promise<void> {
+  if (bible.characters.length < 3) return;
+  try {
+    const list = bible.characters.map((c, i) => `${i + 1}. ${c.name} — ${c.who}`).join('\n');
+    const raw = await llm(
+      `These character labels were written independently for different parts of one video, so several may be the SAME person.
+Merge entries that are clearly the same person (same role/relationship/appearance). Prefer a real name that is spoken or shown over a visual description. Do not merge people you are not sure about.
+Return JSON: {"characters":[{"name":"canonical name","who":"role, short","aliases":["other labels copied EXACTLY from the list that mean the same person"]}]}
+${LANG_RULE(language)}
+
+${list}`,
+      { json: true }
+    );
+    if (!languageOk(raw, language)) return;
+    const parsed = extractJson<{ characters?: { name?: string; who?: string; aliases?: string[] }[] }>(raw).characters || [];
+    const known = new Set(bible.characters.map(c => c.name));
+    const merged: { name: string; who: string }[] = [];
+    const replace: [string, string][] = [];
+    for (const c of parsed) {
+      const name = String(c.name || '').trim();
+      if (!name) continue;
+      merged.push({ name, who: String(c.who || '') });
+      for (const a of c.aliases || []) {
+        const alias = String(a).trim();
+        if (alias.length >= 2 && alias !== name && known.has(alias)) replace.push([alias, name]);
+      }
+    }
+    if (merged.length === 0 || merged.length > bible.characters.length) return;
+    // longest aliases first so "the man in the red jacket" wins over "the man"
+    replace.sort((a, b) => b[0].length - a[0].length);
+    bible.events = bible.events.map(e => replace.reduce((acc, [from, to]) => acc.split(from).join(to), e));
+    bible.characters = merged;
+  } catch { /* keep the original labels */ }
+}
+
+/** Polish the narration paragraph by paragraph (keeps the count/order, so the video time alignment stays valid). */
+async function editParagraphs(
+  llm: RecapLlm,
+  bible: Bible,
+  paragraphs: string[],
+  rules: string,
+  language: 'mm' | 'en'
+): Promise<string[]> {
+  const out = [...paragraphs];
+  const W = 8;
+  for (let i = 0; i < paragraphs.length; i += W) {
+    const part = paragraphs.slice(i, i + W);
+    const prev = i > 0 ? out[i - 1].slice(-200) : '';
+    try {
+      const raw = await llm(
+        `You are the final editor of a recap voice-over. Edit the numbered paragraphs below.
+${rules}
+
+FACTS (the only allowed facts):
+${bibleText(bible)}
+
+${prev ? `The paragraph before these ends with: "${prev}"\n` : ''}Do this: make each paragraph flow into the next, remove repeated words/openers/filler across paragraphs, call every character by the same name, sharpen the emotional peaks, ${i === 0 ? 'make the very first line a gripping hook, ' : ''}keep questions and teasers. Keep EXACTLY ${part.length} paragraphs in the same order (never merge or split), keep each paragraph's facts, keep each about the same length (±15%). Do NOT add facts.
+${LANG_RULE(language)}
+Return JSON: {"paragraphs":["...","..."]}
+
+${part.map((t, k) => `${k + 1}. ${t}`).join('\n\n')}`,
+        { json: true }
+      );
+      const edited = extractJson<{ paragraphs?: string[] }>(raw).paragraphs?.map(x => String(x).trim());
+      if (!edited || edited.length !== part.length) continue;
+      const ok = edited.every((t, k) => t && t.length >= part[k].length * 0.7 && t.length <= part[k].length * 1.35 && languageOk(t, language));
+      if (ok) edited.forEach((t, k) => { out[i + k] = t; });
+    } catch { /* keep the original paragraphs of this window */ }
+  }
+  return out;
+}
+
 export async function generateGroundedRecapScript(llm: RecapLlm, source: string, opts: RecapScriptOptions = {}): Promise<string> {
   return (await generateGroundedRecap(llm, source, opts)).text;
 }
@@ -445,6 +522,7 @@ ${source.slice(0, 24000)}`,
   const bible = watching
     ? await watchVideo(llm, opts, language)
     : await buildBible(llm, source, language, opts.frames, opts.onStage);
+  if (watching) await unifyCharacters(llm, bible, language);
   const totalChars = computeTargetChars(
     language,
     minutes,
@@ -500,6 +578,11 @@ ${source.slice(0, 24000)}`,
     } catch { /* keep */ }
   }
 
+  if (watching && bible.times) {
+    opts.onStage?.({ stage: 'edit' });
+    const polished = await editParagraphs(llm, bible, paragraphs, rules, language);
+    polished.forEach((t, i) => { paragraphs[i] = t; });
+  }
   const draft = paragraphs.join('\n\n');
 
   if (watching && bible.times) {
