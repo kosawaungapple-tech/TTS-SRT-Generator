@@ -363,6 +363,27 @@ export class GeminiTTSService {
     return chunks;
   }
 
+  /** Shortens one narration paragraph to about targetChars so its voiceover fits the video time it covers. */
+  async condenseNarration(text: string, targetChars: number, language: 'mm' | 'en' = 'mm', onRetry?: (seconds: number, message: string) => void): Promise<string | null> {
+    const prompt = `Shorten this recap narration paragraph to about ${targetChars} characters (currently ${text.length}).
+Keep the key actions, the cause→effect and the emotion; cut filler, repeated ideas and minor description. Keep the same voice and tense, same names, and do not add any new fact.
+${language === 'mm' ? 'Write only spoken Burmese (မြန်မာ). No Chinese/English sentences.' : 'Write only English.'}
+Output ONLY the shortened paragraph.
+
+${text}`;
+    for (const model of [GEMINI_MODELS.SCRIPT, GEMINI_MODELS.REWRITE]) {
+      try {
+        const data = await this.geminiRequest(model, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.4 } }, 0, onRetry);
+        const out = (data.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || '').join('') || '').trim().replace(/^```[a-z]*\n?|```$/g, '').trim();
+        if (!out) continue;
+        const bad = language === 'mm' ? /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u0e00-\u0e7f]/.test(out) : false;
+        if (bad || out.length > Math.max(targetChars * 1.2, 40) || out.length < targetChars * 0.4) return null;
+        return out;
+      } catch { /* try next model */ }
+    }
+    return null;
+  }
+
   // ---- Gemini custom voices (voice replication, Gemini 3.8 Flash TTS) -----------------------------
   private async voicesRequest(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
     const token = await getIdToken();

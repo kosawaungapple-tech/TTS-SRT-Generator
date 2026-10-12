@@ -5,7 +5,7 @@ import { assemblyAiService } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
 import { renderSceneRecap } from '../services/recapRenderService';
 import { captureVideoFrames } from '../utils/videoFrames';
-import { audioBufferToWav } from '../utils/audioUtils';
+import { audioBufferToWav, renderProcessedAudio } from '../utils/audioUtils';
 import { generateSRT, downloadSrtFile, splitSentenceIntoCueBlocks } from '../utils/subtitleUtils';
 import { getRecapOutputSize, planSubtitlePieces } from '../utils/recapGeometry';
 import { renderSubtitleVideo } from '../utils/subtitleVideo';
@@ -269,16 +269,55 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
 
       // ---- 3. Voice every scene --------------------------------------------------------------
       stageRef.current = '3 voiceover (Gemini TTS)';
+      const Ctx0 = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
       const sceneAudios: Blob[] = [];
-      for (let i = 0; i < segments.length; i++) {
-        if (ctrl.signal.aborted) throw new Error('Cancelled');
-        setProgress({ text: `${isMm ? '၃/၄ အသံသွင်းနေသည်' : '3/4 Recording the voiceover'} (${i + 1}/${segments.length})`, percent: 50 + Math.round((i / segments.length) * 40) });
-        const r = await g.generateTTS(segments[i].text, { voiceId: voice, speed, pitch: 0, volume: 100, vocalStyle: 'Expressive' }, undefined, undefined, (s, msg) =>
+      // The voiceover must fit the video: each scene gets the time of the part of the video it tells.
+      const coverageFactor = length === 'short' ? 0.4 : length === 'full' ? 1 : 0.7;
+      const totalTarget = duration > 0 ? duration * coverageFactor : 0;
+      const totalChars = segments.reduce((n, sg) => n + sg.text.length, 0) || 1;
+      const lang: 'mm' | 'en' = language === 'en' ? 'en' : 'mm';
+      const durOf = async (blob: Blob) => {
+        const c = new Ctx0();
+        try { return (await c.decodeAudioData(await blob.arrayBuffer())).duration; } finally { void c.close(); }
+      };
+      const speakOnce = async (text: string, i: number) => {
+        const r = await g.generateTTS(text, { voiceId: voice, speed, pitch: 0, volume: 100, vocalStyle: 'Expressive' }, undefined, undefined, (s, msg) =>
           setProgress(p => ({ text: `${msg} (${s}s)`, percent: p?.percent ?? 60 }))
         );
         if (!r?.audioUrl) throw new Error(`No audio for part ${i + 1}`);
         const blob = await (await fetch(r.audioUrl)).blob();
         if (!blob.size) throw new Error(`Empty audio for part ${i + 1}`);
+        return blob;
+      };
+      for (let i = 0; i < segments.length; i++) {
+        if (ctrl.signal.aborted) throw new Error('Cancelled');
+        setProgress({ text: `${isMm ? '၃/၄ အသံသွင်းနေသည်' : '3/4 Recording the voiceover'} (${i + 1}/${segments.length})`, percent: 50 + Math.round((i / segments.length) * 40) });
+        let blob = await speakOnce(segments[i].text, i);
+        if (totalTarget > 0) {
+          const budget = Math.max(
+            2,
+            (hasVideoTimes ? (segments[i].end - segments[i].start) * coverageFactor : (totalTarget * segments[i].text.length) / totalChars) - GAP
+          );
+          let dur = await durOf(blob);
+          if (dur > budget * 1.08) {
+            // too long for its part of the video: tell the paragraph shorter, then voice it again
+            setProgress(p => ({ text: `${isMm ? '၃/၄ ဗီဒီယိုအချိန်နဲ့ ကိုက်အောင် ညှိနေသည်' : '3/4 Fitting the narration to the video'} (${i + 1}/${segments.length})`, percent: p?.percent ?? 60 }));
+            const target = Math.max(20, Math.round(segments[i].text.length * (budget / dur) * 0.97));
+            const shorter = await g.condenseNarration(segments[i].text, target, lang);
+            if (shorter) {
+              const b2 = await speakOnce(shorter, i);
+              const d2 = await durOf(b2);
+              if (d2 < dur) { segments[i] = { ...segments[i], text: shorter }; blob = b2; dur = d2; }
+            }
+            // still a little long: speed it up slightly (max 1.12x) rather than letting the voiceover run past the picture
+            if (dur > budget * 1.02) {
+              const rate = Math.min(1.12, dur / budget);
+              if (rate > 1.03) {
+                try { blob = (await renderProcessedAudio(blob, { speed: rate })).blob; } catch { /* keep as is */ }
+              }
+            }
+          }
+        }
         sceneAudios.push(blob);
       }
 

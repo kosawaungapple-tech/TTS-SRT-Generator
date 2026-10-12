@@ -70,7 +70,8 @@ const LANG_RULE = (language: 'mm' | 'en') =>
     ? 'LANGUAGE: every word you output must be Burmese (မြန်မာ). The video dialogue may be Chinese/English/etc.: understand it and TELL it in Burmese, never copy or quote foreign-language sentences. Write foreign names in Burmese script.'
     : 'LANGUAGE: every word you output must be English. If the video dialogue is in another language, translate it; never copy foreign-language sentences.';
 
-const CHARS_PER_MIN = { mm: 520, en: 800 };
+// Measured: Gemini Burmese voices read ~340 characters per minute at 1.0x (a 1:58 video at 520/min came out as 3:05).
+const CHARS_PER_MIN = { mm: 340, en: 800 };
 
 export function computeTargetChars(
   language: 'mm' | 'en',
