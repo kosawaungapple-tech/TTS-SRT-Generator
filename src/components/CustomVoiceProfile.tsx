@@ -88,8 +88,7 @@ export const CustomVoiceProfile: React.FC<CustomVoiceProfileProps> = ({ onProfil
   };
 
   const gemini = () => {
-    const managed = apiChannelManager.getSettings().useAdminKeys;
-    return new GeminiTTSService(managed ? '' : apiChannelManager.getActiveKey() || '');
+    return new GeminiTTSService(apiChannelManager.getActiveKey() || '');
   };
 
   const createVoice = async () => {

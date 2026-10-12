@@ -162,8 +162,9 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   );
 
   const gemini = useCallback(() => {
-    const useManaged = isAdmin || apiChannelManager.getSettings().useAdminKeys;
-    return new GeminiTTSService(useManaged ? '' : apiChannelManager.getActiveKey() || '', isAdmin);
+    // Use the key chosen in Settings (personal key, or the admin pool for admins). Only when none is set
+    // does the server fall back to its own key — which is what produced "API key not valid".
+    return new GeminiTTSService(apiChannelManager.getActiveKey(false, isAdmin) || '', isAdmin);
   }, [isAdmin]);
 
   const pickFile = async (f: File | null) => {
@@ -367,7 +368,12 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       showToast(isMm ? '🎉 Auto Recap ပြီးပါပြီ — Voiceover နဲ့ SRT ကို ဒေါင်းလို့ရပါပြီ' : '🎉 Recap ready — download the voiceover and SRT', 'success');
     } catch (e) {
       console.error('[AutoRecap]', e);
-      const msg = e instanceof Error ? e.message : String(e);
+      let msg = e instanceof Error ? e.message : String(e);
+      if (/api key not valid|invalid api key|API_KEY_INVALID/i.test(msg)) {
+        msg += isMm
+          ? ' — Gemini API Key မှားနေသည်။ Settings ထဲက Gemini API Key ကို စစ်ပြီး (AI Studio က key အသစ်ကို အပြည့်ကူးထည့်ပါ) ပြန်သိမ်းပါ။'
+          : ' — The Gemini API key is invalid. Check the key in Settings (paste the full key from AI Studio) and save it again.';
+      }
       setErrorInfo(`[${stageRef.current}] ${msg}`);
       showToast(msg, 'error');
       setProgress(null);
