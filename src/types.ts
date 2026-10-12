@@ -160,7 +160,7 @@ export interface TTSConfig {
   effects?: Record<string, boolean | number | string>;
   selectedModel?: string;
   customFileName?: string;
-  voiceProfile?: string; // Base64 audio sample for voice style cloning
+  voiceProfile?: string; // Gemini custom voice id (voice_... / voicekey_...) created from the user's own sample
   exportFormat?: 'wav' | 'mp3'; // Audio export format
 }
 
