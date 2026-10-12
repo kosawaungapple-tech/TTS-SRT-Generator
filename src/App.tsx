@@ -18,6 +18,8 @@ import { BatchQueueModal } from './components/BatchQueueModal';
 import { GeminiTTSService } from './services/geminiService';
 import { apiChannelManager, isPlausibleApiKey } from './services/apiChannelManager';
 import { assemblyAiService } from './services/assemblyAiService';
+import { ActivityPill } from './components/ActivityPill';
+import { useActivity } from './services/activity';
 import { logActivity } from './services/activityService';
 import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, SystemConfig, VBSUserControl, Announcement, CustomFont } from './types';
 import { DEFAULT_RULES } from './constants';
@@ -49,6 +51,7 @@ export default function App() {
     exportFormat: 'wav',
   });
   const [isLoading, setIsLoading] = useState(false);
+  useActivity(isLoading, language === 'mm' ? 'အသံထုတ်နေသည်…' : 'Generating voiceover…');
   const [isProcessingSpeed, setIsProcessingSpeed] = useState(false);
   const [result, setResult] = useState<AudioResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -3398,6 +3401,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      <ActivityPill mm={language === 'mm'} />
       <Modal
         isOpen={modal.isOpen}
         onClose={() => setModal({ ...modal, isOpen: false })}

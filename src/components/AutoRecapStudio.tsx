@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Clapperboard, Upload, Download, Sparkles, Mic, FileText, Film, Loader2, CheckCircle2, Eye, MessageSquareText, ChevronDown, RefreshCw, Smartphone, Globe2, Gauge, Layers } from 'lucide-react';
+import { useActivity } from '../services/activity';
 import { GeminiTTSService, type RecapPlanScene } from '../services/geminiService';
 import { assemblyAiService } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
@@ -142,6 +143,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [errorInfo, setErrorInfo] = useState<string | null>(null);
+  useActivity(busy, isMm ? 'Auto Recap လုပ်နေသည်' : 'Auto Recap running', { detail: progress?.text, percent: progress?.percent, failed: errorInfo });
   const stageRef = useRef('start');
   const [thumb, setThumb] = useState<string | null>(null);
   const [overlayBg, setOverlayBg] = useState<'black' | 'green'>('black');
