@@ -27,6 +27,7 @@ import {
   Volume2,
   Film
 } from 'lucide-react';
+import { useActivity } from '../services/activity';
 import { GeminiTTSService } from '../services/geminiService';
 import { assemblyAiService, AssemblyAITranscriptResponse } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
@@ -199,6 +200,8 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
   // ==========================================
   const [isTranslatingSrt, setIsTranslatingSrt] = useState(false);
   const [translationProgress, setTranslationProgress] = useState<{ step: string; percent: number }>({ step: '', percent: 0 });
+  useActivity(isProcessingAssemblyAI, isMm ? 'စာတန်းထိုး ထုတ်နေသည်' : 'Creating subtitles', { detail: assemblyProgress.step, percent: assemblyProgress.percent });
+  useActivity(isTranslatingSrt, isMm ? 'မြန်မာလို ဘာသာပြန်နေသည်' : 'Translating to Burmese', { detail: translationProgress.step, percent: translationProgress.percent });
   const [translatedBurmeseSrt, setTranslatedBurmeseSrt] = useState<string | null>(null);
   const [translatedNarrativeScript, setTranslatedNarrativeScript] = useState<string | null>(null);
   
