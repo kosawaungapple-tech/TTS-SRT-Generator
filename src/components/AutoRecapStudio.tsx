@@ -1,6 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Clapperboard, Upload, Download, Sparkles, Mic, FileText, Film, Loader2, CheckCircle2, Eye, MessageSquareText, ChevronDown, RefreshCw, Smartphone, Globe2, Gauge, Layers } from 'lucide-react';
-import { groqService } from '../services/groqService';
 import { GeminiTTSService, type RecapPlanScene } from '../services/geminiService';
 import { assemblyAiService } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
@@ -136,8 +135,6 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [voice, setVoice] = useState('aoede');
   const [speed, setSpeed] = useState(1.0);
   const [aspect, setAspect] = useState('original');
-  const [engine, setEngine] = useState<'gemini' | 'groq'>(() => groqService.getEngine());
-  const hasGroq = !!groqService.getKey();
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ text: string; percent: number } | null>(null);
   const [result, setResult] = useState<Result | null>(null);
@@ -226,8 +223,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
 
       // ---- 2. Watch + write ------------------------------------------------------------------
       const g = gemini();
-      groqService.setEngine(engine);
-      stageRef.current = engine === 'groq' ? '2 watch (Gemini) / write (Groq)' : '2 watch/write (Gemini)';
+      stageRef.current = '2 watch/write (Gemini)';
       const recap = await g.generateMovieRecap(
         cues.map((c, i) => `[${i + 1}] ${c.text}`).join('\n'),
         (s, msg) => setProgress(p => ({ text: `${msg} (${s}s)`, percent: p?.percent ?? 30 })),
@@ -542,22 +538,6 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             {mode === 'speech'
               ? isMm ? 'အသံထဲက စကားကို အရင်နားထောင် (AssemblyAI) ပြီး ပုံနဲ့တွဲကြည့်ကာ Recap လုပ်မည်။' : 'Listens to the speech first, then reads it together with the picture.'
               : isMm ? 'Recap ထားပြီးသား / အသံမပါ ဗီဒီယိုအတွက် — စကားမနားထောင်ဘဲ ပုံကိုပဲကြည့်ပြီး Recap အသစ် ပြန်လုပ်မည်။' : 'For already-recapped or silent videos — skips the speech, works from the picture only.'}
-          </p>
-        </div>
-
-        {/* Writing engine */}
-        <div className="mt-6">
-          <Label icon={<Layers size={12} />}>{isMm ? 'ဇာတ်ညွှန်းရေးမည့် AI' : 'Writing engine'}</Label>
-          <Segmented
-            value={engine}
-            onChange={(v) => { if (v === 'groq' && !hasGroq) { showToast(isMm ? 'Groq API Key ကို Settings မှာ အရင်ထည့်ပါ' : 'Add your Groq API key in Settings first', 'error'); return; } setEngine(v); groqService.setEngine(v); }}
-            options={[
-              { id: 'gemini', label: 'Gemini' },
-              { id: 'groq', label: hasGroq ? '⚡ Groq (fast)' : '⚡ Groq (add key)' },
-            ]}
-          />
-          <p className="mt-2 text-[11.5px] leading-relaxed text-slate-500">
-            {isMm ? 'ဗီဒီယိုကြည့်တာကို Gemini က အမြဲလုပ်ပြီး ရေးတဲ့အဆင့်ကို Groq နဲ့ မြန်စေနိုင်သည်။ Groq မအောင်မြင်ရင် Gemini ကို အလိုအလျောက်ပြောင်းသုံးမည်။' : 'Gemini always watches the video; Groq can write the script faster. Falls back to Gemini automatically if Groq fails.'}
           </p>
         </div>
 

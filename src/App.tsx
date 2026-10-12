@@ -18,7 +18,6 @@ import { BatchQueueModal } from './components/BatchQueueModal';
 import { GeminiTTSService } from './services/geminiService';
 import { apiChannelManager, isPlausibleApiKey } from './services/apiChannelManager';
 import { assemblyAiService } from './services/assemblyAiService';
-import { groqService, GROQ_MODELS } from './services/groqService';
 import { logActivity } from './services/activityService';
 import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, SystemConfig, VBSUserControl, Announcement, CustomFont } from './types';
 import { DEFAULT_RULES } from './constants';
@@ -78,10 +77,6 @@ export default function App() {
   }); 
   const [accessCode, setAccessCode] = useState<string | null>(() => localStorage.getItem('vbs_access_code'));
   
-  const [groqKeyInput, setGroqKeyInput] = useState(() => groqService.getKey());
-  const [groqModelSel, setGroqModelSel] = useState(() => groqService.getModel());
-  const [showGroqKey, setShowGroqKey] = useState(false);
-  const [isGroqKeySaved, setIsGroqKeySaved] = useState(false);
   const [assemblyApiKeyInput, setAssemblyApiKeyInput] = useState(() => assemblyAiService.getStoredApiKey());
   const [showAssemblyKey, setShowAssemblyKey] = useState(false);
   const [isAssemblyKeySaved, setIsAssemblyKeySaved] = useState(false);
@@ -3354,98 +3349,6 @@ export default function App() {
                         className="text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 transition-colors"
                       >
                         <span>assemblyai.com (100 Hours Free)</span>
-                        <ExternalLink size={11} />
-                      </a>
-                    </div>
-                  </div>
-
-                  {/* Groq API Key Section (fast script writing for Auto Recap) */}
-                  <div className="glass-card rounded-[24px] p-6 sm:p-8 shadow-2xl transition-all duration-300">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-orange-400/10 rounded-xl flex items-center justify-center text-orange-400">
-                          <Zap size={20} />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">Groq API Key</h3>
-                            <span className="text-[10px] font-bold uppercase tracking-wider bg-orange-400/20 text-orange-400 px-2 py-0.5 rounded-md">Auto Recap</span>
-                          </div>
-                          <p className="text-xs text-slate-500 dark:text-slate-400">
-                            {language === 'mm' ? 'Auto Recap ဇာတ်ညွှန်းကို မြန်မြန်ရေးရန် (ဗီဒီယိုကြည့်တာကို Gemini က ဆက်လုပ်သည်)' : 'Fast script writing for Auto Recap (Gemini still watches the video).'}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {groqKeyInput.trim() ? (
-                          <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full text-xs font-bold">
-                            <CheckCircle2 size={12} /><span>CONNECTED</span>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-full text-xs font-bold">
-                            <AlertCircle size={12} /><span>NOT SET</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row gap-3 pt-2">
-                      <div className="relative flex-1">
-                        <input
-                          type={showGroqKey ? 'text' : 'password'}
-                          value={groqKeyInput}
-                          onChange={(e) => setGroqKeyInput(e.target.value)}
-                          placeholder="Enter your Groq API Key (gsk_...)"
-                          className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 font-mono focus:outline-none focus:ring-2 focus:ring-amber-400/40 pr-10"
-                        />
-                        <button type="button" onClick={() => setShowGroqKey(!showGroqKey)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition-colors">
-                          {showGroqKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          groqService.setKey(groqKeyInput.trim());
-                          groqService.setModel(groqModelSel);
-                          if (!groqKeyInput.trim()) groqService.setEngine('gemini');
-                          setIsGroqKeySaved(true);
-                          showToast(language === 'mm' ? 'Groq Key သိမ်းဆည်းပြီးပါပြီ ✨' : 'Groq API Key saved!', 'success');
-                          setTimeout(() => setIsGroqKeySaved(false), 2000);
-                        }}
-                        className="px-6 py-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-black font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shrink-0 shadow-md shadow-amber-400/20 active:scale-95"
-                      >
-                        {isGroqKeySaved ? <Check size={16} /> : <Key size={14} />}
-                        <span>{isGroqKeySaved ? 'SAVED' : 'SAVE KEY'}</span>
-                      </button>
-                      {groqKeyInput.trim() && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setGroqKeyInput('');
-                            groqService.clearKey();
-                            groqService.setEngine('gemini');
-                            showToast(language === 'mm' ? 'Groq Key ဖျက်လိုက်ပါပြီ' : 'Cleared Groq API Key', 'success');
-                          }}
-                          className="px-3 py-3 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-bold transition-colors"
-                          title="Clear Key"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      )}
-                    </div>
-
-                    <select
-                      value={groqModelSel}
-                      onChange={(e) => { setGroqModelSel(e.target.value); groqService.setModel(e.target.value); }}
-                      className="mt-3 w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 text-sm text-slate-900 dark:text-white focus:outline-none"
-                    >
-                      {GROQ_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
-                    </select>
-
-                    <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 pt-3">
-                      <span>{language === 'mm' ? 'အခမဲ့ API Key ရယူရန်' : 'Need a free key?'}</span>
-                      <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" className="text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 transition-colors">
-                        <span>console.groq.com (Free)</span>
                         <ExternalLink size={11} />
                       </a>
                     </div>

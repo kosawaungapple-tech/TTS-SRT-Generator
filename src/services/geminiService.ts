@@ -6,7 +6,6 @@ import { getIdToken } from "../firebase";
 import { ttsCache } from "./ttsCache";
 import { TTSConfig, AudioResult, SRTSubtitle } from "../types";
 import { GEMINI_MODELS, VOICE_OPTIONS } from "../constants";
-import { groqService } from "./groqService";
 import { generateGroundedRecap, type RecapLlm, type RecapStage, type RecapSegment } from "./recapScriptPipeline";
 
 interface GeminiResponse {
@@ -1159,17 +1158,7 @@ ${list.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.te
     const models = [GEMINI_MODELS.SCRIPT, GEMINI_MODELS.REWRITE].filter((m, i, a) => a.indexOf(m) === i);
     let modelIdx = 0;
 
-    let groqOff = false;
     const llm: RecapLlm = async (prompt, o) => {
-      // Text-only steps can run on Groq when chosen; steps with images (watching) always use Gemini.
-      if (groqService.getEngine() === 'groq' && !groqOff && !(o?.images && o.images.length)) {
-        try {
-          return await groqService.chat(prompt, { json: o?.json, temperature: o?.json ? 0.4 : 0.7 });
-        } catch (e) {
-          console.warn('[Recap] Groq failed, falling back to Gemini:', e);
-          if (/401|403|invalid api key/i.test(String(e))) groqOff = true;
-        }
-      }
       const parts: unknown[] = [{ text: prompt }];
       for (const img of o?.images || []) parts.push({ inlineData: { mimeType: 'image/jpeg', data: img } });
       const config: Record<string, unknown> = { temperature: o?.json ? 0.4 : 0.7 };
@@ -1183,9 +1172,9 @@ ${list.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.te
           return text;
         } catch (e) {
           lastErr = e;
-          // fall back to the next model only when this one looks unavailable
+          // fall back to the next model when this one is unavailable, overloaded (503) or out of quota
           const msg = e instanceof Error ? e.message : String(e);
-          if (modelIdx < models.length - 1 && /404|not found|not supported|unavailable|invalid model/i.test(msg)) {
+          if (modelIdx < models.length - 1 && /404|not found|not supported|unavailable|invalid model|503|overloaded|high demand|429|quota/i.test(msg)) {
             modelIdx++;
             continue;
           }
