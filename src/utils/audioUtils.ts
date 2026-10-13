@@ -380,3 +380,34 @@ export async function convertWavToMp3(wavBlob: Blob): Promise<Blob> {
     return wavBlob;
   }
 }
+
+/**
+ * Brings speech to a loud, even level (like the tools that sound "big" on TikTok):
+ * measures RMS over the voiced parts only, applies one gain towards `targetDb` (max +14 dB),
+ * then a soft limiter so peaks never clip. Works in place and returns the applied gain in dB.
+ */
+export function normalizeLoudness(data: Float32Array, targetDb = -16): number {
+  let sum = 0;
+  let n = 0;
+  for (let i = 0; i < data.length; i++) {
+    const a = Math.abs(data[i]);
+    if (a > 0.01) { sum += a * a; n++; }
+  }
+  if (n < 100) return 0;
+  const rmsDb = 20 * Math.log10(Math.sqrt(sum / n));
+  const gainDb = Math.max(-6, Math.min(14, targetDb - rmsDb));
+  applyLoudnessGain(data, gainDb);
+  return gainDb;
+}
+
+/** Applies a gain in dB followed by the same soft limiter used by normalizeLoudness. */
+export function applyLoudnessGain(data: Float32Array, gainDb: number): void {
+  const g = Math.pow(10, gainDb / 20);
+  const knee = 0.8;
+  for (let i = 0; i < data.length; i++) {
+    let x = data[i] * g;
+    const a = Math.abs(x);
+    if (a > knee) x = Math.sign(x) * (knee + (1 - knee) * Math.tanh((a - knee) / (1 - knee)));
+    data[i] = x;
+  }
+}
