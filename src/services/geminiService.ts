@@ -51,14 +51,14 @@ export class GeminiTTSService {
 
   private async geminiRequest(
     modelName: string, 
-    body: { contents: unknown[]; generationConfig?: unknown; selectedModel?: string; isTts?: boolean }, 
+    body: { contents: unknown[]; generationConfig?: unknown; selectedModel?: string; isTts?: boolean; maxRetries?: number }, 
     retryCount: number = 0,
     onRetry?: (seconds: number, message: string) => void
   ): Promise<GeminiResponse> {
     const executeRequest = async (key: string) => {
       console.log(`Gemini Proxy Request [${modelName}]. Key:`, key ? `${key.substring(0, 4)}...${key.substring(key.length - 4)}` : "ADMIN_POOL (Server-side)");
       
-      const MAX_RETRIES = 5; // Increased retries for better stability
+      const MAX_RETRIES = body.maxRetries ?? 5; // Increased retries for better stability
 
       try {
         const token = await getIdToken();
@@ -1192,8 +1192,8 @@ ${list.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.te
       for (let k = 0; k < order.length; k++) {
         const isPrimary = order[k] === models[0] && models.length > 1;
         try {
-          // retryCount 4 of 5 = a single quick retry for the main model; the last model gets the full back-off
-          const data = await this.geminiRequest(order[k], { contents: [{ parts }], generationConfig: config }, isPrimary ? 4 : 0, onRetry);
+          // main model: one retry after ~2s only (the back-off grows with the retry number), then the lite model gets the full back-off
+          const data = await this.geminiRequest(order[k], { contents: [{ parts }], generationConfig: config, maxRetries: isPrimary ? 1 : undefined }, 0, onRetry);
           const text = data.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || '').join('') || '';
           if (!text.trim()) throw new Error('Empty response from Gemini');
           return text;
