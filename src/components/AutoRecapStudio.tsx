@@ -6,10 +6,11 @@ import { assemblyAiService } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
 import { renderSceneRecap } from '../services/recapRenderService';
 import { captureVideoFrames } from '../utils/videoFrames';
-import { audioBufferToWav, renderProcessedAudio } from '../utils/audioUtils';
+import { applyLoudnessGain, audioBufferToWav, normalizeLoudness, renderProcessedAudio } from '../utils/audioUtils';
 import { generateSRT, downloadSrtFile, splitSentenceIntoCueBlocks } from '../utils/subtitleUtils';
 import { getRecapOutputSize, planSubtitlePieces } from '../utils/recapGeometry';
 import { renderSubtitleVideo } from '../utils/subtitleVideo';
+import { SUBTITLE_PRESETS, getSubtitleStyle } from '../utils/subtitlePresets';
 import { VOICE_OPTIONS } from '../constants';
 import type { SRTSubtitle } from '../types';
 
@@ -146,6 +147,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   useActivity(busy, isMm ? 'Auto Recap လုပ်နေသည်' : 'Auto Recap running', { detail: progress?.text, percent: progress?.percent, failed: errorInfo });
   const stageRef = useRef('start');
   const [thumb, setThumb] = useState<string | null>(null);
+  const [subPreset, setSubPreset] = useState('viral');
   const [overlayBg, setOverlayBg] = useState<'black' | 'green'>('black');
   const [overlayWithVoice, setOverlayWithVoice] = useState(true);
   const [overlayBusy, setOverlayBusy] = useState<number | null>(null);
@@ -353,6 +355,12 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         t += buf.duration + GAP;
       });
       void ctx.close();
+      const gainDb = normalizeLoudness(ch, -16);
+      // Same gain for the per-scene clips, so the rendered recap video sounds as loud as the joined voiceover.
+      const loudScenes: Blob[] = buffers.map(b => {
+        for (let c = 0; c < b.numberOfChannels; c++) applyLoudnessGain(b.getChannelData(c), gainDb);
+        return audioBufferToWav(b);
+      });
       const voiceoverBlob = audioBufferToWav(out);
 
       setResult({
@@ -361,7 +369,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         hasVideoTimes,
         voiceoverBlob,
         voiceoverUrl: URL.createObjectURL(voiceoverBlob),
-        sceneAudios,
+        sceneAudios: loudScenes,
         srt: generateSRT(subs),
         cues: cueTimes,
         duration: total,
@@ -416,16 +424,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         width,
         height,
         background: overlayBg,
-        style: {
-          fontSize: 44,
-          fontFamily: '"Noto Sans Myanmar", "Padauk", sans-serif',
-          fontColor: '#ffffff',
-          strokeColor: '#000000',
-          strokeWidth: 0,
-          bgBoxEnabled: false,
-          bgBoxColor: 'rgba(0,0,0,0.6)',
-          positionY: portrait ? 80 : 86,
-        },
+        style: getSubtitleStyle(subPreset, portrait ? 80 : 86),
         onProgress: f => setOverlayBusy(f),
       });
       setOverlayFile({ blob, name: `${baseName}_subtitle_overlay.${ext}` });
@@ -484,16 +483,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         framing: 'blurred-fit',
         blurAmount: 40,
         bgColor: '#000000',
-        subtitleStyle: {
-          fontSize: 40,
-          fontFamily: '"Noto Sans Myanmar", "Padauk", sans-serif',
-          fontColor: '#ffffff',
-          strokeColor: '#000000',
-          strokeWidth: 4,
-          bgBoxEnabled: false,
-          bgBoxColor: 'rgba(0,0,0,0.6)',
-          positionY: 86,
-        },
+        subtitleStyle: getSubtitleStyle(subPreset, 86),
         onProgress: (d, tot, msg) => setRendering(`${msg} (${d}/${tot})`),
       });
       setVideoUrl(r.downloadUrl);
@@ -724,6 +714,28 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           <p className="mt-3 text-[11.5px] leading-relaxed text-slate-500">
             {isMm ? 'Voiceover နဲ့ SRT က အချိန်တူညီပါတယ် — CapCut Desktop/Web မှာ နှစ်ခုစလုံးကို 0:00 မှာ တင်လိုက်ရုံပါ။' : 'Voiceover and SRT share one timeline — drop both at 0:00 in CapCut Desktop / Web.'}
           </p>
+
+          <div className="mt-5">
+            <Label>{isMm ? 'စာတန်းပုံစံ' : 'Subtitle look'}</Label>
+            <div className="grid grid-cols-4 gap-2">
+              {SUBTITLE_PRESETS.map(p => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => setSubPreset(p.id)}
+                  className={`rounded-2xl border px-2 py-3 flex flex-col items-center gap-1.5 transition ${subPreset === p.id ? 'border-emerald-400 bg-emerald-400/10' : 'border-white/10 bg-white/[0.04]'}`}
+                >
+                  <span
+                    className="text-[20px] font-black leading-none"
+                    style={{ color: p.swatch.fill, WebkitTextStroke: `2px ${p.swatch.stroke}`, paintOrder: 'stroke fill' }}
+                  >
+                    Aa
+                  </span>
+                  <span className="text-[10.5px] text-slate-300 text-center leading-tight">{isMm ? p.name.mm : p.name.en}</span>
+                </button>
+              ))}
+            </div>
+          </div>
 
           <details className="mt-5 group rounded-2xl border border-sky-400/25 bg-sky-400/[0.05]">
             <summary className="flex items-center gap-2 cursor-pointer list-none px-4 py-3.5 text-[13px] font-bold text-sky-300">
