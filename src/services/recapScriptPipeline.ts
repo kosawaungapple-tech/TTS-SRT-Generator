@@ -156,7 +156,10 @@ async function watchVideo(
   language: 'mm' | 'en'
 ): Promise<Bible> {
   const dur = opts.sourceSeconds as number;
-  const count = Math.max(1, Math.min(30, Math.ceil(dur / 20)));
+  // Talky videos: the dialogue already carries the story, so look at fewer, longer windows (half the calls).
+  const spoken = (opts.cues || []).reduce((n, c) => n + c.text.replace(/\s+/g, '').length, 0);
+  const winSec = spoken / Math.max(1, dur) >= 4 ? 40 : 20;
+  const count = Math.max(1, Math.min(30, Math.ceil(dur / winSec)));
   const len = dur / count;
   const bible: Bible = { setting: '', characters: [], events: [], times: [] };
   const seen = new Set<string>();
@@ -170,7 +173,7 @@ async function watchVideo(
   const runWindow = async (i: number) => {
     const a = i * len;
     const b = (i + 1) * len;
-    const frames = (await opts.getFrames!(a, b).catch(() => [])).slice(0, 6);
+    const frames = (await opts.getFrames!(a, b).catch(() => [])).slice(0, len > 30 ? 8 : 6);
     const dialogue = (opts.cues || [])
       .filter(c => c.start < b && c.end > a)
       .map(c => `[${fmtT(c.start)}] ${c.text.trim().replace(/\s+/g, ' ')}`)
@@ -178,7 +181,7 @@ async function watchVideo(
     const prompt = `You are a film editor WATCHING a video before writing its recap. This is the part from ${fmtT(a)} to ${fmtT(b)} (${frames.length} frames attached in time order).
 Describe what really happens: who is on screen and what they do, where, what changes, and what is said (dialogue below). Use only what the frames and dialogue show; if something is unclear say so instead of guessing.
 Return JSON: {"setting":"place/time/kind of story if visible","characters":[{"name":"name as spoken/shown, or a short visual description like 'the man in the red jacket'","who":"role, short"}],"events":[{"t":<seconds from video start>,"text":"one concrete sentence: who does what, the visible cause/result, and the visible emotion or tension (expression, tone of voice, danger, relief)"}]}
-4-8 events, chronological; do not skip small turning points. ${LANG_RULE(language)}
+${len > 30 ? "8-14" : "4-8"} events, chronological; do not skip small turning points. ${LANG_RULE(language)}
 
 DIALOGUE IN THIS PART:
 ${dialogue || '(none)'}`;
