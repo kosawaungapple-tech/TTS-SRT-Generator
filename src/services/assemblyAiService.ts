@@ -210,9 +210,9 @@ class AssemblyAIService {
       console.warn('[AssemblyAI] Backend upload proxy failed, trying direct upload:', proxyErr);
     }
 
-    // Strategy 2: Direct upload to AssemblyAI API
+    // Strategy 2: Direct upload to AssemblyAI API (one retry: mobile networks drop long uploads)
     try {
-      const uploadResp = await fetch('https://api.assemblyai.com/v2/upload', {
+      const sendDirect = () => fetch('https://api.assemblyai.com/v2/upload', {
         method: 'POST',
         headers: {
           'Authorization': key,
@@ -220,6 +220,13 @@ class AssemblyAIService {
         },
         body: file
       });
+      let uploadResp: Response;
+      try {
+        uploadResp = await sendDirect();
+      } catch {
+        await new Promise(r => setTimeout(r, 1500));
+        uploadResp = await sendDirect();
+      }
 
       if (!uploadResp.ok) {
         const errJson = await uploadResp.json().catch(() => ({}));
