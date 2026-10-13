@@ -10,6 +10,7 @@ import { applyLoudnessGain, audioBufferToWav, normalizeLoudness, renderProcessed
 import { generateSRT, downloadSrtFile, splitSentenceIntoCueBlocks } from '../utils/subtitleUtils';
 import { getRecapOutputSize, planSubtitlePieces } from '../utils/recapGeometry';
 import { renderSubtitleVideo } from '../utils/subtitleVideo';
+import { extractSpeechWav } from '../utils/voiceAudio';
 import { SUBTITLE_PRESETS, getSubtitleStyle } from '../utils/subtitlePresets';
 import { VOICE_OPTIONS } from '../constants';
 import type { SRTSubtitle } from '../types';
@@ -214,9 +215,11 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         }
         stageRef.current = '1 listen (AssemblyAI)';
         setProgress({ text: isMm ? '၁/၄ စကားပြောကို နားထောင်နေသည်…' : '1/4 Listening to the speech…', percent: 3 });
+        // Upload only the sound (small WAV) instead of the whole video: big uploads from a phone often die with "Load failed".
+        const speech = (await extractSpeechWav(file)) || file;
         const tr = await assemblyAiService.processToSrt({
           apiKey: key,
-          file,
+          file: speech,
           languageCode: spokenLang,
           autoLanguage: spokenLang === 'auto',
           speakerLabels: false,
