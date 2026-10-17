@@ -83,7 +83,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       status: 'online',
       engine: 'vbs-ffmpeg-worker',
-      version: '1.3.0',
+      version: '1.4.0',
       ffmpegAvailable: isFfmpegInstalled,
       ffmpegVersion: ffmpegVersionStr,
       platform: os.platform(),
@@ -473,6 +473,8 @@ const server = http.createServer((req, res) => {
           scenes.push({ start: rawScenes[i].start, end: rawScenes[i].end, narration: rawScenes[i].narration, subs });
         }
 
+        const logoPart = parsed.files['logo'];
+        const logoPath = logoPart && logoPart.data && logoPart.data.length ? saveTemp('logo.png', logoPart.data) : undefined;
         const framingRaw = parsed.fields['framing'] || 'blurred-fit';
         const outputFilename = `recap_${stamp}.mp4`;
         const outputPath = path.join(OUTPUT_DIR, outputFilename);
@@ -482,6 +484,7 @@ const server = http.createServer((req, res) => {
           audioPaths,
           scenes,
           outputPath,
+          logoPath,
           outWidth: parsed.fields['outWidth'] ? parseInt(parsed.fields['outWidth'], 10) : undefined,
           outHeight: parsed.fields['outHeight'] ? parseInt(parsed.fields['outHeight'], 10) : undefined,
           aspectRatio: parsed.fields['aspectRatio'] || undefined,
@@ -645,7 +648,13 @@ async function renderRecap(opts) {
       const speed = clipLen / target;
       let cutLen = clipLen, factor, holdSeconds = 0;
       if (speed > maxSpeed) { cutLen = Math.min(clipLen, target * maxSpeed); factor = 1 / maxSpeed; }
-      else if (speed < minSpeed) { factor = 1 / minSpeed; holdSeconds = Math.max(0, target - cutLen * factor); }
+      else if (speed < minSpeed) {
+        // Narration is longer than the scene: play slower AND take extra footage that follows the scene
+        // (instead of freezing on the last frame). Only freeze if the source video itself runs out.
+        factor = 1 / minSpeed;
+        cutLen = Math.max(clipLen, Math.min(target * minSpeed, sourceDuration - start));
+        holdSeconds = Math.max(0, target - cutLen * factor);
+      }
       else factor = 1 / speed;
 
       const vOut = path.join(work, `v_${i}.mp4`);
@@ -709,12 +718,31 @@ async function renderRecap(opts) {
     }
 
     const finalArgs = ['-y', '-v', 'error', '-i', joinedVideo];
-    if (subsList) {
-      finalArgs.push('-f', 'concat', '-safe', '0', '-i', subsList, '-i', joinedAudio,
-        '-filter_complex', `[1:v]fps=${fps},format=rgba[s];[0:v][s]overlay=0:0:format=auto:eof_action=pass,format=yuv420p[v]`,
-        '-map', '[v]', '-map', '2:a:0', '-c:v', 'libx264', '-preset', 'fast', '-crf', '19', '-pix_fmt', 'yuv420p');
+    let nextIn = 1;
+    const subIdx = subsList ? nextIn++ : -1;
+    if (subsList) finalArgs.push('-f', 'concat', '-safe', '0', '-i', subsList);
+    const logoIdx = opts.logoPath ? nextIn++ : -1;
+    if (opts.logoPath) finalArgs.push('-loop', '1', '-framerate', String(fps), '-i', opts.logoPath);
+    const audioIdx = nextIn;
+    finalArgs.push('-i', joinedAudio);
+    if (subsList || opts.logoPath) {
+      let chain = '[0:v]';
+      const parts = [];
+      if (subsList) {
+        parts.push(`[${subIdx}:v]fps=${fps},format=rgba[s]`);
+        parts.push(`${chain}[s]overlay=0:0:format=auto:eof_action=pass[v1]`);
+        chain = '[v1]';
+      }
+      if (opts.logoPath) {
+        parts.push(`[${logoIdx}:v]format=rgba[lg]`);
+        parts.push(`${chain}[lg]overlay=0:0:format=auto:shortest=1[v2]`);
+        chain = '[v2]';
+      }
+      parts.push(`${chain}format=yuv420p[v]`);
+      finalArgs.push('-filter_complex', parts.join(';'), '-map', '[v]', '-map', `${audioIdx}:a:0`,
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '19', '-pix_fmt', 'yuv420p');
     } else {
-      finalArgs.push('-i', joinedAudio, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy');
+      finalArgs.push('-map', '0:v:0', '-map', `${audioIdx}:a:0`, '-c:v', 'copy');
     }
     finalArgs.push('-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-shortest', outputPath);
     await runCmd('ffmpeg', finalArgs);

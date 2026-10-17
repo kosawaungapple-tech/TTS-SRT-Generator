@@ -38,7 +38,7 @@ export const SUBTITLE_PRESETS: SubtitlePreset[] = [
   },
 ];
 
-export function getSubtitleStyle(id: string, positionY: number): SubtitleStyle {
+export function getSubtitleStyle(id: string, positionY: number, sizeScale = 1): SubtitleStyle {
   const p = SUBTITLE_PRESETS.find(x => x.id === id) || SUBTITLE_PRESETS[0];
-  return { ...p.style, positionY } as SubtitleStyle;
+  return { ...p.style, fontSize: Math.round(p.style.fontSize * sizeScale), positionY } as SubtitleStyle;
 }
