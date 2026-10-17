@@ -5,8 +5,8 @@
  */
 export const BUILTIN_PRONUNCIATION: [string, string][] = [
   // "အံ့ဩ" was read as "အံ့သ" (the ဩ got dropped); this spelling is read correctly
-  ['အံ့ဩ', 'အံ့သော်'],
-  ['အံ့သြ', 'အံ့သော်'],
+  ['အံ့ဩ', 'အံ့အော'],
+  ['အံ့သြ', 'အံ့အော'],
 ];
 
 const STORAGE_KEY = 'vbs_pronunciation_rules';
