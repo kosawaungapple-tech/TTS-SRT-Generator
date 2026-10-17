@@ -6,6 +6,7 @@ import { getIdToken } from "../firebase";
 import { ttsCache } from "./ttsCache";
 import { TTSConfig, AudioResult, SRTSubtitle } from "../types";
 import { GEMINI_MODELS, VOICE_OPTIONS } from "../constants";
+import { applyPronunciation } from "../utils/pronunciation";
 import { generateGroundedRecap, type RecapLlm, type RecapStage, type RecapSegment } from "./recapScriptPipeline";
 
 interface GeminiResponse {
@@ -476,7 +477,8 @@ ${text}`;
 
     // Check for timestamps to handle them correctly
     const hasTimestamps = /\[\d{1,2}:\d{1,2}\.\d{3}\]/.test(text);
-    const audioText = hasTimestamps ? text.replace(/\[\d{1,2}:\d{1,2}\.\d{3}\]/g, "").trim() : text;
+    const displayText = hasTimestamps ? text.replace(/\[\d{1,2}:\d{1,2}\.\d{3}\]/g, "").trim() : text;
+    const audioText = applyPronunciation(hasTimestamps ? text.replace(/\[\d{1,2}:\d{1,2}\.\d{3}\]/g, "").trim() : text);
 
     let textWithInstruction = combinedInstruction
       ? `[${combinedInstruction}]\n\n${audioText}`
@@ -617,14 +619,14 @@ ${text}`;
       totalDuration = decodedBuffer.duration;
     } catch (e) {
       console.warn("Failed to decode audio duration, using estimation", e);
-      totalDuration = audioText.length * 0.08;
+      totalDuration = displayText.length * 0.08;
     } finally {
       await audioContext.close();
     }
 
     const subtitles = hasTimestamps 
       ? generateSubtitlesFromTimestamps(text, totalDuration)
-      : generateOptimizedSubtitles(audioText, totalDuration);
+      : generateOptimizedSubtitles(displayText, totalDuration);
 
     const result: AudioResult = {
       audioUrl,
