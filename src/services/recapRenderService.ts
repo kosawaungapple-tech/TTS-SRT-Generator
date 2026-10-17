@@ -96,6 +96,31 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
     step += scenes.length;
   }
 
+  // 3a) The worker must be new enough for the features asked for (an old one silently ignores them).
+  {
+    const need = p.subtitleBlur ? '1.6.0' : p.bgm ? '1.5.0' : p.logoPng ? '1.4.0' : '';
+    if (need) {
+      try {
+        const hb = (p.serverUrl ?? getRenderServerUrl()).replace(/\/+$/, '');
+        const h = await fetch(`${hb}/health`).then(r => r.json());
+        const parse = (v?: string) => (v || '0').split('.').map(n => parseInt(n, 10) || 0);
+        const a = parse(h?.version), b = parse(need);
+        let ok = true;
+        for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) { ok = (a[i] || 0) > (b[i] || 0); break; } }
+        if (!ok) {
+          throw new Error(
+            `Your PC worker is v${h?.version || 'old'}, but blur / BGM / logo need v${need} or newer. ` +
+              `Download the latest vbs-ffmpeg-worker.js, close the old worker and start it again. ` +
+              `သင့် PC worker က version အဟောင်းဖြစ်နေလို့ blur/BGM/logo မပါပါဘူး — vbs-ffmpeg-worker.js အသစ်ကို ပြန်ယူပြီး အဟောင်းကို ပိတ်ကာ ပြန်စပါ။`
+          );
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.startsWith('Your PC worker')) throw e;
+        /* health unreachable: the render request below reports that */
+      }
+    }
+  }
+
   // 3) Send everything to the render server.
   p.onProgress?.(step, totalSteps, 'Rendering video...');
   const form = new FormData();
