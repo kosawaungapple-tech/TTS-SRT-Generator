@@ -1,3 +1,4 @@
+import { wsolaStretch } from './timeStretch';
 /**
  * Converts raw PCM data (16-bit, mono, 24000Hz) to a WAV file Blob.
  */
@@ -172,10 +173,13 @@ export async function renderProcessedAudio(
   }
   await audioCtx.close();
   
-  // Calculate output duration based on speed
-  const outputLength = Math.ceil(audioBuffer.length / speed);
   const sampleRate = audioBuffer.sampleRate;
   const numberOfChannels = audioBuffer.numberOfChannels;
+  // Speed is applied with a pitch-preserving time stretch (playbackRate would shift the voice's pitch).
+  const stretched: Float32Array[] | null = Math.abs(speed - 1) > 0.005
+    ? Array.from({ length: numberOfChannels }, (_, c) => wsolaStretch(audioBuffer.getChannelData(c), speed, sampleRate))
+    : null;
+  const outputLength = stretched ? stretched[0].length : audioBuffer.length;
   
   const offlineCtx = new OfflineAudioContext(
     numberOfChannels,
@@ -184,10 +188,13 @@ export async function renderProcessedAudio(
   );
   
   const source = offlineCtx.createBufferSource();
-  source.buffer = audioBuffer;
-  
-  // 1. Apply Speed (Playback Rate)
-  source.playbackRate.setValueAtTime(speed, offlineCtx.currentTime);
+  if (stretched) {
+    const sb = offlineCtx.createBuffer(numberOfChannels, outputLength, sampleRate);
+    stretched.forEach((ch, c) => sb.getChannelData(c).set(ch));
+    source.buffer = sb;
+  } else {
+    source.buffer = audioBuffer;
+  }
   
   // 2. Apply Pitch (Tone)
   // We use detune for semitones (1 semitone = 100 cents)
