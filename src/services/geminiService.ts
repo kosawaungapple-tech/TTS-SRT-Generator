@@ -7,6 +7,7 @@ import { ttsCache } from "./ttsCache";
 import { TTSConfig, AudioResult, SRTSubtitle } from "../types";
 import { GEMINI_MODELS, VOICE_OPTIONS } from "../constants";
 import { applyPronunciation } from "../utils/pronunciation";
+import { KeyLimitError, hasOtherFreeKey, markLimited, pickKey } from "./geminiKeyPool";
 import { generateGroundedRecap, type RecapLlm, type RecapStage, type RecapSegment } from "./recapScriptPipeline";
 
 interface GeminiResponse {
@@ -151,6 +152,13 @@ export class GeminiTTSService {
           
           console.error(`Gemini Proxy Error Response [${modelName}] (${status}):`, data);
 
+          // Limit reached on this key: remember it and move to the next key instead of waiting.
+          if (status === 429 && key && this.apiKey && /quota|exhaust|rate/i.test(errorMsg)) {
+            const other = hasOtherFreeKey(key, this.apiKey, modelName);
+            markLimited(key, modelName, errorMsg);
+            if (other) throw new KeyLimitError(errorMsg);
+          }
+
           // Retry on certain errors: 429 (Rate Limit), 500 (Internal), 503 (High Demand/Service Unavailable), 504/502 (Gateway)
           if ((status === 429 || status === 500 || status === 503 || status === 504 || status === 502) && retryCount < MAX_RETRIES) {
             let delay = Math.pow(2, retryCount) * 2000 + Math.random() * 1000;
@@ -239,7 +247,25 @@ export class GeminiTTSService {
     };
 
     if (this.apiKey) {
-      return executeRequest(this.apiKey);
+      const tried = new Set<string>();
+      let key = pickKey(this.apiKey, modelName, tried) || this.apiKey;
+      for (;;) {
+        try {
+          return await executeRequest(key);
+        } catch (e) {
+          if (e instanceof KeyLimitError) {
+            tried.add(key);
+            const next = pickKey(this.apiKey, modelName, tried);
+            if (next) {
+              if (onRetry) onRetry(0, `Key limit reached — switching to key ${tried.size + 1}`);
+              key = next;
+              continue;
+            }
+            throw new Error(e.message);
+          }
+          throw e;
+        }
+      }
     }
 
     return apiChannelManager.callWithAutoSwitch((key) => executeRequest(key), false, this.isAdmin);
