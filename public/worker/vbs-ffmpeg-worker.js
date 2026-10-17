@@ -83,7 +83,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       status: 'online',
       engine: 'vbs-ffmpeg-worker',
-      version: '1.4.0',
+      version: '1.5.0',
       ffmpegAvailable: isFfmpegInstalled,
       ffmpegVersion: ffmpegVersionStr,
       platform: os.platform(),
@@ -475,6 +475,8 @@ const server = http.createServer((req, res) => {
 
         const logoPart = parsed.files['logo'];
         const logoPath = logoPart && logoPart.data && logoPart.data.length ? saveTemp('logo.png', logoPart.data) : undefined;
+        const bgmPart = parsed.files['bgm'];
+        const bgmPath = bgmPart && bgmPart.data && bgmPart.data.length ? saveTemp('bgm.bin', bgmPart.data) : undefined;
         const framingRaw = parsed.fields['framing'] || 'blurred-fit';
         const outputFilename = `recap_${stamp}.mp4`;
         const outputPath = path.join(OUTPUT_DIR, outputFilename);
@@ -485,6 +487,8 @@ const server = http.createServer((req, res) => {
           scenes,
           outputPath,
           logoPath,
+          bgmPath,
+          bgmVolume: parsed.fields['bgmVolume'] ? parseFloat(parsed.fields['bgmVolume']) : undefined,
           outWidth: parsed.fields['outWidth'] ? parseInt(parsed.fields['outWidth'], 10) : undefined,
           outHeight: parsed.fields['outHeight'] ? parseInt(parsed.fields['outHeight'], 10) : undefined,
           aspectRatio: parsed.fields['aspectRatio'] || undefined,
@@ -723,11 +727,15 @@ async function renderRecap(opts) {
     if (subsList) finalArgs.push('-f', 'concat', '-safe', '0', '-i', subsList);
     const logoIdx = opts.logoPath ? nextIn++ : -1;
     if (opts.logoPath) finalArgs.push('-loop', '1', '-framerate', String(fps), '-i', opts.logoPath);
-    const audioIdx = nextIn;
+    const audioIdx = nextIn++;
     finalArgs.push('-i', joinedAudio);
+    const bgmIdx = opts.bgmPath ? nextIn++ : -1;
+    if (opts.bgmPath) finalArgs.push('-stream_loop', '-1', '-i', opts.bgmPath);
+
+    const parts = [];
+    let vLabel = null;
     if (subsList || opts.logoPath) {
       let chain = '[0:v]';
-      const parts = [];
       if (subsList) {
         parts.push(`[${subIdx}:v]fps=${fps},format=rgba[s]`);
         parts.push(`${chain}[s]overlay=0:0:format=auto:eof_action=pass[v1]`);
@@ -739,11 +747,23 @@ async function renderRecap(opts) {
         chain = '[v2]';
       }
       parts.push(`${chain}format=yuv420p[v]`);
-      finalArgs.push('-filter_complex', parts.join(';'), '-map', '[v]', '-map', `${audioIdx}:a:0`,
-        '-c:v', 'libx264', '-preset', 'fast', '-crf', '19', '-pix_fmt', 'yuv420p');
-    } else {
-      finalArgs.push('-map', '0:v:0', '-map', `${audioIdx}:a:0`, '-c:v', 'copy');
+      vLabel = '[v]';
     }
+    let aLabel = `${audioIdx}:a:0`;
+    if (opts.bgmPath) {
+      // Background music: looped, set to the chosen level, ducked under the voice, faded out at the end.
+      const vol = Math.max(0.02, Math.min(1, Number(opts.bgmVolume) || 0.2));
+      const fadeStart = Math.max(0, totalDuration - 2);
+      parts.push(`[${audioIdx}:a]aresample=44100,asplit=2[voice][vkey]`);
+      parts.push(`[${bgmIdx}:a]aresample=44100,aformat=channel_layouts=stereo,volume=${vol.toFixed(3)},atrim=0:${totalDuration.toFixed(3)},afade=t=out:st=${fadeStart.toFixed(3)}:d=2[bgm]`);
+      parts.push('[bgm][vkey]sidechaincompress=threshold=0.04:ratio=6:attack=20:release=500[bgmd]');
+      parts.push('[voice][bgmd]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]');
+      aLabel = '[a]';
+    }
+    if (parts.length) finalArgs.push('-filter_complex', parts.join(';'));
+    finalArgs.push('-map', vLabel || '0:v:0', '-map', aLabel);
+    if (vLabel) finalArgs.push('-c:v', 'libx264', '-preset', 'fast', '-crf', '19', '-pix_fmt', 'yuv420p');
+    else finalArgs.push('-c:v', 'copy');
     finalArgs.push('-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-shortest', outputPath);
     await runCmd('ffmpeg', finalArgs);
 

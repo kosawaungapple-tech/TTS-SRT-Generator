@@ -154,6 +154,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [subScale, setSubScale] = useState(1);
   const [framing, setFraming] = useState<'blurred-fit' | 'cover' | 'letterbox'>('blurred-fit');
   const [blurAmount, setBlurAmount] = useState(40);
+  const [bgmFile, setBgmFile] = useState<File | null>(null);
+  const [bgmVol, setBgmVol] = useState(0.2);
   const [logoImg, setLogoImg] = useState<HTMLImageElement | null>(null);
   const [logoName, setLogoName] = useState('');
   const [logoText, setLogoText] = useState('');
@@ -495,6 +497,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         blurAmount,
         bgColor: '#000000',
         subtitleStyle: getSubtitleStyle(subPreset, subY, subScale),
+        bgm: bgmFile,
+        bgmVolume: bgmVol,
         logoPng: await renderLogoPng({ image: logoImg, text: logoText, position: logoPos, sizePct: logoSize, opacity: logoOpacity }, w, h),
         onProgress: (d, tot, msg) => setRendering(`${msg} (${d}/${tot})`),
       });
@@ -831,6 +835,25 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                     <div className="flex items-center justify-between mb-1.5"><span className="text-[11.5px] text-slate-400">{isMm ? 'ဖောက်ထွင်းမြင်ရမှု' : 'Opacity'}</span><span className="text-[11px] font-mono text-amber-300">{Math.round(logoOpacity * 100)}%</span></div>
                     <input type="range" min={0.2} max={1} step={0.05} value={logoOpacity} onChange={e => setLogoOpacity(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
                   </div>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <Label>{isMm ? '🎵 နောက်ခံတေးဂီတ (BGM) — ကိုယ်ပိုင်/လိုင်စင်ရတာသာ' : '🎵 Background music — your own / licensed only'}</Label>
+              <label className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-white/20 bg-white/[0.04] py-3 text-[12px] text-slate-200 cursor-pointer">
+                <Upload size={14} />
+                <span className="truncate max-w-[220px]">{bgmFile ? bgmFile.name : (isMm ? 'BGM ဖိုင်ရွေး (mp3/wav/m4a)' : 'Choose BGM file (mp3/wav/m4a)')}</span>
+                <input type="file" accept="audio/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) setBgmFile(f); }} />
+              </label>
+              {bgmFile && (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[11.5px] text-slate-400">{isMm ? 'BGM အသံ (ပြောသံပေါ်မှာ အလိုအလျောက်ကျသွားမည်)' : 'BGM level (ducks under the voice)'}</span>
+                    <span className="text-[11px] font-mono text-amber-300">{Math.round(bgmVol * 100)}%</span>
+                  </div>
+                  <input type="range" min={0.05} max={0.6} step={0.05} value={bgmVol} onChange={e => setBgmVol(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
+                  <button type="button" onClick={() => setBgmFile(null)} className="mt-2 text-[11px] text-red-300 underline">{isMm ? 'BGM ဖယ်မည်' : 'Remove BGM'}</button>
                 </div>
               )}
             </div>
