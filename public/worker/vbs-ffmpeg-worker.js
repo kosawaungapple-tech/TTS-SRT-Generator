@@ -83,7 +83,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       status: 'online',
       engine: 'vbs-ffmpeg-worker',
-      version: '1.5.0',
+      version: '1.6.0',
       ffmpegAvailable: isFfmpegInstalled,
       ffmpegVersion: ffmpegVersionStr,
       platform: os.platform(),
@@ -488,6 +488,7 @@ const server = http.createServer((req, res) => {
           outputPath,
           logoPath,
           bgmPath,
+          blurBand: parsed.fields['blurBandH'] ? { y: parseFloat(parsed.fields['blurBandY'] || '0.8'), h: parseFloat(parsed.fields['blurBandH']) } : undefined,
           bgmVolume: parsed.fields['bgmVolume'] ? parseFloat(parsed.fields['bgmVolume']) : undefined,
           outWidth: parsed.fields['outWidth'] ? parseInt(parsed.fields['outWidth'], 10) : undefined,
           outHeight: parsed.fields['outHeight'] ? parseInt(parsed.fields['outHeight'], 10) : undefined,
@@ -606,22 +607,29 @@ function ffColor(hex) {
 
 function sceneFilterGraph(o) {
   const W = o.outW, H = o.outH;
+  // Optional: blur a horizontal band of the SOURCE frame (its burned-in subtitles) before anything else.
+  let src = '[0:v]';
+  if (o.blurBand && o.blurBand.h > 0.005) {
+    const y = Math.max(0, Math.min(0.97, o.blurBand.y)).toFixed(4);
+    const h = Math.max(0.01, Math.min(1 - Number(y), o.blurBand.h)).toFixed(4);
+    src = `[0:v]split=2[ob][oc];[oc]crop=iw:trunc(ih*${h}/2)*2:0:trunc(ih*${y}/2)*2,gblur=sigma=28:steps=3[obl];[ob][obl]overlay=0:trunc(main_h*${y}/2)*2[ofix];[ofix]`;
+  }
   const pre = `setpts=(PTS-STARTPTS)*${o.factor.toFixed(6)},fps=${o.fps}`;
   const post = [o.holdSeconds > 0.02 ? `tpad=stop_mode=clone:stop_duration=${o.holdSeconds.toFixed(3)}` : null, 'format=yuv420p']
     .filter(Boolean).join(',');
 
-  if (o.keepSourceFrame) return `[0:v]${pre},setsar=1,${post}[v]`;
+  if (o.keepSourceFrame) return `${src}${pre},setsar=1,${post}[v]`;
   if (o.framing === 'cover') {
-    return `[0:v]${pre},scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,${post}[v]`;
+    return `${src}${pre},scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,${post}[v]`;
   }
   if (o.framing === 'blurred-fit') {
     const sigma = Math.max(2, Math.round(o.blurAmount / 4));
-    return `[0:v]${pre},split=2[a][b];` +
+    return `${src}${pre},split=2[a][b];` +
       `[a]scale=320:180,gblur=sigma=${sigma},lutyuv=y=val*0.65,eq=saturation=1.2,scale=${W}:${H}[bg];` +
       `[b]scale=${W}:${H}:force_original_aspect_ratio=decrease[fg];` +
       `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,${post}[v]`;
   }
-  return `[0:v]${pre},scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
+  return `${src}${pre},scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
     `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=${ffColor(o.bgColor)},setsar=1,${post}[v]`;
 }
 
@@ -664,7 +672,7 @@ async function renderRecap(opts) {
       const vOut = path.join(work, `v_${i}.mp4`);
       await runCmd('ffmpeg', ['-y', '-v', 'error', '-ss', start.toFixed(3), '-t', cutLen.toFixed(3), '-i', videoPath, '-an',
         '-filter_complex', sceneFilterGraph({ factor, fps, outW, outH, framing, keepSourceFrame,
-          blurAmount: opts.blurAmount || 20, bgColor: opts.bgColor || '#000000', holdSeconds }),
+          blurAmount: opts.blurAmount || 20, bgColor: opts.bgColor || '#000000', holdSeconds, blurBand: opts.blurBand }),
         '-map', '[v]', '-t', target.toFixed(3), '-c:v', 'libx264', '-preset', 'fast', '-crf', '20', '-r', String(fps), vOut]);
 
       const aOut = path.join(work, `a_${i}.wav`);

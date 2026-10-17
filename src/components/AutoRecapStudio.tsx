@@ -41,6 +41,9 @@ interface Result {
   duration: number;
 }
 
+// One steady narrator in every scene: separate TTS calls can drift into different-sounding voices.
+const NARRATOR_STYLE = 'Read as ONE single narrator with the exact same voice, pitch, age and pace in every part. Never act out characters or change voice for quoted speech or dialogue; keep a steady, warm storyteller tone.';
+
 const GAP = 0.25; // seconds of silence between narrated scenes
 
 function parseSrtCues(srt: string): { start: number; end: number; text: string }[] {
@@ -147,6 +150,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [result, setResult] = useState<Result | null>(null);
   const [rendering, setRendering] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const draftRef = useRef<{ segments: Segment[]; hasVideoTimes: boolean } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [errorInfo, setErrorInfo] = useState<string | null>(null);
   useActivity(busy, isMm ? 'Auto Recap လုပ်နေသည်' : 'Auto Recap running', { detail: progress?.text, percent: progress?.percent, failed: errorInfo });
@@ -159,6 +163,11 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [blurAmount, setBlurAmount] = useState(40);
   const [srcUrl, setSrcUrl] = useState<string | null>(null);
   const [srcRatio, setSrcRatio] = useState(0);
+  const [reviewScript, setReviewScript] = useState(true);
+  const [draft, setDraft] = useState<{ segments: Segment[]; hasVideoTimes: boolean } | null>(null);
+  const [blurSubOn, setBlurSubOn] = useState(false);
+  const [blurSubY, setBlurSubY] = useState(78);
+  const [blurSubH, setBlurSubH] = useState(16);
   const [bgmFile, setBgmFile] = useState<File | null>(null);
   const [bgmVol, setBgmVol] = useState(0.2);
   const [logoImg, setLogoImg] = useState<HTMLImageElement | null>(null);
@@ -205,7 +214,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     }
   };
 
-  const run = async () => {
+  const run = async (resume = false) => {
     if (!file) {
       showToast(isMm ? 'ဗီဒီယိုဖိုင် အရင်တင်ပါ' : 'Please upload a video first', 'error');
       return;
@@ -221,7 +230,16 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     stageRef.current = 'start';
     setResult(null);
     setVideoUrl(null);
+    setDraft(null);
     try {
+      const g = gemini();
+      let segments: Segment[] = [];
+      let hasVideoTimes = true;
+      if (resume && draftRef.current) {
+        segments = draftRef.current.segments.filter(sg => sg.text.trim());
+        hasVideoTimes = draftRef.current.hasVideoTimes;
+        if (!segments.length) throw new Error(isMm ? 'ဇာတ်ညွှန်း ဗလာဖြစ်နေသည်' : 'The script is empty');
+      } else {
       // ---- 1. Listen (only for talking videos) ----------------------------------------------
       let cues: { start: number; end: number; text: string }[] = [];
       if (mode === 'speech') {
@@ -248,7 +266,6 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       }
 
       // ---- 2. Watch + write ------------------------------------------------------------------
-      const g = gemini();
       stageRef.current = '2 watch/write (Gemini)';
       const recap = await g.generateMovieRecap(
         cues.map((c, i) => `[${i + 1}] ${c.text}`).join('\n'),
@@ -280,8 +297,6 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         }
       );
 
-      let segments: Segment[];
-      let hasVideoTimes = true;
       if (recap.segments?.length) {
         segments = recap.segments;
       } else {
@@ -291,6 +306,16 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           .map(t => t.trim())
           .filter(Boolean)
           .map(text => ({ start: 0, end: 0, text }));
+      }
+
+      if (reviewScript) {
+        // Pause here so the script can be edited before any voice is recorded.
+        draftRef.current = { segments, hasVideoTimes };
+        setDraft({ segments, hasVideoTimes });
+        setProgress(null);
+        showToast(isMm ? 'ဇာတ်ညွှန်း ရပါပြီ — ပြင်ချင်ရင် ပြင်ပြီး "အသံသွင်းမည်" ကို နှိပ်ပါ' : 'Script ready — edit it if you like, then press "Record voiceover"', 'success');
+        return;
+      }
       }
 
       // ---- 3. Voice every scene --------------------------------------------------------------
@@ -307,7 +332,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         try { return (await c.decodeAudioData(await blob.arrayBuffer())).duration; } finally { void c.close(); }
       };
       const speakOnce = async (text: string, i: number) => {
-        const r = await g.generateTTS(text, { voiceId: voice, speed, pitch: 0, volume: 100, vocalStyle: 'Expressive' }, undefined, undefined, (s, msg) =>
+        const r = await g.generateTTS(text, { voiceId: voice, speed, pitch: 0, volume: 100, vocalStyle: 'Expressive', styleInstruction: NARRATOR_STYLE }, undefined, undefined, (s, msg) =>
           setProgress(p => ({ text: `${msg} (${s}s)`, percent: p?.percent ?? 60 }))
         );
         if (!r?.audioUrl) throw new Error(`No audio for part ${i + 1}`);
@@ -516,6 +541,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         blurAmount,
         bgColor: '#000000',
         subtitleStyle: getSubtitleStyle(subPreset, subY, subScale),
+        subtitleBlur: blurSubOn ? { y: blurSubY / 100, h: blurSubH / 100 } : null,
         bgm: bgmFile,
         bgmVolume: bgmVol,
         logoPng: await renderLogoPng({ image: logoImg, text: logoText, position: logoPos, sizePct: logoSize, opacity: logoOpacity }, w, h),
@@ -667,13 +693,54 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         {/* Start */}
         <button
           type="button"
-          onClick={run}
+          onClick={() => void run(false)}
           disabled={busy || !file}
           className="mt-7 w-full h-14 rounded-2xl bg-gradient-to-r from-amber-300 via-amber-400 to-orange-500 text-black text-[15px] font-extrabold flex items-center justify-center gap-2.5 shadow-xl shadow-amber-500/25 transition active:scale-[0.99] disabled:opacity-40 disabled:shadow-none"
         >
           {busy ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
           {busy ? (isMm ? 'လုပ်ဆောင်နေသည်…' : 'Working…') : isMm ? 'Auto Recap စတင်မည်' : 'Start Auto Recap'}
         </button>
+
+        <label className="mt-3 flex items-center gap-2.5 rounded-2xl bg-white/[0.04] border border-white/10 px-4 py-3 text-[12.5px] text-slate-200 cursor-pointer">
+          <input type="checkbox" checked={reviewScript} onChange={e => setReviewScript(e.target.checked)} className="accent-amber-400 w-4 h-4" />
+          {isMm ? '✍️ အသံမသွင်းခင် ဇာတ်ညွှန်းကို ပြင်ခွင့်ရအောင် ခဏရပ်ပါ' : '✍️ Pause to let me edit the script before recording'}
+        </label>
+
+        {draft && !busy && (
+          <div className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-400/[0.05] p-4">
+            <div className="text-[13px] font-extrabold text-amber-200 mb-1">{isMm ? '📝 ဇာတ်ညွှန်း — ပြင်လို့ရပါတယ်' : '📝 Script — editable'}</div>
+            <p className="text-[11.5px] text-slate-400 mb-3">{isMm ? 'စာပိုဒ်တစ်ခုစီက ဗီဒီယိုရဲ့ အပိုင်းတစ်ခုနဲ့ ကိုက်ပါတယ်။ ဖျက်ချင်ရင် စာကို ဗလာထားပါ။ ရှည်လွန်းရင် အသံသွင်းချိန်မှာ အလိုအလျောက် တိုအောင် ညှိပါလိမ့်မယ်။' : 'Each paragraph matches one part of the video. Clear a paragraph to drop it. Overlong ones are shortened automatically when recording.'}</p>
+            <div className="space-y-3">
+              {draft.segments.map((sg, i) => (
+                <div key={i}>
+                  <div className="text-[10.5px] font-mono text-slate-500 mb-1">
+                    {i + 1}{draft.hasVideoTimes ? ` · ${fmt(sg.start)}–${fmt(sg.end)}` : ''}
+                  </div>
+                  <textarea
+                    value={sg.text}
+                    onChange={e => {
+                      const text = e.target.value;
+                      setDraft(d => {
+                        if (!d) return d;
+                        const segs = d.segments.map((x, k) => (k === i ? { ...x, text } : x));
+                        draftRef.current = { segments: segs, hasVideoTimes: d.hasVideoTimes };
+                        return { ...d, segments: segs };
+                      });
+                    }}
+                    rows={Math.max(3, Math.ceil(sg.text.length / 38))}
+                    className="w-full rounded-xl bg-black/50 border border-white/10 p-3 text-[13px] leading-[1.9] text-slate-100 focus:outline-none focus:border-amber-400/60"
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-2">
+              <button type="button" onClick={() => { setDraft(null); draftRef.current = null; }} className="h-12 rounded-2xl bg-white/10 text-white text-[12.5px] font-bold">{isMm ? 'ပယ်ဖျက်' : 'Discard'}</button>
+              <button type="button" onClick={() => void run(true)} className="col-span-2 h-12 rounded-2xl bg-emerald-400 text-black text-[13px] font-extrabold flex items-center justify-center gap-2">
+                <Mic size={16} />{isMm ? 'အသံသွင်းမည်' : 'Record voiceover'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {errorInfo && (
           <div className="mt-4 rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-[12px] text-red-200 break-words select-all">
@@ -812,6 +879,26 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             </div>
 
             <div>
+              <label className="flex items-center gap-2.5 text-[12.5px] text-slate-200 cursor-pointer">
+                <input type="checkbox" checked={blurSubOn} onChange={e => setBlurSubOn(e.target.checked)} className="accent-amber-400 w-4 h-4" />
+                {isMm ? '🙈 မူရင်းဗီဒီယိုထဲက စာတန်း/စာသားကို blur လုပ်မည်' : '🙈 Blur the original burned-in subtitles'}
+              </label>
+              {blurSubOn && (
+                <div className="mt-3 space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5"><span className="text-[11.5px] text-slate-400">{isMm ? 'နေရာ (မူရင်းဗီဒီယိုရဲ့ အပေါ်ကနေ)' : 'Position (from top of the original)'}</span><span className="text-[11px] font-mono text-amber-300">{blurSubY}%</span></div>
+                    <input type="range" min={0} max={95} step={1} value={blurSubY} onChange={e => setBlurSubY(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5"><span className="text-[11.5px] text-slate-400">{isMm ? 'အမြင့်' : 'Height'}</span><span className="text-[11px] font-mono text-amber-300">{blurSubH}%</span></div>
+                    <input type="range" min={5} max={40} step={1} value={blurSubH} onChange={e => setBlurSubH(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
+                  </div>
+                  <p className="text-[11px] text-slate-500">{isMm ? 'ကြိုကြည့်ထဲမှာ မှုန်ဝါးတဲ့ ဘားကို မူရင်းစာတန်းပေါ် ကျအောင် ချိန်ပါ။ Recap ဗီဒီယို (.mp4) ထုတ်တဲ့အခါ PC Worker မှာ လုပ်ပေးပါတယ်။' : 'Line the blurred bar up with the original text in the preview. It is applied when the Recap video (.mp4) is rendered on the PC worker.'}</p>
+                </div>
+              )}
+            </div>
+
+            <div>
               <Label>{isMm ? '🏷️ Logo / Logo စာသား (မထည့်လည်းရ)' : '🏷️ Logo / logo text (optional)'}</Label>
               <div className="grid grid-cols-2 gap-2">
                 <label className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-white/20 bg-white/[0.04] py-3 text-[12px] text-slate-200 cursor-pointer">
@@ -890,6 +977,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                 subPreset={subPreset}
                 subY={subY}
                 subScale={subScale}
+                blurBand={blurSubOn ? { y: blurSubY / 100, h: blurSubH / 100 } : null}
                 logoImg={logoImg}
                 logoText={logoText}
                 logoPos={logoPos}

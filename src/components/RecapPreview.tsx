@@ -15,6 +15,8 @@ interface Props {
   subPreset: string;
   subY: number;
   subScale: number;
+  /** Band of the source video to blur (fractions of the source height). */
+  blurBand?: { y: number; h: number } | null;
   logoImg: HTMLImageElement | null;
   logoText: string;
   logoPos: LogoPosition;
@@ -144,6 +146,22 @@ export const RecapPreview: React.FC<Props> = p => {
         ) : p.thumb ? (
           <img src={p.thumb} alt="" className="absolute inset-0 w-full h-full" style={{ objectFit: p.framing === 'cover' ? 'cover' : 'contain' }} />
         ) : null}
+
+        {p.blurBand && (() => {
+          // where the source picture sits inside the frame (it is fitted, not stretched)
+          const sr = p.srcRatio || 16 / 9;
+          const fill = p.framing === 'cover' && p.aspect !== 'original';
+          let w = 100, h = 100;
+          if (!fill) { if (sr > ratio) h = (ratio / sr) * 100; else w = (sr / ratio) * 100; }
+          else { if (sr > ratio) w = (sr / ratio) * 100; else h = (ratio / sr) * 100; }
+          const top = (100 - h) / 2 + (p.blurBand!.y * h);
+          return (
+            <div
+              className="absolute pointer-events-none border border-dashed border-sky-300/70"
+              style={{ left: `${(100 - w) / 2}%`, width: `${w}%`, top: `${top}%`, height: `${p.blurBand!.h * h}%`, backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)' }}
+            />
+          );
+        })()}
 
         {sample && (
           <div

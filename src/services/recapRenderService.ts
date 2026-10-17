@@ -43,6 +43,8 @@ export interface SceneRecapRenderParams {
   /** Transparent full-frame PNG with the logo, laid over the finished video. */
   logoPng?: Blob | null;
   /** Background music (your own / licensed file) mixed under the voice. */
+  /** Blur a horizontal band of the SOURCE video (its burned-in subtitles). y/h are fractions of the frame height. */
+  subtitleBlur?: { y: number; h: number } | null;
   bgm?: File | null;
   /** 0.02 - 1 */
   bgmVolume?: number;
@@ -105,6 +107,10 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
   audios.forEach((b, i) => form.append(`audio_${i}`, b, `scene_${i}.wav`));
   subtitleImages.forEach(s => form.append(`sub_${s.scene}_${s.index}`, s.blob, `sub_${s.scene}_${s.index}.png`));
   if (p.logoPng) form.append('logo', p.logoPng, 'logo.png');
+  if (p.subtitleBlur) {
+    form.append('blurBandY', String(p.subtitleBlur.y));
+    form.append('blurBandH', String(p.subtitleBlur.h));
+  }
   if (p.bgm) {
     form.append('bgm', p.bgm, p.bgm.name || 'bgm.mp3');
     form.append('bgmVolume', String(p.bgmVolume ?? 0.2));
@@ -137,7 +143,7 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
   }
   if (resp.status === 404 && !data.success) {
     throw new Error(
-      'The render worker has no recap endpoint. Download the latest vbs-ffmpeg-worker.js (v1.5.0) and restart it.'
+      'The render worker has no recap endpoint. Download the latest vbs-ffmpeg-worker.js (v1.6.0) and restart it.'
     );
   }
   if (!resp.ok || !data.success || !data.downloadUrl) {
