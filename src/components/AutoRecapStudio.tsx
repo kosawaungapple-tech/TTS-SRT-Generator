@@ -151,7 +151,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [result, setResult] = useState<Result | null>(null);
   const [rendering, setRendering] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const draftRef = useRef<{ segments: Segment[]; hasVideoTimes: boolean } | null>(null);
+  const draftRef = useRef<{ segments: Segment[]; hasVideoTimes: boolean; audios?: Blob[] } | null>(null);
+  const [canResume, setCanResume] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const [errorInfo, setErrorInfo] = useState<string | null>(null);
   useActivity(busy, isMm ? 'Auto Recap လုပ်နေသည်' : 'Auto Recap running', { detail: progress?.text, percent: progress?.percent, failed: errorInfo });
@@ -233,6 +234,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     setResult(null);
     setVideoUrl(null);
     setDraft(null);
+    setCanResume(false);
+    if (!resume) draftRef.current = null;
     try {
       const g = gemini();
       let segments: Segment[] = [];
@@ -310,6 +313,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           .map(text => ({ start: 0, end: 0, text }));
       }
 
+      draftRef.current = { segments, hasVideoTimes };
       if (reviewScript) {
         // Pause here so the script can be edited before any voice is recorded.
         draftRef.current = { segments, hasVideoTimes };
@@ -323,7 +327,9 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       // ---- 3. Voice every scene --------------------------------------------------------------
       stageRef.current = '3 voiceover (Gemini TTS)';
       const Ctx0 = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
-      const sceneAudios: Blob[] = [];
+      // On a resumed run the scenes already voiced are kept; only the rest is recorded.
+      const sceneAudios: Blob[] = resume && draftRef.current?.audios ? [...draftRef.current.audios] : [];
+      if (sceneAudios.length > segments.length) sceneAudios.length = segments.length;
       // The voiceover must fit the video: each scene gets the time of the part of the video it tells.
       const coverageFactor = length === 'short' ? 0.4 : length === 'full' ? 1 : 0.7;
       const totalTarget = duration > 0 ? duration * coverageFactor : 0;
@@ -342,7 +348,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         if (!blob.size) throw new Error(`Empty audio for part ${i + 1}`);
         return blob;
       };
-      for (let i = 0; i < segments.length; i++) {
+      for (let i = sceneAudios.length; i < segments.length; i++) {
         if (ctrl.signal.aborted) throw new Error('Cancelled');
         setProgress({ text: `${isMm ? '၃/၄ အသံသွင်းနေသည်' : '3/4 Recording the voiceover'} (${i + 1}/${segments.length})`, percent: 50 + Math.round((i / segments.length) * 40) });
         let blob = await speakOnce(segments[i].text, i);
@@ -372,6 +378,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           }
         }
         sceneAudios.push(blob);
+        draftRef.current = { segments, hasVideoTimes, audios: [...sceneAudios] };
       }
 
       // ---- 4. Join voiceover + build the SRT on the same timeline ---------------------------
@@ -425,6 +432,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         cues: cueTimes,
         duration: total,
       });
+      draftRef.current = null;
       setProgress({ text: isMm ? 'ပြီးပါပြီ ✅' : 'Done ✅', percent: 100 });
       showToast(isMm ? '🎉 Auto Recap ပြီးပါပြီ — Voiceover နဲ့ SRT ကို ဒေါင်းလို့ရပါပြီ' : '🎉 Recap ready — download the voiceover and SRT', 'success');
     } catch (e) {
@@ -438,6 +446,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       setErrorInfo(`[${stageRef.current}] ${msg}`);
       showToast(msg, 'error');
       setProgress(null);
+      if (draftRef.current) setCanResume(true);
     } finally {
       setBusy(false);
     }
@@ -767,6 +776,14 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           <div className="mt-4 rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-[12px] text-red-200 break-words select-all">
             <div className="font-bold mb-1">{isMm ? '❌ Error — ဒီစာကို ကူးပြီး ပို့ပေးပါ' : '❌ Error — copy this text'}</div>
             {errorInfo}
+            {canResume && !busy && (
+              <button type="button" onClick={() => void run(true)} className="mt-3 w-full h-11 rounded-xl bg-emerald-400 text-black text-[12.5px] font-extrabold flex items-center justify-center gap-2">
+                <RefreshCw size={15} />
+                {isMm
+                  ? `ဆက်လုပ်မည် (ပြီးသွားတဲ့ အပိုင်း ${draftRef.current?.audios?.length ?? 0} ခုကို ပြန်မလုပ်ဘူး)`
+                  : `Continue (keeps the ${draftRef.current?.audios?.length ?? 0} parts already voiced)`}
+              </button>
+            )}
           </div>
         )}
 

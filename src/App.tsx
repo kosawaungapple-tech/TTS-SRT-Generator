@@ -23,6 +23,7 @@ import { useActivity } from './services/activity';
 import { logActivity } from './services/activityService';
 import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, SystemConfig, VBSUserControl, Announcement, CustomFont } from './types';
 import { DEFAULT_RULES } from './constants';
+import { ExtraGeminiKeys } from './components/ExtraGeminiKeys';
 import { useLanguage } from './contexts/LanguageContext';
 import { formatDate } from './utils/dateUtils';
 import { formatMyanmarDuration, renderProcessedAudio, pcmToWav } from './utils/audioUtils';
@@ -3259,6 +3260,8 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+
+                  <ExtraGeminiKeys isMm={language === 'mm'} showToast={showToast} />
 
                   {/* AssemblyAI API Key Section (SRT & Subtitles) */}
                   <div className="glass-card rounded-[24px] p-6 sm:p-8 shadow-2xl transition-all duration-300">
