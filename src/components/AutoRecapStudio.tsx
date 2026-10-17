@@ -11,6 +11,7 @@ import { generateSRT, downloadSrtFile, splitSentenceIntoCueBlocks } from '../uti
 import { getRecapOutputSize, planSubtitlePieces } from '../utils/recapGeometry';
 import { renderSubtitleVideo } from '../utils/subtitleVideo';
 import { extractSpeechWav } from '../utils/voiceAudio';
+import { getCustomPronunciation, setCustomPronunciation } from '../utils/pronunciation';
 import { RecapPreview } from './RecapPreview';
 import { loadLogoImage, renderLogoPng, type LogoPosition } from '../utils/recapLogo';
 import { SUBTITLE_PRESETS, getSubtitleStyle } from '../utils/subtitlePresets';
@@ -163,6 +164,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [blurAmount, setBlurAmount] = useState(40);
   const [srcUrl, setSrcUrl] = useState<string | null>(null);
   const [srcRatio, setSrcRatio] = useState(0);
+  const [pron, setPron] = useState(getCustomPronunciation());
   const [reviewScript, setReviewScript] = useState(true);
   const [draft, setDraft] = useState<{ segments: Segment[]; hasVideoTimes: boolean } | null>(null);
   const [blurSubOn, setBlurSubOn] = useState(false);
@@ -705,6 +707,25 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           <input type="checkbox" checked={reviewScript} onChange={e => setReviewScript(e.target.checked)} className="accent-amber-400 w-4 h-4" />
           {isMm ? '✍️ အသံမသွင်းခင် ဇာတ်ညွှန်းကို ပြင်ခွင့်ရအောင် ခဏရပ်ပါ' : '✍️ Pause to let me edit the script before recording'}
         </label>
+
+        <details className="mt-3 rounded-2xl bg-white/[0.04] border border-white/10">
+          <summary className="cursor-pointer list-none px-4 py-3 text-[12.5px] text-slate-200 flex items-center gap-2">
+            🔤 {isMm ? 'အသံထွက် ပြင်ဆင်ချက် (မှားဖတ်တဲ့စာလုံး)' : 'Pronunciation fixes (words read wrongly)'}
+            <ChevronDown size={14} className="ml-auto" />
+          </summary>
+          <div className="px-4 pb-4">
+            <p className="text-[11.5px] text-slate-400 mb-2">
+              {isMm ? 'တစ်ကြောင်းကို စာလုံး -> ဖတ်စေချင်တဲ့ရေးပုံ ပုံစံနဲ့ ရေးပါ။ အသံထွက်ကိုပဲ ပြောင်းပြီး စာတန်းမှာ မူရင်းစာပဲ ပေါ်ပါမယ်။ "အံ့ဩ" ကိုတော့ ပြင်ထားပြီးသားပါ။' : 'One per line: word -> how to write it so it is read right. Only the spoken text changes; subtitles keep the original. "အံ့ဩ" is already fixed.'}
+            </p>
+            <textarea
+              value={pron}
+              onChange={e => { setPron(e.target.value); setCustomPronunciation(e.target.value); }}
+              rows={4}
+              placeholder={'ဥပမာ - စာလုံး -> ဖတ်စေချင်တဲ့ရေးပုံ'}
+              className="w-full rounded-xl bg-black/50 border border-white/10 p-3 text-[13px] text-slate-100 focus:outline-none focus:border-amber-400/60"
+            />
+          </div>
+        </details>
 
         {draft && !busy && (
           <div className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-400/[0.05] p-4">
