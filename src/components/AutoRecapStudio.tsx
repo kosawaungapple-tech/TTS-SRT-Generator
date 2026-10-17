@@ -11,6 +11,7 @@ import { generateSRT, downloadSrtFile, splitSentenceIntoCueBlocks } from '../uti
 import { getRecapOutputSize, planSubtitlePieces } from '../utils/recapGeometry';
 import { renderSubtitleVideo } from '../utils/subtitleVideo';
 import { extractSpeechWav } from '../utils/voiceAudio';
+import { loadLogoImage, renderLogoPng, type LogoPosition } from '../utils/recapLogo';
 import { SUBTITLE_PRESETS, getSubtitleStyle } from '../utils/subtitlePresets';
 import { VOICE_OPTIONS } from '../constants';
 import type { SRTSubtitle } from '../types';
@@ -149,6 +150,16 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const stageRef = useRef('start');
   const [thumb, setThumb] = useState<string | null>(null);
   const [subPreset, setSubPreset] = useState('viral');
+  const [subY, setSubY] = useState(84);
+  const [subScale, setSubScale] = useState(1);
+  const [framing, setFraming] = useState<'blurred-fit' | 'cover' | 'letterbox'>('blurred-fit');
+  const [blurAmount, setBlurAmount] = useState(40);
+  const [logoImg, setLogoImg] = useState<HTMLImageElement | null>(null);
+  const [logoName, setLogoName] = useState('');
+  const [logoText, setLogoText] = useState('');
+  const [logoPos, setLogoPos] = useState<LogoPosition>('tr');
+  const [logoSize, setLogoSize] = useState(14);
+  const [logoOpacity, setLogoOpacity] = useState(0.9);
   const [overlayBg, setOverlayBg] = useState<'black' | 'green'>('black');
   const [overlayWithVoice, setOverlayWithVoice] = useState(true);
   const [overlayBusy, setOverlayBusy] = useState<number | null>(null);
@@ -409,10 +420,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     setOverlayFile(null);
     setOverlayBusy(0);
     try {
-      const portrait = aspect === '9:16';
-      const square = aspect === '1:1';
-      const width = portrait ? 720 : square ? 720 : 1280;
-      const height = portrait ? 1280 : square ? 720 : 720;
+      const [width, height] = aspect === '9:16' ? [720, 1280] : aspect === '1:1' ? [720, 720] : aspect === '4:5' ? [720, 900] : [1280, 720];
       let audio: AudioBuffer | undefined;
       if (overlayWithVoice) {
         const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -427,7 +435,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         width,
         height,
         background: overlayBg,
-        style: getSubtitleStyle(subPreset, portrait ? 80 : 86),
+        style: getSubtitleStyle(subPreset, subY, subScale),
         onProgress: f => setOverlayBusy(f),
       });
       setOverlayFile({ blob, name: `${baseName}_subtitle_overlay.${ext}` });
@@ -483,10 +491,11 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         outputWidth: w,
         outputHeight: h,
         aspectRatio: aspect,
-        framing: 'blurred-fit',
-        blurAmount: 40,
+        framing,
+        blurAmount,
         bgColor: '#000000',
-        subtitleStyle: getSubtitleStyle(subPreset, 86),
+        subtitleStyle: getSubtitleStyle(subPreset, subY, subScale),
+        logoPng: await renderLogoPng({ image: logoImg, text: logoText, position: logoPos, sizePct: logoSize, opacity: logoOpacity }, w, h),
         onProgress: (d, tot, msg) => setRendering(`${msg} (${d}/${tot})`),
       });
       setVideoUrl(r.downloadUrl);
@@ -623,12 +632,6 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
               </Select>
             </div>
           )}
-          <div>
-            <Label>{isMm ? 'Aspect (ဗီဒီယိုထုတ်ရင်)' : 'Aspect (video export)'}</Label>
-            <Select icon="📐" value={aspect} onChange={setAspect}>
-              <option value="original">Auto</option><option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option>
-            </Select>
-          </div>
           <div className="sm:col-span-2">
             <div className="flex items-center justify-between mb-2">
               <Label>{isMm ? 'အသံနှုန်း' : 'Voice speed'}</Label>
@@ -718,25 +721,153 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             {isMm ? 'Voiceover နဲ့ SRT က အချိန်တူညီပါတယ် — CapCut Desktop/Web မှာ နှစ်ခုစလုံးကို 0:00 မှာ တင်လိုက်ရုံပါ။' : 'Voiceover and SRT share one timeline — drop both at 0:00 in CapCut Desktop / Web.'}
           </p>
 
-          <div className="mt-5">
-            <Label>{isMm ? 'စာတန်းပုံစံ' : 'Subtitle look'}</Label>
-            <div className="grid grid-cols-4 gap-2">
-              {SUBTITLE_PRESETS.map(p => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => setSubPreset(p.id)}
-                  className={`rounded-2xl border px-2 py-3 flex flex-col items-center gap-1.5 transition ${subPreset === p.id ? 'border-emerald-400 bg-emerald-400/10' : 'border-white/10 bg-white/[0.04]'}`}
+          <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.03] p-4 space-y-5">
+            <div className="text-[13px] font-extrabold text-white">{isMm ? '🎛️ ဗီဒီယို ပြင်ဆင်ချက်များ' : '🎛️ Video options'}</div>
+
+            <div>
+              <Label>{isMm ? 'ဗီဒီယိုအချိုး (Ratio)' : 'Video ratio'}</Label>
+              <div className="grid grid-cols-5 gap-2">
+                {[['original', isMm ? 'မူရင်း' : 'Original'], ['16:9', '16:9'], ['9:16', '9:16'], ['1:1', '1:1'], ['4:5', '4:5']].map(([id, label]) => (
+                  <button key={id} type="button" onClick={() => setAspect(id)} className={`rounded-xl border py-2.5 text-[12px] font-bold transition ${aspect === id ? 'border-emerald-400 bg-emerald-400/10 text-white' : 'border-white/10 bg-white/[0.04] text-slate-300'}`}>{label}</button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <Label>{isMm ? 'မူရင်းဗီဒီယို အနားနေရာ' : 'Original video framing'}</Label>
+              <Segmented
+                value={framing}
+                onChange={setFraming}
+                options={[
+                  { id: 'blurred-fit', label: isMm ? 'Blur နောက်ခံ' : 'Blur', sub: isMm ? 'အပြည့်မပြတ်' : 'full video' },
+                  { id: 'cover', label: isMm ? 'ဖြတ်ပြည့်' : 'Crop fill', sub: isMm ? 'အနားဖြတ်' : 'cut edges' },
+                  { id: 'letterbox', label: isMm ? 'အနက်ဘား' : 'Black bars', sub: isMm ? 'အနက်ရောင်' : 'solid' },
+                ]}
+              />
+              {framing === 'blurred-fit' && (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[11.5px] text-slate-400">{isMm ? 'Blur ပမာဏ' : 'Blur amount'}</span>
+                    <span className="text-[11px] font-mono text-amber-300">{blurAmount}</span>
+                  </div>
+                  <input type="range" min={10} max={80} step={5} value={blurAmount} onChange={e => setBlurAmount(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
+                </div>
+              )}
+              {aspect === 'original' && (
+                <p className="mt-2 text-[11px] text-slate-500">{isMm ? 'အချိုး "မူရင်း" ဆိုရင် မူရင်းဗီဒီယိုက ဘောင်ပြည့်နေလို့ blur မထင်ရှားပါ — 9:16 / 1:1 / 4:5 ရွေးမှ နောက်ခံ blur မြင်ရပါမယ်။' : 'With "Original" the video already fills the frame, so there is nothing to blur — pick 9:16 / 1:1 / 4:5 to see the blurred background.'}</p>
+              )}
+            </div>
+
+            <div>
+              <Label>{isMm ? 'စာတန်းပုံစံ' : 'Subtitle look'}</Label>
+              <div className="grid grid-cols-4 gap-2">
+                {SUBTITLE_PRESETS.map(p => (
+                  <button key={p.id} type="button" onClick={() => setSubPreset(p.id)} className={`rounded-2xl border px-2 py-3 flex flex-col items-center gap-1.5 transition ${subPreset === p.id ? 'border-emerald-400 bg-emerald-400/10' : 'border-white/10 bg-white/[0.04]'}`}>
+                    <span className="text-[20px] font-black leading-none" style={{ color: p.swatch.fill, WebkitTextStroke: `2px ${p.swatch.stroke}`, paintOrder: 'stroke fill' }}>Aa</span>
+                    <span className="text-[10.5px] text-slate-300 text-center leading-tight">{isMm ? p.name.mm : p.name.en}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <Label>{isMm ? 'စာတန်းနေရာ (အပေါ် ↔ အောက်)' : 'Subtitle position (top ↔ bottom)'}</Label>
+                <span className="mb-2 text-[11px] font-mono text-amber-300">{subY}%</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                {[[14, isMm ? 'အပေါ်' : 'Top'], [50, isMm ? 'အလယ်' : 'Middle'], [84, isMm ? 'အောက်' : 'Bottom']].map(([v, l]) => (
+                  <button key={String(v)} type="button" onClick={() => setSubY(Number(v))} className={`rounded-xl border py-2 text-[12px] font-bold transition ${subY === v ? 'border-emerald-400 bg-emerald-400/10 text-white' : 'border-white/10 bg-white/[0.04] text-slate-300'}`}>{l}</button>
+                ))}
+              </div>
+              <input type="range" min={8} max={94} step={1} value={subY} onChange={e => setSubY(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
+              <div className="flex items-center justify-between mt-3 mb-1.5">
+                <span className="text-[11.5px] text-slate-400">{isMm ? 'စာလုံးအရွယ်' : 'Text size'}</span>
+                <span className="text-[11px] font-mono text-amber-300">{Math.round(subScale * 100)}%</span>
+              </div>
+              <input type="range" min={0.6} max={1.5} step={0.05} value={subScale} onChange={e => setSubScale(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
+            </div>
+
+            <div>
+              <Label>{isMm ? '🏷️ Logo / Logo စာသား (မထည့်လည်းရ)' : '🏷️ Logo / logo text (optional)'}</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-white/20 bg-white/[0.04] py-3 text-[12px] text-slate-200 cursor-pointer">
+                  <Upload size={14} />
+                  <span className="truncate max-w-[110px]">{logoName || (isMm ? 'Logo ပုံရွေး' : 'Choose logo')}</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={async e => {
+                      const f = e.target.files?.[0];
+                      e.target.value = '';
+                      if (!f) return;
+                      try { setLogoImg(await loadLogoImage(f)); setLogoName(f.name); } catch (err) { showToast(err instanceof Error ? err.message : 'Logo error', 'error'); }
+                    }}
+                  />
+                </label>
+                <input
+                  value={logoText}
+                  onChange={e => setLogoText(e.target.value)}
+                  placeholder={isMm ? 'Logo စာသား (ဥပမာ VBS)' : 'Logo text (e.g. VBS)'}
+                  className="rounded-xl bg-white/[0.04] border border-white/10 px-3 text-[12.5px] text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400/60"
+                />
+              </div>
+              {(logoImg || logoText.trim()) && (
+                <div className="mt-3 space-y-3">
+                  {logoImg && (
+                    <button type="button" onClick={() => { setLogoImg(null); setLogoName(''); }} className="text-[11px] text-red-300 underline">{isMm ? 'Logo ပုံ ဖယ်မည်' : 'Remove logo image'}</button>
+                  )}
+                  <div className="grid grid-cols-4 gap-2">
+                    {([['tl', '↖'], ['tr', '↗'], ['bl', '↙'], ['br', '↘']] as [LogoPosition, string][]).map(([id, a]) => (
+                      <button key={id} type="button" onClick={() => setLogoPos(id)} className={`rounded-xl border py-2 text-[16px] transition ${logoPos === id ? 'border-emerald-400 bg-emerald-400/10 text-white' : 'border-white/10 bg-white/[0.04] text-slate-300'}`}>{a}</button>
+                    ))}
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5"><span className="text-[11.5px] text-slate-400">{isMm ? 'အရွယ်' : 'Size'}</span><span className="text-[11px] font-mono text-amber-300">{logoSize}%</span></div>
+                    <input type="range" min={6} max={35} step={1} value={logoSize} onChange={e => setLogoSize(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5"><span className="text-[11.5px] text-slate-400">{isMm ? 'ဖောက်ထွင်းမြင်ရမှု' : 'Opacity'}</span><span className="text-[11px] font-mono text-amber-300">{Math.round(logoOpacity * 100)}%</span></div>
+                    <input type="range" min={0.2} max={1} step={0.05} value={logoOpacity} onChange={e => setLogoOpacity(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Rough preview of where things land */}
+            <div>
+              <Label>{isMm ? 'နေရာ ကြိုကြည့်' : 'Layout preview'}</Label>
+              <div
+                className="relative mx-auto overflow-hidden rounded-xl border border-white/15 bg-gradient-to-br from-slate-700 to-slate-900"
+                style={{ aspectRatio: aspect === '9:16' ? '9 / 16' : aspect === '1:1' ? '1 / 1' : aspect === '4:5' ? '4 / 5' : '16 / 9', maxHeight: 260 }}
+              >
+                <div
+                  className="absolute left-0 right-0 text-center px-3 font-black leading-tight"
+                  style={{
+                    top: `${subY}%`,
+                    transform: 'translateY(-50%)',
+                    fontSize: `${Math.round(13 * subScale)}px`,
+                    color: SUBTITLE_PRESETS.find(p => p.id === subPreset)?.swatch.fill,
+                    WebkitTextStroke: `1.5px ${SUBTITLE_PRESETS.find(p => p.id === subPreset)?.swatch.stroke}`,
+                    paintOrder: 'stroke fill',
+                  }}
                 >
-                  <span
-                    className="text-[20px] font-black leading-none"
-                    style={{ color: p.swatch.fill, WebkitTextStroke: `2px ${p.swatch.stroke}`, paintOrder: 'stroke fill' }}
+                  {isMm ? 'ဥပမာ စာတန်းထိုး' : 'Sample subtitle'}
+                </div>
+                {(logoImg || logoText.trim()) && (
+                  <div
+                    className="absolute text-[10px] font-black text-white px-1.5 py-0.5 rounded bg-white/20"
+                    style={{
+                      opacity: logoOpacity,
+                      [logoPos[0] === 't' ? 'top' : 'bottom']: '3%',
+                      [logoPos[1] === 'l' ? 'left' : 'right']: '3%',
+                    } as React.CSSProperties}
                   >
-                    Aa
-                  </span>
-                  <span className="text-[10.5px] text-slate-300 text-center leading-tight">{isMm ? p.name.mm : p.name.en}</span>
-                </button>
-              ))}
+                    {logoText.trim() || 'LOGO'}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 

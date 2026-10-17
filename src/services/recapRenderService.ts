@@ -40,6 +40,8 @@ export interface SceneRecapRenderParams {
   bgColor: string;
   /** Subtitle look (same object the editor preview uses). null = no subtitles. */
   subtitleStyle: SubtitleStyle | null;
+  /** Transparent full-frame PNG with the logo, laid over the finished video. */
+  logoPng?: Blob | null;
   serverUrl?: string;
   onProgress?: (done: number, total: number, message: string) => void;
   onRetry?: (seconds: number, message: string) => void;
@@ -98,6 +100,7 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
   );
   audios.forEach((b, i) => form.append(`audio_${i}`, b, `scene_${i}.wav`));
   subtitleImages.forEach(s => form.append(`sub_${s.scene}_${s.index}`, s.blob, `sub_${s.scene}_${s.index}.png`));
+  if (p.logoPng) form.append('logo', p.logoPng, 'logo.png');
   form.append('outWidth', String(p.outputWidth));
   form.append('outHeight', String(p.outputHeight));
   if (p.aspectRatio) form.append('aspectRatio', p.aspectRatio);
@@ -126,7 +129,7 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
   }
   if (resp.status === 404 && !data.success) {
     throw new Error(
-      'The render worker has no recap endpoint. Download the latest vbs-ffmpeg-worker.js (v1.3.0) and restart it.'
+      'The render worker has no recap endpoint. Download the latest vbs-ffmpeg-worker.js (v1.4.0) and restart it.'
     );
   }
   if (!resp.ok || !data.success || !data.downloadUrl) {
