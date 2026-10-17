@@ -11,6 +11,7 @@ import { generateSRT, downloadSrtFile, splitSentenceIntoCueBlocks } from '../uti
 import { getRecapOutputSize, planSubtitlePieces } from '../utils/recapGeometry';
 import { renderSubtitleVideo } from '../utils/subtitleVideo';
 import { extractSpeechWav } from '../utils/voiceAudio';
+import { RecapPreview } from './RecapPreview';
 import { loadLogoImage, renderLogoPng, type LogoPosition } from '../utils/recapLogo';
 import { SUBTITLE_PRESETS, getSubtitleStyle } from '../utils/subtitlePresets';
 import { VOICE_OPTIONS } from '../constants';
@@ -34,6 +35,7 @@ interface Result {
   voiceoverBlob: Blob;
   voiceoverUrl: string;
   sceneAudios: Blob[];
+  sceneTimes: { start: number; dur: number }[];
   srt: string;
   cues: { start: number; end: number; text: string }[];
   duration: number;
@@ -359,7 +361,9 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       let t = 0;
       const subs: SRTSubtitle[] = [];
       const cueTimes: { start: number; end: number; text: string }[] = [];
+      const sceneTimes: { start: number; dur: number }[] = [];
       buffers.forEach((buf, i) => {
+        sceneTimes.push({ start: t, dur: buf.duration });
         ch.set(buf.getChannelData(0), Math.round(t * rate));
         const pieces = planSubtitlePieces(segments[i].text, splitSentenceIntoCueBlocks);
         pieces.forEach(pc => {
@@ -389,6 +393,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         voiceoverBlob,
         voiceoverUrl: URL.createObjectURL(voiceoverBlob),
         sceneAudios: loudScenes,
+        sceneTimes,
         srt: generateSRT(subs),
         cues: cueTimes,
         duration: total,
@@ -872,74 +877,28 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
               )}
             </div>
 
-            {/* Live preview: your real video with the chosen ratio, framing, subtitle and logo */}
+            {/* Live preview: the recap itself (voice + subtitles + matching footage) with the chosen look */}
             <div>
-              <Label>{isMm ? 'ကြိုကြည့် (သင့်ဗီဒီယိုနဲ့ တိုက်ရိုက်)' : 'Live preview (your video)'}</Label>
-              {(() => {
-                const ratio = aspect === '9:16' ? 9 / 16 : aspect === '1:1' ? 1 : aspect === '4:5' ? 4 / 5 : aspect === 'original' ? (srcRatio || 16 / 9) : 16 / 9;
-                const pr = SUBTITLE_PRESETS.find(p => p.id === subPreset) || SUBTITLE_PRESETS[0];
-                const cq = (px: number) => `${((px * 100) / 1280).toFixed(3)}cqw`;
-                const sample = (result?.cues?.[0]?.text || (isMm ? 'ဥပမာ စာတန်းထိုး' : 'Sample subtitle')).slice(0, 60);
-                const showBlur = framing === 'blurred-fit' && aspect !== 'original';
-                return (
-                  <div
-                    className="relative mx-auto overflow-hidden rounded-xl border border-white/15 bg-black"
-                    style={{ aspectRatio: String(ratio), width: `min(100%, ${Math.round(380 * ratio)}px)`, containerType: 'inline-size' }}
-                  >
-                    {showBlur && thumb && (
-                      <img src={thumb} alt="" className="absolute inset-0 w-full h-full object-cover" style={{ filter: `blur(${Math.round(blurAmount / 4)}px) brightness(0.65)`, transform: 'scale(1.2)' }} />
-                    )}
-                    {srcUrl ? (
-                      <video
-                        src={srcUrl}
-                        poster={thumb || undefined}
-                        controls
-                        muted
-                        playsInline
-                        preload="metadata"
-                        className="absolute inset-0 w-full h-full"
-                        style={{ objectFit: framing === 'cover' && aspect !== 'original' ? 'cover' : 'contain' }}
-                      />
-                    ) : thumb ? (
-                      <img src={thumb} alt="" className="absolute inset-0 w-full h-full" style={{ objectFit: framing === 'cover' ? 'cover' : 'contain' }} />
-                    ) : null}
-                    <div
-                      className="absolute left-0 right-0 text-center px-[4%] font-black leading-tight pointer-events-none"
-                      style={{
-                        top: `${subY}%`,
-                        transform: 'translateY(-50%)',
-                        fontSize: cq(pr.style.fontSize * subScale),
-                        color: pr.style.fontColor,
-                        WebkitTextStroke: pr.style.strokeWidth > 0 ? `${cq(pr.style.strokeWidth)} ${pr.style.strokeColor}` : undefined,
-                        paintOrder: 'stroke fill',
-                        background: pr.style.bgBoxEnabled ? pr.style.bgBoxColor : undefined,
-                        width: pr.style.bgBoxEnabled ? 'fit-content' : undefined,
-                        margin: pr.style.bgBoxEnabled ? '0 auto' : undefined,
-                        borderRadius: pr.style.bgBoxEnabled ? '8px' : undefined,
-                      }}
-                    >
-                      {sample}
-                    </div>
-                    {(logoImg || logoText.trim()) && (
-                      <div
-                        className="absolute flex flex-col items-center pointer-events-none"
-                        style={{
-                          opacity: logoOpacity,
-                          width: `${logoSize}%`,
-                          [logoPos[0] === 't' ? 'top' : 'bottom']: '3%',
-                          [logoPos[1] === 'l' ? 'left' : 'right']: '3%',
-                        } as React.CSSProperties}
-                      >
-                        {logoImg && <img src={logoImg.src} alt="" className="w-full h-auto" />}
-                        {logoText.trim() && (
-                          <span className="font-black text-white text-center" style={{ fontSize: `${(logoSize * 0.28).toFixed(2)}cqw`, WebkitTextStroke: '0.4cqw #000', paintOrder: 'stroke fill' }}>{logoText.trim()}</span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-              <p className="mt-2 text-[11px] text-slate-500">{isMm ? 'ဒါက သင့်ဗီဒီယိုကို ဖွင့်ကြည့်ပြီး ရလဒ်ပုံစံကို ခန့်မှန်းပြတာပါ။ အသံ၊ BGM၊ ဗီဒီယိုအပိုင်းဖြတ်တာတွေ မပါပါဘူး။' : 'A look-alike of the final frame over your source video. Voice, BGM and scene cuts are not included.'}</p>
+              <Label>{isMm ? 'ကြိုကြည့် (Recap အသံ + စာတန်းနဲ့)' : 'Preview (recap voice + subtitles)'}</Label>
+              <RecapPreview
+                srcUrl={srcUrl}
+                thumb={thumb}
+                srcRatio={srcRatio}
+                aspect={aspect}
+                framing={framing}
+                blurAmount={blurAmount}
+                subPreset={subPreset}
+                subY={subY}
+                subScale={subScale}
+                logoImg={logoImg}
+                logoText={logoText}
+                logoPos={logoPos}
+                logoSize={logoSize}
+                logoOpacity={logoOpacity}
+                recap={result ? { voiceoverUrl: result.voiceoverUrl, cues: result.cues, duration: result.duration, sceneTimes: result.sceneTimes, segments: result.segments, hasVideoTimes: result.hasVideoTimes } : null}
+                isMm={isMm}
+              />
+              <p className="mt-2 text-[11px] text-slate-500">{isMm ? 'ဒါက Recap အသံ၊ စာတန်း၊ ဗီဒီယိုအပိုင်းတွေကို ဘရောက်ဇာထဲမှာ တွဲဖွင့်ပြတာပါ။ BGM မပါပါဘူး၊ ထွက်လာမယ့် mp4 နဲ့ အတိအကျ မတူနိုင်ပါဘူး။' : 'The recap voice, subtitles and matching footage played together in your browser. No BGM, and not frame-exact with the final mp4.'}</p>
             </div>
           </div>
 
