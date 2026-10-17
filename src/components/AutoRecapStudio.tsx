@@ -103,7 +103,8 @@ const Select: React.FC<{ icon?: React.ReactNode; value: string; onChange: (v: st
     <select
       value={value}
       onChange={e => onChange(e.target.value)}
-      className={`w-full appearance-none rounded-2xl bg-white/[0.04] border border-white/10 py-3.5 pr-10 text-[13px] font-medium text-white shadow-inner shadow-black/30 transition focus:outline-none focus:border-amber-400/60 focus:bg-white/[0.07] ${icon ? 'pl-11' : 'pl-4'}`}
+      style={{ colorScheme: 'dark' }}
+      className={`w-full appearance-none [&>option]:bg-slate-900 [&>option]:text-white rounded-2xl bg-white/[0.04] border border-white/10 py-3.5 pr-10 text-[13px] font-medium text-white shadow-inner shadow-black/30 transition focus:outline-none focus:border-amber-400/60 focus:bg-white/[0.07] ${icon ? 'pl-11' : 'pl-4'}`}
     >
       {children}
     </select>
