@@ -49,6 +49,8 @@ export interface SceneRecapRenderParams {
   /** 0.02 - 1 */
   bgmVolume?: number;
   serverUrl?: string;
+  /** Signed token for the hosted render server (regular users). Omitted for the local PC worker. */
+  authToken?: string;
   onProgress?: (done: number, total: number, message: string) => void;
   onRetry?: (seconds: number, message: string) => void;
   signal?: AbortSignal;
@@ -150,7 +152,12 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
   const base = (p.serverUrl ?? getRenderServerUrl()).replace(/\/+$/, '');
   let resp: Response;
   try {
-    resp = await fetch(`${base}/api/recap/render`, { method: 'POST', body: form, signal: p.signal });
+    resp = await fetch(`${base}/api/recap/render`, {
+      method: 'POST',
+      body: form,
+      signal: p.signal,
+      headers: p.authToken ? { Authorization: `Bearer ${p.authToken}` } : undefined,
+    });
   } catch (e) {
     const where = base || 'this site';
     throw new Error(
