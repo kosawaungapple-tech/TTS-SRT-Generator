@@ -590,8 +590,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const panel = 'rounded-[28px] border border-white/10 bg-gradient-to-b from-slate-900/90 to-black/90 p-5 sm:p-6 shadow-2xl shadow-black/50';
 
   return (
-    <div className="max-w-2xl mx-auto space-y-5">
-      <div className={panel}>
+    <div className="max-w-2xl lg:max-w-[1500px] mx-auto space-y-5 lg:space-y-0 lg:grid lg:grid-cols-12 lg:gap-5 lg:items-start">
+      <div className={`${panel} lg:col-span-4 xl:col-span-3 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto`}>
         {/* Header */}
         <div className="flex items-center gap-3.5 mb-6">
           <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-300 to-orange-500 grid place-items-center shadow-lg shadow-amber-500/30">
@@ -665,7 +665,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         </div>
 
         {/* Selects */}
-        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-5">
+        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-x-4 gap-y-5">
           <div>
             <Label icon={<Globe2 size={12} />}>{isMm ? 'Recap ဘာသာစကား' : 'Language'}</Label>
             <Select icon={language === 'mm' ? '🇲🇲' : '🇬🇧'} value={language} onChange={v => setLanguage(v as 'mm' | 'en')}>
@@ -692,7 +692,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
               </Select>
             </div>
           )}
-          <div className="sm:col-span-2">
+          <div className="sm:col-span-2 lg:col-span-1">
             <div className="flex items-center justify-between mb-2">
               <Label>{isMm ? 'အသံနှုန်း' : 'Voice speed'}</Label>
               <span className="mb-2 px-2.5 py-0.5 rounded-full bg-amber-400/15 text-amber-300 text-[12px] font-mono font-bold">{speed.toFixed(2)}x</span>
@@ -814,8 +814,18 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         )}
       </div>
 
+      {!result && (
+        <div className={`${panel} hidden lg:grid lg:col-span-8 xl:col-span-9 min-h-[360px] place-items-center text-center`}>
+          <div className="max-w-sm">
+            <div className="text-5xl mb-4">🎬</div>
+            <div className="text-[15px] font-extrabold text-white mb-1">{isMm ? 'ရလဒ်ကို ဒီမှာ တွေ့ရမယ်' : 'Your recap will appear here'}</div>
+            <p className="text-[12.5px] leading-relaxed text-slate-400">{isMm ? 'ဘယ်ဘက်မှာ ဗီဒီယိုတင်ပြီး Auto Recap စတင်ပါ။ ပြီးရင် ကြိုကြည့်၊ စာတန်းပုံစံ၊ ratio၊ blur၊ logo၊ BGM အားလုံးကို ဒီနေရာမှာ ညှိပြီး ဒေါင်းလို့ရပါမယ်။' : 'Upload a video on the left and start Auto Recap. Preview, subtitle look, ratio, blur, logo and BGM are all set here, then download.'}</p>
+          </div>
+        </div>
+      )}
+
       {result && (
-        <div className={panel}>
+        <div className={`${panel} lg:col-span-8 xl:col-span-9`}>
           <div className="flex items-center gap-3 mb-5">
             <div className="w-11 h-11 rounded-2xl bg-emerald-400/15 border border-emerald-400/30 grid place-items-center">
               <CheckCircle2 size={22} className="text-emerald-400" />
@@ -826,8 +836,52 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             </div>
           </div>
 
+          <div className="xl:grid xl:grid-cols-[minmax(340px,440px)_minmax(0,1fr)] xl:gap-8 items-start">
+            {/* Left: what you hear and see */}
+            <div className="xl:sticky xl:top-4">
           <audio controls src={result.voiceoverUrl} className="w-full mb-4" />
 
+            {/* Live preview: the recap itself (voice + subtitles + matching footage) with the chosen look */}
+            <div>
+              <Label>{isMm ? 'ကြိုကြည့် (Recap အသံ + စာတန်းနဲ့)' : 'Preview (recap voice + subtitles)'}</Label>
+              <RecapPreview
+                srcUrl={srcUrl}
+                thumb={thumb}
+                srcRatio={srcRatio}
+                aspect={aspect}
+                framing={framing}
+                blurAmount={blurAmount}
+                subPreset={subPreset}
+                subY={subY}
+                subScale={subScale}
+                blurBand={blurSubOn ? { y: blurSubY / 100, h: blurSubH / 100 } : null}
+                logoImg={logoImg}
+                logoText={logoText}
+                logoPos={logoPos}
+                logoSize={logoSize}
+                logoOpacity={logoOpacity}
+                recap={result ? { voiceoverUrl: result.voiceoverUrl, cues: result.cues, duration: result.duration, sceneTimes: result.sceneTimes, segments: result.segments, hasVideoTimes: result.hasVideoTimes } : null}
+                isMm={isMm}
+              />
+              <p className="mt-2 text-[11px] text-slate-500">{isMm ? 'ဒါက Recap အသံ၊ စာတန်း၊ ဗီဒီယိုအပိုင်းတွေကို ဘရောက်ဇာထဲမှာ တွဲဖွင့်ပြတာပါ။ BGM မပါပါဘူး၊ ထွက်လာမယ့် mp4 နဲ့ အတိအကျ မတူနိုင်ပါဘူး။' : 'The recap voice, subtitles and matching footage played together in your browser. No BGM, and not frame-exact with the final mp4.'}</p>
+            </div>
+
+          <div className="mt-5 pt-5 border-t border-white/10">
+            <Label icon={<Film size={12} />}>{isMm ? 'Recap ဗီဒီယိုပါ လိုချင်ရင် (PC Worker လိုသည်)' : 'Recap video (needs PC worker)'}</Label>
+            <button type="button" onClick={buildVideo} disabled={!!rendering || !result.hasVideoTimes} className="w-full h-12 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 text-white text-[13px] font-bold flex items-center justify-center gap-2 disabled:opacity-50 transition">
+              {rendering ? <Loader2 size={16} className="animate-spin" /> : <Film size={16} />}
+              {rendering || (isMm ? 'Recap ဗီဒီယို ထုတ်မည်' : 'Render recap video')}
+            </button>
+            {videoUrl && (
+              <a href={videoUrl} download={`${baseName}_recap.mp4`} className="mt-3 flex items-center justify-center gap-2 h-12 rounded-2xl bg-emerald-400 text-black text-[13px] font-extrabold">
+                <Download size={16} />{isMm ? 'Recap ဗီဒီယို ဒေါင်းမည် (.mp4)' : 'Download recap video (.mp4)'}
+              </a>
+            )}
+          </div>
+            </div>
+
+            {/* Right: files and settings */}
+            <div className="mt-6 xl:mt-0">
           <div className="grid grid-cols-3 gap-3">
             {[
               { icon: <Mic size={18} />, name: 'Voiceover', ext: '.wav', tone: 'from-violet-500 to-purple-700 text-white', onClick: () => saveBlob(result.voiceoverBlob, `${baseName}_recap_voiceover.wav`) },
@@ -1001,31 +1055,6 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                 </div>
               )}
             </div>
-
-            {/* Live preview: the recap itself (voice + subtitles + matching footage) with the chosen look */}
-            <div>
-              <Label>{isMm ? 'ကြိုကြည့် (Recap အသံ + စာတန်းနဲ့)' : 'Preview (recap voice + subtitles)'}</Label>
-              <RecapPreview
-                srcUrl={srcUrl}
-                thumb={thumb}
-                srcRatio={srcRatio}
-                aspect={aspect}
-                framing={framing}
-                blurAmount={blurAmount}
-                subPreset={subPreset}
-                subY={subY}
-                subScale={subScale}
-                blurBand={blurSubOn ? { y: blurSubY / 100, h: blurSubH / 100 } : null}
-                logoImg={logoImg}
-                logoText={logoText}
-                logoPos={logoPos}
-                logoSize={logoSize}
-                logoOpacity={logoOpacity}
-                recap={result ? { voiceoverUrl: result.voiceoverUrl, cues: result.cues, duration: result.duration, sceneTimes: result.sceneTimes, segments: result.segments, hasVideoTimes: result.hasVideoTimes } : null}
-                isMm={isMm}
-              />
-              <p className="mt-2 text-[11px] text-slate-500">{isMm ? 'ဒါက Recap အသံ၊ စာတန်း၊ ဗီဒီယိုအပိုင်းတွေကို ဘရောက်ဇာထဲမှာ တွဲဖွင့်ပြတာပါ။ BGM မပါပါဘူး၊ ထွက်လာမယ့် mp4 နဲ့ အတိအကျ မတူနိုင်ပါဘူး။' : 'The recap voice, subtitles and matching footage played together in your browser. No BGM, and not frame-exact with the final mp4.'}</p>
-            </div>
           </div>
 
           <details className="mt-5 group rounded-2xl border border-sky-400/25 bg-sky-400/[0.05]">
@@ -1070,17 +1099,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             <textarea readOnly value={result.script} className="w-full h-64 rounded-2xl bg-black/50 border border-white/10 p-4 text-[13px] leading-[1.9] text-slate-200 focus:outline-none" />
           </div>
 
-          <div className="mt-5 pt-5 border-t border-white/10">
-            <Label icon={<Film size={12} />}>{isMm ? 'Recap ဗီဒီယိုပါ လိုချင်ရင် (PC Worker လိုသည်)' : 'Recap video (needs PC worker)'}</Label>
-            <button type="button" onClick={buildVideo} disabled={!!rendering || !result.hasVideoTimes} className="w-full h-12 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 text-white text-[13px] font-bold flex items-center justify-center gap-2 disabled:opacity-50 transition">
-              {rendering ? <Loader2 size={16} className="animate-spin" /> : <Film size={16} />}
-              {rendering || (isMm ? 'Recap ဗီဒီယို ထုတ်မည်' : 'Render recap video')}
-            </button>
-            {videoUrl && (
-              <a href={videoUrl} download={`${baseName}_recap.mp4`} className="mt-3 flex items-center justify-center gap-2 h-12 rounded-2xl bg-emerald-400 text-black text-[13px] font-extrabold">
-                <Download size={16} />{isMm ? 'Recap ဗီဒီယို ဒေါင်းမည် (.mp4)' : 'Download recap video (.mp4)'}
-              </a>
-            )}
+            </div>
           </div>
         </div>
       )}
