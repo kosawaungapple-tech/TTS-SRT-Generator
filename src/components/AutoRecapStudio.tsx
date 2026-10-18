@@ -358,22 +358,23 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             (hasVideoTimes ? (segments[i].end - segments[i].start) * coverageFactor : (totalTarget * segments[i].text.length) / totalChars) - GAP
           );
           let dur = await durOf(blob);
-          if (dur > budget * 1.08) {
-            // too long for its part of the video: tell the paragraph shorter, then voice it again
+          if (dur > budget * 1.02) {
+            // 1) cheap and instant: speed the voice up locally (pitch-preserving) up to 1.25x — no extra API calls
+            const MAX_FAST = 1.25;
             setProgress(p => ({ text: `${isMm ? '၃/၄ ဗီဒီယိုအချိန်နဲ့ ကိုက်အောင် ညှိနေသည်' : '3/4 Fitting the narration to the video'} (${i + 1}/${segments.length})`, percent: p?.percent ?? 60 }));
-            const target = Math.max(20, Math.round(segments[i].text.length * (budget / dur) * 0.97));
-            const shorter = await g.condenseNarration(segments[i].text, target, lang);
-            if (shorter) {
-              const b2 = await speakOnce(shorter, i);
-              const d2 = await durOf(b2);
-              if (d2 < dur) { segments[i] = { ...segments[i], text: shorter }; blob = b2; dur = d2; }
-            }
-            // still a little long: speed it up slightly (max 1.12x) rather than letting the voiceover run past the picture
-            if (dur > budget * 1.02) {
-              const rate = Math.min(1.12, dur / budget);
-              if (rate > 1.03) {
-                try { blob = (await renderProcessedAudio(blob, { speed: rate })).blob; } catch { /* keep as is */ }
+            if (dur / budget > MAX_FAST) {
+              // 2) only if it is far too long: shorten the paragraph and voice it again (slow: 2 more API calls)
+              const target = Math.max(20, Math.round(segments[i].text.length * ((budget * MAX_FAST) / dur) * 0.97));
+              const shorter = await g.condenseNarration(segments[i].text, target, lang);
+              if (shorter) {
+                const b2 = await speakOnce(shorter, i);
+                const d2 = await durOf(b2);
+                if (d2 < dur) { segments[i] = { ...segments[i], text: shorter }; blob = b2; dur = d2; }
               }
+            }
+            const rate = Math.min(MAX_FAST, dur / budget);
+            if (rate > 1.03) {
+              try { blob = (await renderProcessedAudio(blob, { speed: rate })).blob; } catch { /* keep as is */ }
             }
           }
         }
