@@ -9,6 +9,72 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execSync, spawn, spawnSync } = require('child_process');
+const crypto = require('crypto');
+
+// ---------------------------------------------------------------------------
+// Hosted (server) mode. Only active when RENDER_SECRET is set; with no env vars this
+// worker behaves exactly as before (local PC, open, no limits).
+//   RENDER_SECRET   shared secret used to sign render tokens (same value as on the website)
+//   PUBLIC_URL      public https address of this server, e.g. https://render.example.com
+//   ALLOWED_ORIGIN  website origin allowed by CORS (default *)
+//   MAX_JOBS (1) / MAX_QUEUE (3) / MAX_UPLOAD_MB (200) / DAILY_LIMIT (5) / OUTPUT_TTL_MIN (30)
+// ---------------------------------------------------------------------------
+const HOSTED = !!process.env.RENDER_SECRET;
+const MAX_JOBS = Math.max(1, parseInt(process.env.MAX_JOBS || '1', 10) || 1);
+const MAX_QUEUE = Math.max(0, parseInt(process.env.MAX_QUEUE || '3', 10) || 0);
+const MAX_UPLOAD = Math.max(10, parseInt(process.env.MAX_UPLOAD_MB || '200', 10) || 200) * 1024 * 1024;
+const DAILY_LIMIT = Math.max(1, parseInt(process.env.DAILY_LIMIT || '5', 10) || 5);
+const OUTPUT_TTL_MS = Math.max(5, parseInt(process.env.OUTPUT_TTL_MIN || '30', 10) || 30) * 60 * 1000;
+
+function verifyRenderToken(header) {
+  const m = /^Bearer\s+(.+)$/i.exec(header || '');
+  if (!m) return null;
+  const parts = m[1].split('.');
+  if (parts.length !== 2) return null;
+  const expected = crypto.createHmac('sha256', process.env.RENDER_SECRET).update(parts[0]).digest();
+  let given;
+  try { given = Buffer.from(parts[1], 'base64url'); } catch { return null; }
+  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return null;
+  try {
+    const body = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+    if (!body.uid || !body.exp || Date.now() / 1000 > body.exp) return null;
+    return { uid: String(body.uid) };
+  } catch { return null; }
+}
+
+let activeJobs = 0;
+const waiting = [];
+const busyUsers = new Set();
+const dailyCount = new Map();
+
+function takeDailySlot(uid) {
+  const key = uid + ':' + new Date().toISOString().slice(0, 10);
+  const n = dailyCount.get(key) || 0;
+  if (n >= DAILY_LIMIT) return false;
+  dailyCount.set(key, n + 1);
+  return true;
+}
+function acquireJobSlot() {
+  if (activeJobs < MAX_JOBS) { activeJobs++; return Promise.resolve(); }
+  if (waiting.length >= MAX_QUEUE) return Promise.reject(new Error('QUEUE_FULL'));
+  return new Promise(resolve => waiting.push(resolve));
+}
+function releaseJobSlot() {
+  const next = waiting.shift();
+  if (next) next(); else activeJobs = Math.max(0, activeJobs - 1);
+}
+if (HOSTED) {
+  setInterval(() => {
+    try {
+      const now = Date.now();
+      for (const f of fs.readdirSync(OUTPUT_DIR)) {
+        const fp = path.join(OUTPUT_DIR, f);
+        if (now - fs.statSync(fp).mtimeMs > OUTPUT_TTL_MS) fs.rmSync(fp, { force: true });
+      }
+      for (const k of dailyCount.keys()) if (!k.endsWith(new Date().toISOString().slice(0, 10))) dailyCount.delete(k);
+    } catch {}
+  }, 5 * 60 * 1000).unref();
+}
 
 const PORT = process.env.PORT || 5005;
 const UPLOADS_DIR = path.join(__dirname, 'worker_uploads');
@@ -58,10 +124,10 @@ console.log('========================================================');
 console.log('Ready to process video rendering jobs from VlogsBySaw App!');
 
 function setCorsHeaders(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', HOSTED ? (process.env.ALLOWED_ORIGIN || '*') : '*');
   res.setHeader('Access-Control-Allow-Private-Network', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
-  res.setHeader('Access-Control-Allow-Headers', '*');
+  res.setHeader('Access-Control-Allow-Headers', HOSTED ? 'Authorization, Content-Type, X-Requested-With' : '*');
   res.setHeader('Access-Control-Expose-Headers', '*');
 }
 
@@ -83,7 +149,8 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       status: 'online',
       engine: 'vbs-ffmpeg-worker',
-      version: '1.6.0',
+      hosted: HOSTED,
+      version: '1.7.0',
       ffmpegAvailable: isFfmpegInstalled,
       ffmpegVersion: ffmpegVersionStr,
       platform: os.platform(),
@@ -118,7 +185,7 @@ const server = http.createServer((req, res) => {
   }
 
   // 3. Process Video Rendering Endpoint (Multipart Form Data)
-  if (req.method === 'POST' && pathname === '/process') {
+  if (!HOSTED && req.method === 'POST' && pathname === '/process') {
     const contentType = req.headers['content-type'] || '';
     if (!contentType.includes('multipart/form-data')) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -433,15 +500,57 @@ const server = http.createServer((req, res) => {
       return;
     }
     const recapBoundary = bm[1] || bm[2];
+    let authUser = null;
+    if (HOSTED) {
+      authUser = verifyRenderToken(req.headers['authorization']);
+      if (!authUser) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Not authorised. Reload the page and try again. (ဝင်ခွင့်မရပါ — စာမျက်နှာကို ပြန်ဖွင့်ပါ)' }));
+        req.resume();
+        return;
+      }
+      if (busyUsers.has(authUser.uid)) {
+        res.writeHead(429, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'You already have a render running. Wait for it to finish. (သင့် render တစ်ခု လုပ်နေဆဲပါ)' }));
+        req.resume();
+        return;
+      }
+      if (parseInt(req.headers['content-length'] || '0', 10) > MAX_UPLOAD) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: `Video is too large for the server (max ${Math.round(MAX_UPLOAD / 1048576)} MB). Use a shorter or smaller video. (ဗီဒီယို ကြီးလွန်းသည်)` }));
+        req.resume();
+        return;
+      }
+    }
     const recapChunks = [];
-    req.on('data', chunk => recapChunks.push(chunk));
+    let recapBytes = 0;
+    let tooBig = false;
+    req.on('data', chunk => {
+      if (tooBig) return;
+      recapBytes += chunk.length;
+      if (HOSTED && recapBytes > MAX_UPLOAD) {
+        tooBig = true;
+        recapChunks.length = 0;
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: `Video is too large for the server (max ${Math.round(MAX_UPLOAD / 1048576)} MB).` }));
+        return;
+      }
+      recapChunks.push(chunk);
+    });
     req.on('end', async () => {
+      if (tooBig) return;
       const tempFiles = [];
+      let slotHeld = false;
       const fail = (code, msg) => {
         res.writeHead(code, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: false, error: msg }));
       };
       try {
+        if (HOSTED) {
+          if (!takeDailySlot(authUser.uid)) return fail(429, `Daily render limit reached (${DAILY_LIMIT} per day). Try again tomorrow. (ဒီနေ့ render ကန့်သတ်ချက် ပြည့်ပါပြီ)`);
+          busyUsers.add(authUser.uid);
+          try { await acquireJobSlot(); slotHeld = true; } catch { busyUsers.delete(authUser.uid); return fail(503, 'The render server is busy. Try again in a few minutes. (Server လုပ်ငန်းများနေပါသည် — ခဏနေမှ ပြန်ကြိုးစားပါ)'); }
+        }
         const parsed = parseMultipart(Buffer.concat(recapChunks), recapBoundary);
         const videoPart = parsed.files['video'];
         if (!videoPart || !videoPart.data || videoPart.data.length === 0) return fail(400, 'No video file provided');
@@ -478,7 +587,7 @@ const server = http.createServer((req, res) => {
         const bgmPart = parsed.files['bgm'];
         const bgmPath = bgmPart && bgmPart.data && bgmPart.data.length ? saveTemp('bgm.bin', bgmPart.data) : undefined;
         const framingRaw = parsed.fields['framing'] || 'blurred-fit';
-        const outputFilename = `recap_${stamp}.mp4`;
+        const outputFilename = HOSTED ? `recap_${crypto.randomBytes(16).toString('hex')}.mp4` : `recap_${stamp}.mp4`;
         const outputPath = path.join(OUTPUT_DIR, outputFilename);
         console.log(`[VBS Worker] Recap render: ${scenes.length} scenes, ${scenes.reduce((n, s) => n + s.subs.length, 0)} subtitle images, framing=${framingRaw}`);
         const result = await renderRecap({
@@ -503,7 +612,7 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({
           success: true,
           filename: outputFilename,
-          downloadUrl: `http://${host}/output/${outputFilename}`,
+          downloadUrl: HOSTED ? `${(process.env.PUBLIC_URL || `https://${host}`).replace(/\/+$/, '')}/output/${outputFilename}` : `http://${host}/output/${outputFilename}`,
           duration: result.duration,
           sceneDurations: result.sceneDurations
         }));
@@ -512,6 +621,8 @@ const server = http.createServer((req, res) => {
         console.error('[VBS Worker] Recap render failed:', err.message);
         fail(500, err.message);
       } finally {
+        if (HOSTED && authUser) busyUsers.delete(authUser.uid);
+        if (slotHeld) releaseJobSlot();
         for (const f of tempFiles) {
           try { fs.rmSync(f, { recursive: true, force: true }); } catch {}
         }

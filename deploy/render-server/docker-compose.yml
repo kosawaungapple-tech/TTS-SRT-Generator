@@ -1,0 +1,24 @@
+services:
+  render:
+    build: .
+    restart: always
+    environment:
+      RENDER_SECRET: ${RENDER_SECRET}
+      PUBLIC_URL: https://${DOMAIN}
+      ALLOWED_ORIGIN: https://tts-srt-generator.vercel.app
+      MAX_JOBS: 2
+      MAX_QUEUE: 10
+      MAX_UPLOAD_MB: 500
+      DAILY_LIMIT: 5
+      OUTPUT_TTL_MIN: 30
+  caddy:
+    image: caddy:2
+    restart: always
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+    environment:
+      DOMAIN: ${DOMAIN}
+volumes:
+  caddy_data:

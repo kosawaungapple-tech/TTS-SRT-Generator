@@ -537,8 +537,31 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       });
       const [w, h] = getRecapOutputSize(aspect, probe.videoWidth || 1920, probe.videoHeight || 1080);
       URL.revokeObjectURL(probeUrl);
+      // Regular users render on the hosted server (short-lived signed token); admins keep using their own local PC worker.
+      let serverUrl: string | undefined;
+      let authToken: string | undefined;
+      if (!isAdmin) {
+        let code = '';
+        try { code = localStorage.getItem('vbs_access_code') || ''; } catch { /* storage unavailable */ }
+        const tr = await fetch('/api/render/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accessCode: code }),
+        }).catch(() => null);
+        const td = tr ? await tr.json().catch(() => ({})) : {};
+        if (!tr || !tr.ok || !td.token) {
+          const reason = td?.error === 'not_configured'
+            ? (isMm ? 'Render server မတပ်ဆင်ရသေးပါ — Admin ကို ဆက်သွယ်ပါ' : 'The render server is not set up yet — contact the admin')
+            : td?.message || (isMm ? 'Render server နဲ့ မချိတ်နိုင်ပါ' : 'Could not reach the render server');
+          throw new Error(reason);
+        }
+        serverUrl = td.url;
+        authToken = td.token;
+      }
       const scenes: RecapPlanScene[] = result.segments.map((s, i) => ({ fromCue: i, toCue: i, start: s.start, end: s.end, narration: s.text }));
       const r = await renderSceneRecap({
+        serverUrl,
+        authToken,
         gemini: gemini(),
         videoFile: file,
         videoFileName: file.name,
@@ -867,7 +890,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             </div>
 
           <div className="mt-5 pt-5 border-t border-white/10">
-            <Label icon={<Film size={12} />}>{isMm ? 'Recap ဗီဒီယိုပါ လိုချင်ရင် (PC Worker လိုသည်)' : 'Recap video (needs PC worker)'}</Label>
+            <Label icon={<Film size={12} />}>{isAdmin ? (isMm ? 'Recap ဗီဒီယိုပါ လိုချင်ရင် (PC Worker လိုသည်)' : 'Recap video (needs PC worker)') : (isMm ? 'Recap ဗီဒီယိုပါ လိုချင်ရင် (Server မှာ render လုပ်မည်)' : 'Recap video (rendered on our server)')}</Label>
             <button type="button" onClick={buildVideo} disabled={!!rendering || !result.hasVideoTimes} className="w-full h-12 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 text-white text-[13px] font-bold flex items-center justify-center gap-2 disabled:opacity-50 transition">
               {rendering ? <Loader2 size={16} className="animate-spin" /> : <Film size={16} />}
               {rendering || (isMm ? 'Recap ဗီဒီယို ထုတ်မည်' : 'Render recap video')}
