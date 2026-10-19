@@ -15,6 +15,7 @@ import { getCustomPronunciation, setCustomPronunciation } from '../utils/pronunc
 import { RecapPreview } from './RecapPreview';
 import { FfmpegWorkerManager } from './FfmpegWorkerManager';
 import { RecapShare } from './RecapShare';
+import { SceneEditor } from './SceneEditor';
 import { getExtraKeys } from '../services/geminiKeyPool';
 import { loadLogoImage, renderLogoPng, type LogoPosition } from '../utils/recapLogo';
 import { SUBTITLE_PRESETS, getSubtitleStyle } from '../utils/subtitlePresets';
@@ -151,6 +152,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [aspect, setAspect] = useState('original');
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ text: string; percent: number } | null>(null);
+  const baseRef = useRef<{ segments: Segment[]; sceneAudios: Blob[] } | null>(null);
+  const baseVer = useRef(0);
   const lapRef = useRef<{ name: string; at: number }>({ name: '', at: 0 });
   /** Writes "how long the previous step took" into the activity log, so a slow step is easy to spot. */
   const lap = (next: string) => {
@@ -420,54 +423,22 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       // ---- 4. Join voiceover + build the SRT on the same timeline ---------------------------
       stageRef.current = '4 join audio'; lap('4 join audio');
       setProgress({ text: isMm ? '၄/၄ Voiceover နဲ့ SRT ပေါင်းနေသည်' : '4/4 Joining voiceover and subtitles', percent: 93 });
-      const Ctx = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
-      const ctx = new Ctx();
-      const buffers: AudioBuffer[] = [];
-      for (const b of sceneAudios) buffers.push(await ctx.decodeAudioData(await b.arrayBuffer()));
-      const rate = buffers[0].sampleRate;
-      const total = buffers.reduce((n, b) => n + b.duration, 0) + GAP * (buffers.length - 1);
-      const out = ctx.createBuffer(1, Math.ceil(total * rate), rate);
-      const ch = out.getChannelData(0);
-      let t = 0;
-      const subs: SRTSubtitle[] = [];
-      const cueTimes: { start: number; end: number; text: string }[] = [];
-      const sceneTimes: { start: number; dur: number }[] = [];
-      buffers.forEach((buf, i) => {
-        sceneTimes.push({ start: t, dur: buf.duration });
-        ch.set(buf.getChannelData(0), Math.round(t * rate));
-        const pieces = planSubtitlePieces(segments[i].text, splitSentenceIntoCueBlocks);
-        pieces.forEach(pc => {
-          cueTimes.push({ start: t + pc.from * buf.duration, end: t + pc.to * buf.duration, text: pc.text });
-          subs.push({
-            index: subs.length + 1,
-            startTime: secToSrt(t + pc.from * buf.duration),
-            endTime: secToSrt(t + pc.to * buf.duration),
-            text: pc.text,
-          });
-        });
-        t += buf.duration + GAP;
-      });
-      void ctx.close();
-      const gainDb = normalizeLoudness(ch, -16);
-      // Same gain for the per-scene clips, so the rendered recap video sounds as loud as the joined voiceover.
-      const loudScenes: Blob[] = buffers.map(b => {
-        for (let c = 0; c < b.numberOfChannels; c++) applyLoudnessGain(b.getChannelData(c), gainDb);
-        return audioBufferToWav(b);
-      });
-      const voiceoverBlob = audioBufferToWav(out);
+      const joined = await joinScenes(segments, sceneAudios, true);
 
       setResult({
         script: segments.map(s => s.text).join('\n\n'),
         segments,
         hasVideoTimes,
-        voiceoverBlob,
-        voiceoverUrl: URL.createObjectURL(voiceoverBlob),
-        sceneAudios: loudScenes,
-        sceneTimes,
-        srt: generateSRT(subs),
-        cues: cueTimes,
-        duration: total,
+        voiceoverBlob: joined.voiceoverBlob,
+        voiceoverUrl: URL.createObjectURL(joined.voiceoverBlob),
+        sceneAudios: joined.sceneAudios,
+        sceneTimes: joined.sceneTimes,
+        srt: joined.srt,
+        cues: joined.cues,
+        duration: joined.duration,
       });
+      baseRef.current = { segments: segments.map(sg => ({ ...sg })), sceneAudios: joined.sceneAudios };
+      baseVer.current++;
       draftRef.current = null;
       setProgress({ text: isMm ? 'ပြီးပါပြီ ✅' : 'Done ✅', percent: 100 });
       showToast(isMm ? '🎉 Auto Recap ပြီးပါပြီ — Voiceover နဲ့ SRT ကို ဒေါင်းလို့ရပါပြီ' : '🎉 Recap ready — download the voiceover and SRT', 'success');
@@ -501,6 +472,34 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
 
   const baseName = (file?.name || 'recap').replace(/\.[^/.]+$/, '');
   const [dlBusy, setDlBusy] = useState(false);
+  /** Applies the scene editor: skipped scenes are dropped, the rest are re-ordered / re-trimmed, and the voiceover + subtitles are rebuilt to match. */
+  const applySceneEdits = async (plan: { idx: number; on: boolean; start: number; end: number }[]) => {
+    const base = baseRef.current;
+    if (!base || !result) return;
+    const kept = plan.filter(p => p.on);
+    if (!kept.length) { showToast(isMm ? 'အနည်းဆုံး scene တစ်ခု ရှိရပါမယ်' : 'Keep at least one scene', 'error'); return; }
+    try {
+      const segments = kept.map(p => ({ start: p.start, end: p.end, text: base.segments[p.idx].text }));
+      const joined = await joinScenes(segments, kept.map(p => base.sceneAudios[p.idx]), false);
+      URL.revokeObjectURL(result.voiceoverUrl);
+      setResult({
+        ...result,
+        segments,
+        script: segments.map(sg => sg.text).join('\n\n'),
+        voiceoverBlob: joined.voiceoverBlob,
+        voiceoverUrl: URL.createObjectURL(joined.voiceoverBlob),
+        sceneAudios: joined.sceneAudios,
+        sceneTimes: joined.sceneTimes,
+        srt: joined.srt,
+        cues: joined.cues,
+        duration: joined.duration,
+      });
+      setVideoUrl(null);
+      showToast(isMm ? 'ပြင်ဆင်ချက်တွေ အသုံးပြုပြီးပါပြီ — Preview နဲ့ render မှာ ပါပါမယ်' : 'Edits applied — used by the preview and the render', 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not apply the edits', 'error');
+    }
+  };
   const downloadVideo = async () => {
     if (!videoUrl) return;
     setDlBusy(true);
@@ -941,6 +940,18 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
               <p className="mt-2 text-[11px] text-slate-500">{isMm ? 'ဒါက Recap အသံ၊ စာတန်း၊ ဗီဒီယိုအပိုင်းတွေကို ဘရောက်ဇာထဲမှာ တွဲဖွင့်ပြတာပါ။ BGM မပါပါဘူး၊ ထွက်လာမယ့် mp4 နဲ့ အတိအကျ မတူနိုင်ပါဘူး။' : 'The recap voice, subtitles and matching footage played together in your browser. No BGM, and not frame-exact with the final mp4.'}</p>
             </div>
 
+          {baseRef.current && result.hasVideoTimes && (
+            <div className="mt-5 pt-5 border-t border-white/10">
+              <SceneEditor
+                key={baseVer.current}
+                base={baseRef.current.segments}
+                srcUrl={srcUrl}
+                videoDuration={duration}
+                isMm={isMm}
+                onApply={applySceneEdits}
+              />
+            </div>
+          )}
           <div className="mt-5 pt-5 border-t border-white/10">
             <Label icon={<Film size={12} />}>{isAdmin ? (isMm ? 'Recap ဗီဒီယိုပါ လိုချင်ရင် (PC Worker လိုသည်)' : 'Recap video (needs PC worker)') : (isMm ? 'Recap ဗီဒီယိုပါ လိုချင်ရင် (Server မှာ render လုပ်မည်)' : 'Recap video (rendered on our server)')}</Label>
             {isAdmin && (
@@ -1190,6 +1201,43 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     </div>
   );
 };
+
+/** Joins the per-scene voice clips into one voiceover and builds the SRT / cue timeline for them. */
+async function joinScenes(segments: Segment[], audios: Blob[], normalize: boolean) {
+  const Ctx = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
+  const ctx = new Ctx();
+  const buffers: AudioBuffer[] = [];
+  try {
+    for (const b of audios) buffers.push(await ctx.decodeAudioData(await b.arrayBuffer()));
+  } finally { void ctx.close(); }
+  const rate = buffers[0].sampleRate;
+  const total = buffers.reduce((n, b) => n + b.duration, 0) + GAP * (buffers.length - 1);
+  const out = new AudioBuffer({ length: Math.ceil(total * rate), numberOfChannels: 1, sampleRate: rate });
+  const ch = out.getChannelData(0);
+  let t = 0;
+  const subs: SRTSubtitle[] = [];
+  const cues: { start: number; end: number; text: string }[] = [];
+  const sceneTimes: { start: number; dur: number }[] = [];
+  buffers.forEach((buf, i) => {
+    sceneTimes.push({ start: t, dur: buf.duration });
+    ch.set(buf.getChannelData(0), Math.round(t * rate));
+    planSubtitlePieces(segments[i].text, splitSentenceIntoCueBlocks).forEach(pc => {
+      cues.push({ start: t + pc.from * buf.duration, end: t + pc.to * buf.duration, text: pc.text });
+      subs.push({ index: subs.length + 1, startTime: secToSrt(t + pc.from * buf.duration), endTime: secToSrt(t + pc.to * buf.duration), text: pc.text });
+    });
+    t += buf.duration + GAP;
+  });
+  let sceneAudios = audios;
+  if (normalize) {
+    const gainDb = normalizeLoudness(ch, -16);
+    // Same gain for the per-scene clips, so the rendered recap video sounds as loud as the joined voiceover.
+    sceneAudios = buffers.map(b => {
+      for (let c = 0; c < b.numberOfChannels; c++) applyLoudnessGain(b.getChannelData(c), gainDb);
+      return audioBufferToWav(b);
+    });
+  }
+  return { voiceoverBlob: audioBufferToWav(out), sceneAudios, sceneTimes, srt: generateSRT(subs), cues, duration: total };
+}
 
 function secToSrt(sec: number): string {
   const s = Math.max(0, sec);
