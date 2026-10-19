@@ -151,6 +151,17 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [aspect, setAspect] = useState('original');
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ text: string; percent: number } | null>(null);
+  const lapRef = useRef<{ name: string; at: number }>({ name: '', at: 0 });
+  /** Writes "how long the previous step took" into the activity log, so a slow step is easy to spot. */
+  const lap = (next: string) => {
+    const now = Date.now();
+    const prev = lapRef.current;
+    if (prev.name) {
+      const sec = Math.round((now - prev.at) / 1000);
+      setProgress(p => ({ text: `⏱ ${prev.name}: ${sec}s`, percent: p?.percent ?? 0 }));
+    }
+    lapRef.current = { name: next, at: now };
+  };
   const [result, setResult] = useState<Result | null>(null);
   const [rendering, setRendering] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -233,7 +244,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     abortRef.current = ctrl;
     setBusy(true);
     setErrorInfo(null);
-    stageRef.current = 'start';
+    stageRef.current = 'start'; lapRef.current = { name: '', at: Date.now() };
     setResult(null);
     setVideoUrl(null);
     setDraft(null);
@@ -257,7 +268,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           onNavigateToSettings?.();
           return;
         }
-        stageRef.current = '1 listen (AssemblyAI)';
+        stageRef.current = '1 listen (AssemblyAI)'; lap('1 listen (AssemblyAI)');
         setProgress({ text: isMm ? '၁/၄ စကားပြောကို နားထောင်နေသည်…' : '1/4 Listening to the speech…', percent: 3 });
         // Upload only the sound (small WAV) instead of the whole video: big uploads from a phone often die with "Load failed".
         const speech = (await extractSpeechWav(file)) || file;
@@ -274,7 +285,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       }
 
       // ---- 2. Watch + write ------------------------------------------------------------------
-      stageRef.current = '2 watch/write (Gemini)';
+      stageRef.current = '2 watch/write (Gemini)'; lap('2 watch/write (Gemini)');
       const recap = await g.generateMovieRecap(
         cues.map((c, i) => `[${i + 1}] ${c.text}`).join('\n'),
         (s, msg) => setProgress(p => ({ text: `${msg} (${s}s)`, percent: p?.percent ?? 30 })),
@@ -328,7 +339,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       }
 
       // ---- 3. Voice every scene --------------------------------------------------------------
-      stageRef.current = '3 voiceover (Gemini TTS)';
+      stageRef.current = '3 voiceover (Gemini TTS)'; lap('3 voiceover (Gemini TTS)');
       const Ctx0 = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
       // On a resumed run the scenes already voiced are kept; only the rest is recorded.
       const sceneAudios: Blob[] = resume && draftRef.current?.audios ? [...draftRef.current.audios] : [];
@@ -361,6 +372,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         while (pending.length && !failure) {
           if (ctrl.signal.aborted) { failure = new Error('Cancelled'); return; }
           const i = pending.shift() as number;
+          const t0 = Date.now();
           try {
             let blob = await speakOnce(segments[i].text, i);
             if (totalTarget > 0) {
@@ -391,6 +403,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             }
             voiced[i] = blob;
             finished++;
+            console.info(`[Auto Recap] scene ${i + 1}/${segments.length} voiced in ${Math.round((Date.now() - t0) / 1000)}s`);
             setProgress(p => ({ text: `${isMm ? '၃/၄ အသံသွင်းနေသည်' : '3/4 Recording the voiceover'} (${finished}/${segments.length})`, percent: 50 + Math.round((finished / segments.length) * 40) }));
             // keep a resumable draft: the finished scenes from the start
             const prefix: Blob[] = [];
@@ -405,7 +418,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       voiced.forEach(v => { if (v) sceneAudios.push(v); });
 
       // ---- 4. Join voiceover + build the SRT on the same timeline ---------------------------
-      stageRef.current = '4 join audio';
+      stageRef.current = '4 join audio'; lap('4 join audio');
       setProgress({ text: isMm ? '၄/၄ Voiceover နဲ့ SRT ပေါင်းနေသည်' : '4/4 Joining voiceover and subtitles', percent: 93 });
       const Ctx = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
       const ctx = new Ctx();
