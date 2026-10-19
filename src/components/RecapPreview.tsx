@@ -12,6 +12,7 @@ interface Props {
   aspect: string;
   framing: 'blurred-fit' | 'cover' | 'letterbox';
   blurAmount: number;
+  adjust?: { zoom: number; panX: number; panY: number; brightness: number; contrast: number; saturation: number };
   subPreset: string;
   subY: number;
   subScale: number;
@@ -141,7 +142,13 @@ export const RecapPreview: React.FC<Props> = p => {
             preload="auto"
             controls={!recap}
             className="absolute inset-0 w-full h-full"
-            style={{ objectFit: p.framing === 'cover' && p.aspect !== 'original' ? 'cover' : 'contain' }}
+            style={{
+              objectFit: p.framing === 'cover' && p.aspect !== 'original' ? 'cover' : 'contain',
+              ...(p.adjust ? {
+                transform: `scale(${p.adjust.zoom}) translate(${(-p.adjust.panX * (p.adjust.zoom - 1) / (2 * p.adjust.zoom) * 100).toFixed(2)}%, ${(-p.adjust.panY * (p.adjust.zoom - 1) / (2 * p.adjust.zoom) * 100).toFixed(2)}%)`,
+                filter: `brightness(${1 + p.adjust.brightness}) contrast(${p.adjust.contrast}) saturate(${p.adjust.saturation})`,
+              } : {}),
+            }}
           />
         ) : p.thumb ? (
           <img src={p.thumb} alt="" className="absolute inset-0 w-full h-full" style={{ objectFit: p.framing === 'cover' ? 'cover' : 'contain' }} />
