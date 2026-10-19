@@ -564,13 +564,23 @@ ${source.slice(0, 24000)}`,
   const paragraphs: string[] = [];
   const paraEvents: number[][] = [];
   const BATCH = 3;
-  for (let i = 0; i < planned.length; i += BATCH) {
-    opts.onStage?.({ stage: 'write', done: i, total: planned.length });
-    const batch = planned.slice(i, i + BATCH);
-    const tail = paragraphs.length ? paragraphs[paragraphs.length - 1].slice(-160) : '';
-    const written = await writeBatch(llm, bible, batch, planned.length, tail, rules, language);
-    written.forEach(sec => sec.forEach(p => { paragraphs.push(p.text); paraEvents.push(p.events); }));
-  }
+  // Batches are written in parallel (3 at a time). Only the "continue from the previous ending" hint is given up;
+  // the edit pass below smooths the joins.
+  const batches: typeof planned[] = [];
+  for (let i = 0; i < planned.length; i += BATCH) batches.push(planned.slice(i, i + BATCH));
+  const results: Para[][][] = new Array(batches.length);
+  let nextBatch = 0;
+  let writtenCount = 0;
+  opts.onStage?.({ stage: 'write', done: 0, total: planned.length });
+  await Promise.all([0, 1, 2].map(async () => {
+    while (nextBatch < batches.length) {
+      const bi = nextBatch++;
+      results[bi] = await writeBatch(llm, bible, batches[bi], planned.length, '', rules, language);
+      writtenCount += batches[bi].length;
+      opts.onStage?.({ stage: 'write', done: writtenCount, total: planned.length });
+    }
+  }));
+  results.forEach(written => written.forEach(sec => sec.forEach(p => { paragraphs.push(p.text); paraEvents.push(p.events); })));
   opts.onStage?.({ stage: 'write', done: planned.length, total: planned.length });
 
   // Final guard: any paragraph still in the wrong language is rewritten (never shipped as is).
