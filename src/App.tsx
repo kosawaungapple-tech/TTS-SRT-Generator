@@ -2175,7 +2175,11 @@ export default function App() {
               </form>
             </div>
           </div>
-        ) : (
+        ) : null}
+
+        {/* Main app stays mounted (just hidden) while the admin page is open, so a running Auto Recap is not lost */}
+        {!isConfigLoading && !isPrivacyRoute && !isTermsRoute && isAccessGranted && (
+          <div className={(isAdminRoute || isAdminConfigRoute) ? 'hidden' : ''}>
           <div className="space-y-8">
             {/* Tab Navigation */}
             <div className="flex items-center gap-1 sm:gap-2 bg-white/5 backdrop-blur-xl border border-white/10 p-1 rounded-xl sm:rounded-2xl w-full sm:w-fit mx-auto shadow-2xl relative z-40 mb-8 sm:mb-10 overflow-x-auto no-scrollbar">
@@ -3362,6 +3366,7 @@ export default function App() {
                 </div>
               </div>
             </div>
+          </div>
           </div>
         )}
       </main>
