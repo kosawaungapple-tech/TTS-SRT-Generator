@@ -56,6 +56,18 @@ export class WorkerEngineService {
     return true;
   }
 
+  /** Optional password for a worker exposed through a tunnel (worker started with WORKER_KEY). */
+  public static getWorkerKey(): string {
+    try { return localStorage.getItem('VBS_FFMPEG_WORKER_KEY') || ''; } catch { return ''; }
+  }
+
+  public static setWorkerKey(key: string): void {
+    try {
+      if (key.trim()) localStorage.setItem('VBS_FFMPEG_WORKER_KEY', key.trim());
+      else localStorage.removeItem('VBS_FFMPEG_WORKER_KEY');
+    } catch { /* storage unavailable */ }
+  }
+
   public static setWorkerUrl(url: string): void {
     const clean = url.trim().replace(/\/+$/, '');
     this.cachedUrl = clean || DEFAULT_WORKER_URL;

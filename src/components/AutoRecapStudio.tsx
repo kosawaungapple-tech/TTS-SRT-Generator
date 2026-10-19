@@ -13,6 +13,7 @@ import { renderSubtitleVideo } from '../utils/subtitleVideo';
 import { extractSpeechWav } from '../utils/voiceAudio';
 import { getCustomPronunciation, setCustomPronunciation } from '../utils/pronunciation';
 import { RecapPreview } from './RecapPreview';
+import { FfmpegWorkerManager } from './FfmpegWorkerManager';
 import { loadLogoImage, renderLogoPng, type LogoPosition } from '../utils/recapLogo';
 import { SUBTITLE_PRESETS, getSubtitleStyle } from '../utils/subtitlePresets';
 import { VOICE_OPTIONS } from '../constants';
@@ -892,6 +893,14 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
 
           <div className="mt-5 pt-5 border-t border-white/10">
             <Label icon={<Film size={12} />}>{isAdmin ? (isMm ? 'Recap ဗီဒီယိုပါ လိုချင်ရင် (PC Worker လိုသည်)' : 'Recap video (needs PC worker)') : (isMm ? 'Recap ဗီဒီယိုပါ လိုချင်ရင် (Server မှာ render လုပ်မည်)' : 'Recap video (rendered on our server)')}</Label>
+            {isAdmin && (
+              <details className="mb-3 rounded-2xl border border-white/10 bg-white/5 p-3">
+                <summary className="cursor-pointer text-[12px] font-bold text-slate-300">
+                  {isMm ? 'PC Worker ချိတ်ဆက်မှု (ဖုန်းကနေ သုံးရင် Tunnel URL + password ထည့်ပါ)' : 'PC worker connection (on a phone: enter the tunnel URL + password)'}
+                </summary>
+                <div className="mt-3"><FfmpegWorkerManager /></div>
+              </details>
+            )}
             <button type="button" onClick={buildVideo} disabled={!!rendering || !result.hasVideoTimes} className="w-full h-12 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 text-white text-[13px] font-bold flex items-center justify-center gap-2 disabled:opacity-50 transition">
               {rendering ? <Loader2 size={16} className="animate-spin" /> : <Film size={16} />}
               {rendering || (isMm ? 'Recap ဗီဒီယို ထုတ်မည်' : 'Render recap video')}

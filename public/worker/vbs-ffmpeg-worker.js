@@ -20,6 +20,17 @@ const crypto = require('crypto');
 //   MAX_JOBS (1) / MAX_QUEUE (3) / MAX_UPLOAD_MB (200) / DAILY_LIMIT (5) / OUTPUT_TTL_MIN (30)
 // ---------------------------------------------------------------------------
 const HOSTED = !!process.env.RENDER_SECRET;
+// Private remote use (admin only): set WORKER_KEY=<password> before starting the worker when you expose it
+// through a tunnel (e.g. Cloudflare Tunnel). Every POST then needs `Authorization: Bearer <password>`.
+// Without WORKER_KEY nothing changes.
+const WORKER_KEY = !HOSTED ? (process.env.WORKER_KEY || '') : '';
+function workerKeyOk(header) {
+  const m = /^Bearer\s+(.+)$/i.exec(header || '');
+  if (!m) return false;
+  const a = crypto.createHash('sha256').update(m[1]).digest();
+  const b = crypto.createHash('sha256').update(WORKER_KEY).digest();
+  return crypto.timingSafeEqual(a, b);
+}
 const MAX_JOBS = Math.max(1, parseInt(process.env.MAX_JOBS || '1', 10) || 1);
 const MAX_QUEUE = Math.max(0, parseInt(process.env.MAX_QUEUE || '3', 10) || 0);
 const MAX_UPLOAD = Math.max(10, parseInt(process.env.MAX_UPLOAD_MB || '200', 10) || 200) * 1024 * 1024;
@@ -127,7 +138,7 @@ function setCorsHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', HOSTED ? (process.env.ALLOWED_ORIGIN || '*') : '*');
   res.setHeader('Access-Control-Allow-Private-Network', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
-  res.setHeader('Access-Control-Allow-Headers', HOSTED ? 'Authorization, Content-Type, X-Requested-With' : '*');
+  res.setHeader('Access-Control-Allow-Headers', (HOSTED || WORKER_KEY) ? 'Authorization, Content-Type, X-Requested-With' : '*');
   res.setHeader('Access-Control-Expose-Headers', '*');
 }
 
@@ -137,6 +148,13 @@ const server = http.createServer((req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
+    return;
+  }
+
+  if (WORKER_KEY && req.method === 'POST' && !workerKeyOk(req.headers['authorization'])) {
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: false, error: 'Worker password is missing or wrong. Enter it in Worker settings. (Worker password မှားနေသည် / မထည့်ရသေးပါ)' }));
+    req.resume();
     return;
   }
 
@@ -151,6 +169,7 @@ const server = http.createServer((req, res) => {
       engine: 'vbs-ffmpeg-worker',
       hosted: HOSTED,
       version: '1.7.0',
+      protected: !!WORKER_KEY,
       ffmpegAvailable: isFfmpegInstalled,
       ffmpegVersion: ffmpegVersionStr,
       platform: os.platform(),
@@ -587,7 +606,7 @@ const server = http.createServer((req, res) => {
         const bgmPart = parsed.files['bgm'];
         const bgmPath = bgmPart && bgmPart.data && bgmPart.data.length ? saveTemp('bgm.bin', bgmPart.data) : undefined;
         const framingRaw = parsed.fields['framing'] || 'blurred-fit';
-        const outputFilename = HOSTED ? `recap_${crypto.randomBytes(16).toString('hex')}.mp4` : `recap_${stamp}.mp4`;
+        const outputFilename = (HOSTED || WORKER_KEY) ? `recap_${crypto.randomBytes(16).toString('hex')}.mp4` : `recap_${stamp}.mp4`;
         const outputPath = path.join(OUTPUT_DIR, outputFilename);
         console.log(`[VBS Worker] Recap render: ${scenes.length} scenes, ${scenes.reduce((n, s) => n + s.subs.length, 0)} subtitle images, framing=${framingRaw}`);
         const result = await renderRecap({
