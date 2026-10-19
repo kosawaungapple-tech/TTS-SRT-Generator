@@ -20,7 +20,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const secret = process.env.RENDER_SECRET;
-  const serverUrl = (process.env.RENDER_SERVER_URL || '').replace(/\/+$/, '');
+  const base = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/${encodeURIComponent(DATABASE_ID)}/documents`;
+  // The admin can point users at his own PC (through a tunnel) from the Admin page: settings/render_server { url, requireGrant }.
+  let cfgUrl = '';
+  let requireGrant = false;
+  try {
+    const cr = await fetch(`${base}/settings/render_server?key=${WEB_API_KEY}`);
+    if (cr.ok) {
+      const cf = ((await cr.json()) as { fields?: Record<string, { booleanValue?: boolean; stringValue?: string }> }).fields || {};
+      cfgUrl = (cf.url?.stringValue || '').trim();
+      requireGrant = cf.requireGrant?.booleanValue === true;
+    }
+  } catch { /* fall back to the environment variable */ }
+  const serverUrl = (cfgUrl || process.env.RENDER_SERVER_URL || '').replace(/\/+$/, '');
   if (!secret || !serverUrl) {
     return res.status(503).json({ error: 'not_configured', message: 'The render server is not set up yet.' });
   }
@@ -31,9 +43,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const url =
-      `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/${encodeURIComponent(DATABASE_ID)}` +
-      `/documents/user_controls/${encodeURIComponent(code)}?key=${WEB_API_KEY}`;
+    const url = `${base}/user_controls/${encodeURIComponent(code)}?key=${WEB_API_KEY}`;
     const r = await fetch(url);
     if (r.status === 404) return res.status(401).json({ error: 'invalid_code', message: 'Access code not found.' });
     if (!r.ok) return res.status(502).json({ error: 'lookup_failed', message: 'Could not check the access code.' });
@@ -47,6 +57,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(403).json({ error: 'expired', message: 'This access code has expired.' });
     }
     // Admin can switch rendering off for one user by setting renderEnabled = false on their user_controls document.
+    if (requireGrant && f.renderEnabled?.booleanValue !== true) {
+      return res.status(403).json({ error: 'not_granted', message: 'The admin has not allowed server rendering for your account yet.' });
+    }
     if (f.renderEnabled?.booleanValue === false) {
       return res.status(403).json({ error: 'render_disabled', message: 'Server rendering is not enabled for this account.' });
     }

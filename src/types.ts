@@ -22,6 +22,8 @@ export interface VBSUserControl {
   admin_override_active?: boolean;
   api_key_stored?: string;
   allowAdminKey?: boolean;
+  /** Admin allows this user to render recap videos on the shared render server / admin PC. */
+  renderEnabled?: boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   createdAt?: any;
 }
