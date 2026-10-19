@@ -38,6 +38,7 @@ import {
   Laptop
 } from 'lucide-react';
 import { FfmpegWorkerManager } from './FfmpegWorkerManager';
+import { SharedWorkerSettings } from './SharedWorkerSettings';
 import { downloadSetupScript } from '../utils/engineSetupGenerator';
 import { WorkerEngineService, WorkerHealthInfo } from '../services/workerEngineService';
 import { SystemConfig, PronunciationRule, GlobalSettings, VBSUserControl, ActivityLog, Announcement, CreditSettings, CustomFont } from '../types';
@@ -1725,6 +1726,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           }
         />
       )}
+      {activeTab === 'ffmpeg-worker' && <SharedWorkerSettings />}
       {activeTab === 'users' && !configOnly && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         {/* Create Form */}
@@ -2098,6 +2100,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               title={u.allowAdminKey ? 'Revoke Admin Key Access' : 'Grant Admin Key Access'}
                             >
                               <Key size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateVbsUser(u.vbsId, { renderEnabled: !u.renderEnabled })}
+                              className={`p-1.5 rounded-lg transition-all ${u.renderEnabled ? 'text-sky-400 bg-sky-400/10' : 'text-slate-400 hover:text-sky-400 hover:bg-slate-100 dark:hover:bg-white/5'}`}
+                              title={u.renderEnabled ? 'Revoke video render access' : 'Allow video render (shared PC/server)'}
+                            >
+                              <Laptop size={14} />
                             </button>
                             <button 
                               type="button"

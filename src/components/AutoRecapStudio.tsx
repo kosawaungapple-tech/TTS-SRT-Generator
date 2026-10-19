@@ -552,7 +552,9 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         }).catch(() => null);
         const td = tr ? await tr.json().catch(() => ({})) : {};
         if (!tr || !tr.ok || !td.token) {
-          const reason = td?.error === 'not_configured'
+          const reason = td?.error === 'not_granted'
+            ? (isMm ? 'Recap ဗီဒီယို render လုပ်ခွင့်ကို Admin က မပေးရသေးပါ' : 'The admin has not allowed video rendering for your account yet')
+            : td?.error === 'not_configured'
             ? (isMm ? 'Render server မတပ်ဆင်ရသေးပါ — Admin ကို ဆက်သွယ်ပါ' : 'The render server is not set up yet — contact the admin')
             : td?.message || (isMm ? 'Render server နဲ့ မချိတ်နိုင်ပါ' : 'Could not reach the render server');
           throw new Error(reason);
