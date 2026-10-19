@@ -156,7 +156,10 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
       method: 'POST',
       body: form,
       signal: p.signal,
-      headers: p.authToken ? { Authorization: `Bearer ${p.authToken}` } : undefined,
+      headers: (() => {
+        const bearer = p.authToken || (p.serverUrl ? '' : WorkerEngineService.getWorkerKey());
+        return bearer ? { Authorization: `Bearer ${bearer}` } : undefined;
+      })(),
     });
   } catch (e) {
     const where = base || 'this site';

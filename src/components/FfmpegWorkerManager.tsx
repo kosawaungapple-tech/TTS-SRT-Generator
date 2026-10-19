@@ -25,6 +25,7 @@ export const FfmpegWorkerManager: React.FC<FfmpegWorkerManagerProps> = ({
   const { isMm } = useLanguage();
   const [health, setHealth] = useState<WorkerHealthInfo>(WorkerEngineService.getHealth());
   const [workerUrl, setWorkerUrl] = useState<string>(WorkerEngineService.getWorkerUrl());
+  const [workerKey, setWorkerKey] = useState<string>(WorkerEngineService.getWorkerKey());
   const [isChecking, setIsChecking] = useState<boolean>(false);
   const [copiedCmd, setCopiedCmd] = useState<boolean>(false);
 
@@ -51,6 +52,7 @@ export const FfmpegWorkerManager: React.FC<FfmpegWorkerManagerProps> = ({
 
   const handleSaveUrl = () => {
     WorkerEngineService.setWorkerUrl(workerUrl);
+    WorkerEngineService.setWorkerKey(workerKey);
     if (onToast) onToast(isMm ? 'Worker URL သိမ်းဆည်းပြီးပါပြီ' : 'Worker URL saved', 'success');
   };
 
@@ -377,6 +379,21 @@ export const FfmpegWorkerManager: React.FC<FfmpegWorkerManagerProps> = ({
           >
             {isMm ? 'သိမ်းဆည်းပြီး စမ်းသပ်မည်' : 'Save & Connect'}
           </button>
+        </div>
+        <div className="mt-3 space-y-1">
+          <input
+            type="password"
+            value={workerKey}
+            onChange={(e) => setWorkerKey(e.target.value)}
+            placeholder={isMm ? 'Worker password (Tunnel နဲ့ ဖုန်းကနေသုံးမှသာ ထည့်ပါ)' : 'Worker password (only for phone / tunnel use)'}
+            autoComplete="off"
+            className="w-full bg-slate-900 border border-white/10 rounded-xl px-4 py-3 text-sm text-white font-mono focus:outline-none focus:ring-2 focus:ring-amber-400/50"
+          />
+          <p className="text-[11px] text-slate-400">
+            {isMm
+              ? 'PC မှာ Worker ကို WORKER_KEY=စကားဝှက် နဲ့ စတင်ပြီး ဒီမှာ တူညီတဲ့ စကားဝှက်ကို ထည့်ပါ။ ဘာမှမထည့်ရင် အရင်အတိုင်း။'
+              : 'Start the worker on your PC with WORKER_KEY=<password> and enter the same password here. Leave empty to keep the old behaviour.'}
+          </p>
         </div>
 
         {health.lanIps && health.lanIps.length > 0 && (
