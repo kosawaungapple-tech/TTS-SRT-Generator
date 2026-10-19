@@ -170,7 +170,7 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
     );
   }
 
-  let data: { success?: boolean; error?: string; downloadUrl?: string; duration?: number; sceneDurations?: number[] } = {};
+  let data: { success?: boolean; error?: string; downloadUrl?: string; filename?: string; duration?: number; sceneDurations?: number[] } = {};
   try {
     data = await resp.json();
   } catch {
@@ -187,7 +187,8 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
 
   p.onProgress?.(totalSteps, totalSteps, 'Done');
   return {
-    downloadUrl: data.downloadUrl.startsWith('http') ? data.downloadUrl : `${base}${data.downloadUrl}`,
+    // always build the link from the address we actually reached (a tunnel would otherwise hand back an http:// link that an https page cannot open)
+    downloadUrl: data.filename ? `${base}/output/${encodeURIComponent(data.filename)}` : data.downloadUrl.startsWith('http') ? data.downloadUrl : `${base}${data.downloadUrl}`,
     duration: data.duration ?? 0,
     sceneDurations: data.sceneDurations ?? [],
   };

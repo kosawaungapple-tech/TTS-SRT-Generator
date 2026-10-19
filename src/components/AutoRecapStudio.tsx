@@ -467,6 +467,20 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   }, [file]);
 
   const baseName = (file?.name || 'recap').replace(/\.[^/.]+$/, '');
+  const [dlBusy, setDlBusy] = useState(false);
+  const downloadVideo = async () => {
+    if (!videoUrl) return;
+    setDlBusy(true);
+    try {
+      const blob = await (await fetch(videoUrl)).blob();
+      if (!blob.size) throw new Error('empty');
+      saveBlob(blob, `${baseName}_recap.mp4`);
+    } catch {
+      // the file may have expired on the worker (hosted files are deleted after a while) or the worker is unreachable
+      showToast?.(isMm ? 'ဗီဒီယို ဒေါင်းမရပါ — Worker ပိတ်သွားခြင်း သို့မဟုတ် ဖိုင် သက်တမ်းကုန်ခြင်း ဖြစ်နိုင်ပါတယ်၊ ပြန် render လုပ်ပါ' : 'Could not download — the worker may be offline or the file expired. Render again.', 'error');
+      window.open(videoUrl, '_blank', 'noopener');
+    } finally { setDlBusy(false); }
+  };
 
   const downloadAll = () => {
     if (!result) return;
@@ -909,9 +923,9 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
               {rendering || (isMm ? 'Recap ဗီဒီယို ထုတ်မည်' : 'Render recap video')}
             </button>
             {videoUrl && (
-              <a href={videoUrl} download={`${baseName}_recap.mp4`} className="mt-3 flex items-center justify-center gap-2 h-12 rounded-2xl bg-emerald-400 text-black text-[13px] font-extrabold">
-                <Download size={16} />{isMm ? 'Recap ဗီဒီယို ဒေါင်းမည် (.mp4)' : 'Download recap video (.mp4)'}
-              </a>
+              <button type="button" onClick={downloadVideo} disabled={dlBusy} className="mt-3 w-full flex items-center justify-center gap-2 h-12 rounded-2xl bg-emerald-400 text-black text-[13px] font-extrabold disabled:opacity-60">
+                {dlBusy ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}{isMm ? 'Recap ဗီဒီယို ဒေါင်းမည် (.mp4)' : 'Download recap video (.mp4)'}
+              </button>
             )}
             {videoUrl && <RecapShare videoUrl={videoUrl} fileName={`${baseName}_recap.mp4`} defaultTitle={baseName} isMm={isMm} />}
           </div>
