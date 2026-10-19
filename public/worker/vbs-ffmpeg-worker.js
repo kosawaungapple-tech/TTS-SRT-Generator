@@ -168,7 +168,7 @@ const server = http.createServer((req, res) => {
       status: 'online',
       engine: 'vbs-ffmpeg-worker',
       hosted: HOSTED,
-      version: '1.7.0',
+      version: '1.7.1',
       protected: !!WORKER_KEY,
       ffmpegAvailable: isFfmpegInstalled,
       ffmpegVersion: ffmpegVersionStr,
@@ -454,7 +454,7 @@ const server = http.createServer((req, res) => {
 
         args.push(
           '-c:v', 'libx264',
-          '-preset', 'fast',
+          '-preset', 'veryfast',
           '-crf', '18',
           '-pix_fmt', 'yuv420p',
           '-c:a', 'aac',
@@ -803,7 +803,7 @@ async function renderRecap(opts) {
       await runCmd('ffmpeg', ['-y', '-v', 'error', '-ss', start.toFixed(3), '-t', cutLen.toFixed(3), '-i', videoPath, '-an',
         '-filter_complex', sceneFilterGraph({ factor, fps, outW, outH, framing, keepSourceFrame,
           blurAmount: opts.blurAmount || 20, bgColor: opts.bgColor || '#000000', holdSeconds, blurBand: opts.blurBand }),
-        '-map', '[v]', '-t', target.toFixed(3), '-c:v', 'libx264', '-preset', 'fast', '-crf', '20', '-r', String(fps), vOut]);
+        '-map', '[v]', '-t', target.toFixed(3), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-r', String(fps), vOut]);
 
       const aOut = path.join(work, `a_${i}.wav`);
       await runCmd('ffmpeg', ['-y', '-v', 'error', '-i', audioPaths[i],
@@ -900,7 +900,7 @@ async function renderRecap(opts) {
     }
     if (parts.length) finalArgs.push('-filter_complex', parts.join(';'));
     finalArgs.push('-map', vLabel || '0:v:0', '-map', aLabel);
-    if (vLabel) finalArgs.push('-c:v', 'libx264', '-preset', 'fast', '-crf', '19', '-pix_fmt', 'yuv420p');
+    if (vLabel) finalArgs.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '19', '-pix_fmt', 'yuv420p');
     else finalArgs.push('-c:v', 'copy');
     finalArgs.push('-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-shortest', outputPath);
     await runCmd('ffmpeg', finalArgs);

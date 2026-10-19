@@ -15,6 +15,7 @@ import { getCustomPronunciation, setCustomPronunciation } from '../utils/pronunc
 import { RecapPreview } from './RecapPreview';
 import { FfmpegWorkerManager } from './FfmpegWorkerManager';
 import { RecapShare } from './RecapShare';
+import { getExtraKeys } from '../services/geminiKeyPool';
 import { loadLogoImage, renderLogoPng, type LogoPosition } from '../utils/recapLogo';
 import { SUBTITLE_PRESETS, getSubtitleStyle } from '../utils/subtitlePresets';
 import { VOICE_OPTIONS } from '../constants';
@@ -350,39 +351,58 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         if (!blob.size) throw new Error(`Empty audio for part ${i + 1}`);
         return blob;
       };
-      for (let i = sceneAudios.length; i < segments.length; i++) {
-        if (ctrl.signal.aborted) throw new Error('Cancelled');
-        setProgress({ text: `${isMm ? '၃/၄ အသံသွင်းနေသည်' : '3/4 Recording the voiceover'} (${i + 1}/${segments.length})`, percent: 50 + Math.round((i / segments.length) * 40) });
-        let blob = await speakOnce(segments[i].text, i);
-        if (totalTarget > 0) {
-          const budget = Math.max(
-            2,
-            (hasVideoTimes ? (segments[i].end - segments[i].start) * coverageFactor : (totalTarget * segments[i].text.length) / totalChars) - GAP
-          );
-          let dur = await durOf(blob);
-          if (dur > budget * 1.02) {
-            // 1) cheap and instant: speed the voice up locally (pitch-preserving) up to 1.25x — no extra API calls
-            const MAX_FAST = 1.25;
-            setProgress(p => ({ text: `${isMm ? '၃/၄ ဗီဒီယိုအချိန်နဲ့ ကိုက်အောင် ညှိနေသည်' : '3/4 Fitting the narration to the video'} (${i + 1}/${segments.length})`, percent: p?.percent ?? 60 }));
-            if (dur / budget > MAX_FAST) {
-              // 2) only if it is far too long: shorten the paragraph and voice it again (slow: 2 more API calls)
-              const target = Math.max(20, Math.round(segments[i].text.length * ((budget * MAX_FAST) / dur) * 0.97));
-              const shorter = await g.condenseNarration(segments[i].text, target, lang);
-              if (shorter) {
-                const b2 = await speakOnce(shorter, i);
-                const d2 = await durOf(b2);
-                if (d2 < dur) { segments[i] = { ...segments[i], text: shorter }; blob = b2; dur = d2; }
+      // Scenes are voiced a few at a time (the API allows it) instead of one after another.
+      const voiced: (Blob | undefined)[] = segments.map((_, i) => sceneAudios[i]);
+      let finished = voiced.filter(Boolean).length;
+      const pending = voiced.map((v, i) => (v ? -1 : i)).filter(i => i >= 0);
+      const CONC = getExtraKeys().length > 0 ? 3 : 2;
+      let failure: unknown = null;
+      const worker = async () => {
+        while (pending.length && !failure) {
+          if (ctrl.signal.aborted) { failure = new Error('Cancelled'); return; }
+          const i = pending.shift() as number;
+          try {
+            let blob = await speakOnce(segments[i].text, i);
+            if (totalTarget > 0) {
+              const budget = Math.max(
+                2,
+                (hasVideoTimes ? (segments[i].end - segments[i].start) * coverageFactor : (totalTarget * segments[i].text.length) / totalChars) - GAP
+              );
+              let dur = await durOf(blob);
+              if (dur > budget * 1.02) {
+                // 1) cheap and instant: speed the voice up locally (pitch-preserving) up to 1.25x — no extra API calls
+                const MAX_FAST = 1.25;
+                setProgress(p => ({ text: `${isMm ? '၃/၄ ဗီဒီယိုအချိန်နဲ့ ကိုက်အောင် ညှိနေသည်' : '3/4 Fitting the narration to the video'} (${i + 1}/${segments.length})`, percent: p?.percent ?? 60 }));
+                if (dur / budget > MAX_FAST) {
+                  // 2) only if it is far too long: shorten the paragraph and voice it again (slow: 2 more API calls)
+                  const target = Math.max(20, Math.round(segments[i].text.length * ((budget * MAX_FAST) / dur) * 0.97));
+                  const shorter = await g.condenseNarration(segments[i].text, target, lang);
+                  if (shorter) {
+                    const b2 = await speakOnce(shorter, i);
+                    const d2 = await durOf(b2);
+                    if (d2 < dur) { segments[i] = { ...segments[i], text: shorter }; blob = b2; dur = d2; }
+                  }
+                }
+                const rate = Math.min(MAX_FAST, dur / budget);
+                if (rate > 1.03) {
+                  try { blob = (await renderProcessedAudio(blob, { speed: rate })).blob; } catch { /* keep as is */ }
+                }
               }
             }
-            const rate = Math.min(MAX_FAST, dur / budget);
-            if (rate > 1.03) {
-              try { blob = (await renderProcessedAudio(blob, { speed: rate })).blob; } catch { /* keep as is */ }
-            }
-          }
+            voiced[i] = blob;
+            finished++;
+            setProgress(p => ({ text: `${isMm ? '၃/၄ အသံသွင်းနေသည်' : '3/4 Recording the voiceover'} (${finished}/${segments.length})`, percent: 50 + Math.round((finished / segments.length) * 40) }));
+            // keep a resumable draft: the finished scenes from the start
+            const prefix: Blob[] = [];
+            for (const v of voiced) { if (!v) break; prefix.push(v); }
+            draftRef.current = { segments, hasVideoTimes, audios: prefix };
+          } catch (e) { failure = failure || e; }
         }
-        sceneAudios.push(blob);
-        draftRef.current = { segments, hasVideoTimes, audios: [...sceneAudios] };
-      }
+      };
+      await Promise.all(Array.from({ length: CONC }, () => worker()));
+      if (failure) throw failure;
+      sceneAudios.length = 0;
+      voiced.forEach(v => { if (v) sceneAudios.push(v); });
 
       // ---- 4. Join voiceover + build the SRT on the same timeline ---------------------------
       stageRef.current = '4 join audio';
