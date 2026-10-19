@@ -180,6 +180,14 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [subScale, setSubScale] = useState(1);
   const [framing, setFraming] = useState<'blurred-fit' | 'cover' | 'letterbox'>('blurred-fit');
   const [blurAmount, setBlurAmount] = useState(40);
+  const [zoom, setZoom] = useState(1);
+  const [panX, setPanX] = useState(0);
+  const [panY, setPanY] = useState(0);
+  const [bri, setBri] = useState(0);
+  const [con, setCon] = useState(1);
+  const [sat, setSat] = useState(1);
+  const adjusted = zoom !== 1 || bri !== 0 || con !== 1 || sat !== 1;
+  const adjust = adjusted ? { zoom, panX, panY, brightness: bri, contrast: con, saturation: sat } : undefined;
   const [srcUrl, setSrcUrl] = useState<string | null>(null);
   const [srcRatio, setSrcRatio] = useState(0);
   const [pron, setPron] = useState(getCustomPronunciation());
@@ -624,6 +632,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         aspectRatio: aspect,
         framing,
         blurAmount,
+        adjust: adjust || null,
         bgColor: '#000000',
         subtitleStyle: getSubtitleStyle(subPreset, subY, subScale),
         subtitleBlur: blurSubOn ? { y: blurSubY / 100, h: blurSubH / 100 } : null,
@@ -925,6 +934,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                 aspect={aspect}
                 framing={framing}
                 blurAmount={blurAmount}
+                adjust={adjust}
                 subPreset={subPreset}
                 subY={subY}
                 subScale={subScale}
@@ -1030,6 +1040,32 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                   <input type="range" min={10} max={80} step={5} value={blurAmount} onChange={e => setBlurAmount(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
                 </div>
               )}
+              <div className="mt-4 pt-4 border-t border-white/10">
+                <Label>{isMm ? 'ပုံ ညှိရန် (Zoom / အရောင်)' : 'Picture (zoom / colour)'}</Label>
+                {([
+                  { k: 'zoom', label: isMm ? 'Zoom / Crop' : 'Zoom / crop', v: zoom, set: setZoom, min: 1, max: 1.6, step: 0.05, show: `${zoom.toFixed(2)}x` },
+                  ...(zoom > 1 ? [
+                    { k: 'px', label: isMm ? 'ဘယ် ↔ ညာ' : 'Left ↔ right', v: panX, set: setPanX, min: -1, max: 1, step: 0.1, show: panX.toFixed(1) },
+                    { k: 'py', label: isMm ? 'အပေါ် ↕ အောက်' : 'Up ↕ down', v: panY, set: setPanY, min: -1, max: 1, step: 0.1, show: panY.toFixed(1) },
+                  ] : []),
+                  { k: 'bri', label: isMm ? 'အလင်း' : 'Brightness', v: bri, set: setBri, min: -0.3, max: 0.3, step: 0.02, show: bri.toFixed(2) },
+                  { k: 'con', label: isMm ? 'Contrast' : 'Contrast', v: con, set: setCon, min: 0.7, max: 1.4, step: 0.05, show: con.toFixed(2) },
+                  { k: 'sat', label: isMm ? 'အရောင်ထိန်း' : 'Saturation', v: sat, set: setSat, min: 0.5, max: 1.8, step: 0.05, show: sat.toFixed(2) },
+                ]).map(r => (
+                  <div key={r.k} className="mb-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[11.5px] text-slate-400">{r.label}</span>
+                      <span className="text-[11px] font-mono text-amber-300">{r.show}</span>
+                    </div>
+                    <input type="range" min={r.min} max={r.max} step={r.step} value={r.v} onChange={e => r.set(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
+                  </div>
+                ))}
+                {adjusted && (
+                  <button type="button" onClick={() => { setZoom(1); setPanX(0); setPanY(0); setBri(0); setCon(1); setSat(1); }} className="text-[11px] text-slate-400 underline">
+                    {isMm ? 'မူလအတိုင်း ပြန်ထားမည်' : 'Reset picture'}
+                  </button>
+                )}
+              </div>
               {aspect === 'original' && (
                 <p className="mt-2 text-[11px] text-slate-500">{isMm ? 'အချိုး "မူရင်း" ဆိုရင် မူရင်းဗီဒီယိုက ဘောင်ပြည့်နေလို့ blur မထင်ရှားပါ — 9:16 / 1:1 / 4:5 ရွေးမှ နောက်ခံ blur မြင်ရပါမယ်။' : 'With "Original" the video already fills the frame, so there is nothing to blur — pick 9:16 / 1:1 / 4:5 to see the blurred background.'}</p>
               )}

@@ -38,6 +38,8 @@ export interface SceneRecapRenderParams {
   blurAmount: number;
   /** Bar colour for letterbox / contain. */
   bgColor: string;
+  /** Optional picture adjustments (zoom/crop with pan, brightness/contrast/saturation). */
+  adjust?: { zoom: number; panX: number; panY: number; brightness: number; contrast: number; saturation: number } | null;
   /** Subtitle look (same object the editor preview uses). null = no subtitles. */
   subtitleStyle: SubtitleStyle | null;
   /** Transparent full-frame PNG with the logo, laid over the finished video. */
@@ -100,7 +102,7 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
 
   // 3a) The worker must be new enough for the features asked for (an old one silently ignores them).
   {
-    const need = p.subtitleBlur ? '1.6.0' : p.bgm ? '1.5.0' : p.logoPng ? '1.4.0' : '';
+    const need = p.adjust ? '1.8.0' : p.subtitleBlur ? '1.6.0' : p.bgm ? '1.5.0' : p.logoPng ? '1.4.0' : '';
     if (need) {
       try {
         const hb = (p.serverUrl ?? getRenderServerUrl()).replace(/\/+$/, '');
@@ -111,7 +113,7 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
         for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) { ok = (a[i] || 0) > (b[i] || 0); break; } }
         if (!ok) {
           throw new Error(
-            `Your PC worker is v${h?.version || 'old'}, but blur / BGM / logo need v${need} or newer. ` +
+            `Your PC worker is v${h?.version || 'old'}, but blur / BGM / logo / picture adjustments need v${need} or newer. ` +
               `Download the latest vbs-ffmpeg-worker.js, close the old worker and start it again. ` +
               `သင့် PC worker က version အဟောင်းဖြစ်နေလို့ blur/BGM/logo မပါပါဘူး — vbs-ffmpeg-worker.js အသစ်ကို ပြန်ယူပြီး အဟောင်းကို ပိတ်ကာ ပြန်စပါ။`
           );
@@ -148,6 +150,14 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
   form.append('framing', p.framing);
   form.append('blurAmount', String(p.blurAmount));
   form.append('bgColor', p.bgColor);
+  if (p.adjust) {
+    form.append('adjZoom', String(p.adjust.zoom));
+    form.append('adjPanX', String(p.adjust.panX));
+    form.append('adjPanY', String(p.adjust.panY));
+    form.append('adjBrightness', String(p.adjust.brightness));
+    form.append('adjContrast', String(p.adjust.contrast));
+    form.append('adjSaturation', String(p.adjust.saturation));
+  }
 
   const base = (p.serverUrl ?? getRenderServerUrl()).replace(/\/+$/, '');
   let resp: Response;

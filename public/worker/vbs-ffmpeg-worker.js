@@ -168,7 +168,7 @@ const server = http.createServer((req, res) => {
       status: 'online',
       engine: 'vbs-ffmpeg-worker',
       hosted: HOSTED,
-      version: '1.7.1',
+      version: '1.8.0',
       protected: !!WORKER_KEY,
       ffmpegAvailable: isFfmpegInstalled,
       ffmpegVersion: ffmpegVersionStr,
@@ -623,7 +623,11 @@ const server = http.createServer((req, res) => {
           aspectRatio: parsed.fields['aspectRatio'] || undefined,
           framing: ['blurred-fit', 'letterbox', 'cover', 'contain'].includes(framingRaw) ? framingRaw : 'blurred-fit',
           blurAmount: parsed.fields['blurAmount'] ? parseInt(parsed.fields['blurAmount'], 10) : undefined,
-          bgColor: parsed.fields['bgColor'] || undefined
+          bgColor: parsed.fields['bgColor'] || undefined,
+          adjust: parsed.fields['adjZoom'] || parsed.fields['adjBrightness'] ? {
+            zoom: parsed.fields['adjZoom'], panX: parsed.fields['adjPanX'], panY: parsed.fields['adjPanY'],
+            brightness: parsed.fields['adjBrightness'], contrast: parsed.fields['adjContrast'], saturation: parsed.fields['adjSaturation']
+          } : undefined
         });
 
         const host = req.headers.host || `localhost:${PORT}`;
@@ -735,6 +739,23 @@ function ffColor(hex) {
   return hex && /^#[0-9a-fA-F]{6}$/.test(hex.trim()) ? '0x' + hex.trim().slice(1) : '0x000000';
 }
 
+function adjustChain(a) {
+  if (!a) return '';
+  const num = (v, lo, hi, d) => { const n = parseFloat(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d; };
+  const zoom = num(a.zoom, 1, 1.6, 1), px = num(a.panX, -1, 1, 0), py = num(a.panY, -1, 1, 0);
+  const bri = num(a.brightness, -0.3, 0.3, 0), con = num(a.contrast, 0.6, 1.6, 1), sat = num(a.saturation, 0, 2, 1);
+  const parts = [];
+  if (zoom > 1.001) {
+    const cw = `trunc(iw/${zoom.toFixed(4)}/2)*2`, ch = `trunc(ih/${zoom.toFixed(4)}/2)*2`;
+    parts.push(`crop=${cw}:${ch}:trunc((iw-${cw})*${(0.5 + px * 0.5).toFixed(4)}/2)*2:trunc((ih-${ch})*${(0.5 + py * 0.5).toFixed(4)}/2)*2`);
+    parts.push(`scale=trunc(iw*${zoom.toFixed(4)}/2)*2:trunc(ih*${zoom.toFixed(4)}/2)*2`);
+  }
+  if (Math.abs(bri) > 0.001 || Math.abs(con - 1) > 0.001 || Math.abs(sat - 1) > 0.001) {
+    parts.push(`eq=brightness=${bri.toFixed(3)}:contrast=${con.toFixed(3)}:saturation=${sat.toFixed(3)}`);
+  }
+  return parts.length ? parts.join(',') + ',' : '';
+}
+
 function sceneFilterGraph(o) {
   const W = o.outW, H = o.outH;
   // Optional: blur a horizontal band of the SOURCE frame (its burned-in subtitles) before anything else.
@@ -744,7 +765,9 @@ function sceneFilterGraph(o) {
     const h = Math.max(0.01, Math.min(1 - Number(y), o.blurBand.h)).toFixed(4);
     src = `[0:v]split=2[ob][oc];[oc]crop=iw:trunc(ih*${h}/2)*2:0:trunc(ih*${y}/2)*2,gblur=sigma=28:steps=3[obl];[ob][obl]overlay=0:trunc(main_h*${y}/2)*2[ofix];[ofix]`;
   }
-  const pre = `setpts=(PTS-STARTPTS)*${o.factor.toFixed(6)},fps=${o.fps}`;
+  // Optional picture adjustments on the source frame: zoom/crop (with pan) and brightness / contrast / saturation.
+  const adj = adjustChain(o.adjust);
+  const pre = `${adj}setpts=(PTS-STARTPTS)*${o.factor.toFixed(6)},fps=${o.fps}`;
   const post = [o.holdSeconds > 0.02 ? `tpad=stop_mode=clone:stop_duration=${o.holdSeconds.toFixed(3)}` : null, 'format=yuv420p']
     .filter(Boolean).join(',');
 
@@ -802,7 +825,7 @@ async function renderRecap(opts) {
       const vOut = path.join(work, `v_${i}.mp4`);
       await runCmd('ffmpeg', ['-y', '-v', 'error', '-ss', start.toFixed(3), '-t', cutLen.toFixed(3), '-i', videoPath, '-an',
         '-filter_complex', sceneFilterGraph({ factor, fps, outW, outH, framing, keepSourceFrame,
-          blurAmount: opts.blurAmount || 20, bgColor: opts.bgColor || '#000000', holdSeconds, blurBand: opts.blurBand }),
+          blurAmount: opts.blurAmount || 20, bgColor: opts.bgColor || '#000000', holdSeconds, blurBand: opts.blurBand, adjust: opts.adjust }),
         '-map', '[v]', '-t', target.toFixed(3), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-r', String(fps), vOut]);
 
       const aOut = path.join(work, `a_${i}.wav`);
