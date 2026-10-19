@@ -14,6 +14,7 @@ import { extractSpeechWav } from '../utils/voiceAudio';
 import { getCustomPronunciation, setCustomPronunciation } from '../utils/pronunciation';
 import { RecapPreview } from './RecapPreview';
 import { FfmpegWorkerManager } from './FfmpegWorkerManager';
+import { RecapShare } from './RecapShare';
 import { loadLogoImage, renderLogoPng, type LogoPosition } from '../utils/recapLogo';
 import { SUBTITLE_PRESETS, getSubtitleStyle } from '../utils/subtitlePresets';
 import { VOICE_OPTIONS } from '../constants';
@@ -912,6 +913,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                 <Download size={16} />{isMm ? 'Recap ဗီဒီယို ဒေါင်းမည် (.mp4)' : 'Download recap video (.mp4)'}
               </a>
             )}
+            {videoUrl && <RecapShare videoUrl={videoUrl} fileName={`${baseName}_recap.mp4`} defaultTitle={baseName} isMm={isMm} />}
           </div>
             </div>
 
