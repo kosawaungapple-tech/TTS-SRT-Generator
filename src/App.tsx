@@ -2209,15 +2209,6 @@ export default function App() {
                 isProcessing={isTranscriberProcessing || isVideoEditorProcessing}
               />
               <NavTab
-                id="history"
-                active={activeTab === 'history'}
-                onClick={() => handleTabSwitch('history')}
-                icon={<History size={18} />}
-                label={t('nav.history')}
-                tooltip={t('tooltips.history')}
-                isProcessing={isBatchProcessing}
-              />
-              <NavTab
                 id="tools"
                 active={activeTab === 'tools'}
                 onClick={() => handleTabSwitch('tools')}
