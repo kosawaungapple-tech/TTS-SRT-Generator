@@ -679,7 +679,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
 
   return (
     <div className="max-w-2xl lg:max-w-[1500px] mx-auto space-y-5 lg:space-y-0 lg:grid lg:grid-cols-12 lg:gap-5 lg:items-start">
-      <div className={`${panel} lg:col-span-4 xl:col-span-3 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto`}>
+      <div className={`${panel} lg:col-span-5 xl:col-span-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto`}>
         {/* Header */}
         <div className="flex items-center gap-3.5 mb-6">
           <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-300 to-orange-500 grid place-items-center shadow-lg shadow-amber-500/30">
@@ -903,7 +903,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       </div>
 
       {!result && (
-        <div className={`${panel} hidden lg:grid lg:col-span-8 xl:col-span-9 min-h-[360px] place-items-center text-center`}>
+        <div className={`${panel} hidden lg:grid lg:col-span-7 xl:col-span-8 min-h-[360px] place-items-center text-center`}>
           <div className="max-w-sm">
             <div className="text-5xl mb-4">🎬</div>
             <div className="text-[15px] font-extrabold text-white mb-1">{isMm ? 'ရလဒ်ကို ဒီမှာ တွေ့ရမယ်' : 'Your recap will appear here'}</div>
@@ -913,7 +913,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       )}
 
       {result && (
-        <div className={`${panel} lg:col-span-8 xl:col-span-9`}>
+        <div className={`${panel} lg:col-span-7 xl:col-span-8`}>
           <div className="flex items-center gap-3 mb-5">
             <div className="w-11 h-11 rounded-2xl bg-emerald-400/15 border border-emerald-400/30 grid place-items-center">
               <CheckCircle2 size={22} className="text-emerald-400" />
@@ -924,7 +924,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             </div>
           </div>
 
-          <div className="xl:grid xl:grid-cols-[minmax(340px,440px)_minmax(0,1fr)] xl:gap-8 items-start">
+          <div className="2xl:grid 2xl:grid-cols-[minmax(340px,440px)_minmax(0,1fr)] 2xl:gap-8 items-start">
             {/* Left: what you hear and see */}
             <div className="xl:sticky xl:top-4">
           <audio controls src={result.voiceoverUrl} className="w-full mb-4" />
@@ -997,7 +997,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             </div>
 
             {/* Right: files and settings */}
-            <div className="mt-6 xl:mt-0">
+            <div className="mt-6 2xl:mt-0">
           <div className="grid grid-cols-3 gap-3">
             {[
               { icon: <Mic size={18} />, name: 'Voiceover', ext: '.wav', tone: 'from-violet-500 to-purple-700 text-white', onClick: () => saveBlob(result.voiceoverBlob, `${baseName}_recap_voiceover.wav`) },
