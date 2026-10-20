@@ -12,6 +12,7 @@ interface Props {
   aspect: string;
   framing: 'blurred-fit' | 'cover' | 'letterbox';
   blurAmount: number;
+  textLayers?: { text: string; start: number; end: number; x: number; y: number; size: number; color: string; stroke: boolean; box: boolean }[];
   adjust?: { zoom: number; panX: number; panY: number; brightness: number; contrast: number; saturation: number };
   subPreset: string;
   subY: number;
@@ -189,6 +190,19 @@ export const RecapPreview: React.FC<Props> = p => {
             {sample}
           </div>
         )}
+
+        {recap && p.textLayers?.filter(l => l.text.trim() && time >= l.start && time < l.end).map((l, i) => (
+          <div
+            key={i}
+            className="absolute pointer-events-none font-black leading-tight text-center"
+            style={{
+              left: `${l.x}%`, top: `${l.y}%`, transform: 'translate(-50%, -50%)', maxWidth: '90%',
+              fontSize: `${l.size}cqw`, color: l.color,
+              WebkitTextStroke: l.stroke ? '0.3cqw #000' : undefined, paintOrder: 'stroke fill',
+              background: l.box ? 'rgba(0,0,0,0.6)' : undefined, padding: l.box ? '0.4cqw 1.2cqw' : undefined, borderRadius: l.box ? '1cqw' : undefined,
+            }}
+          >{l.text}</div>
+        ))}
 
         {(p.logoImg || p.logoText.trim()) && (
           <div
