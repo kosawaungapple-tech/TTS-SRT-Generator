@@ -1893,12 +1893,12 @@ export default function App() {
     const [isHovered, setIsHovered] = useState(false);
     
     return (
-      <div className="relative">
+      <div className="relative lg:w-full">
         <button
           onClick={onClick}
           onMouseEnter={() => setIsHovered(true)}
           onMouseLeave={() => setIsHovered(false)}
-          className={`px-3 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-1.5 sm:gap-2 relative group shrink-0 ${
+          className={`px-3 sm:px-6 py-2.5 sm:py-3 lg:w-full lg:justify-start lg:px-4 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-1.5 sm:gap-2 relative group shrink-0 ${
             active 
               ? 'bg-amber-400 text-black shadow-lg shadow-amber-400/20 scale-[1.02] z-10' 
               : isProcessing
@@ -1942,7 +1942,7 @@ export default function App() {
               initial={{ opacity: 0, y: 10, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 10, scale: 0.95 }}
-              className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl border border-white/20 bg-white/10 backdrop-blur-md dark:bg-black/20 text-[10px] font-bold text-slate-800 dark:text-white whitespace-nowrap shadow-2xl z-50 pointer-events-none"
+              className="lg:hidden absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl border border-white/20 bg-white/10 backdrop-blur-md dark:bg-black/20 text-[10px] font-bold text-slate-800 dark:text-white whitespace-nowrap shadow-2xl z-50 pointer-events-none"
             >
               <div className="flex items-center gap-2">
                 <div className={`w-1.5 h-1.5 rounded-full ${isProcessing ? 'bg-amber-400 animate-ping' : 'bg-brand-purple animate-pulse'}`} />
@@ -2180,9 +2180,9 @@ export default function App() {
         {/* Main app stays mounted (just hidden) while the admin page is open, so a running Auto Recap is not lost */}
         {!isConfigLoading && !isPrivacyRoute && !isTermsRoute && isAccessGranted && (
           <div className={(isAdminRoute || isAdminConfigRoute) ? 'hidden' : ''}>
-          <div className="space-y-8">
-            {/* Tab Navigation */}
-            <div className="flex items-center gap-1 sm:gap-2 bg-white/5 backdrop-blur-xl border border-white/10 p-1 rounded-xl sm:rounded-2xl w-full sm:w-fit mx-auto shadow-2xl relative z-40 mb-8 sm:mb-10 overflow-x-auto no-scrollbar">
+          <div className="space-y-8 lg:space-y-0 lg:flex lg:items-start lg:gap-8">
+            {/* Tab Navigation: top bar on phones/tablets, a side bar on desktop */}
+            <div className="flex items-center gap-1 sm:gap-2 bg-white/5 backdrop-blur-xl border border-white/10 p-1 rounded-xl sm:rounded-2xl w-full sm:w-fit mx-auto shadow-2xl relative z-40 mb-8 sm:mb-10 overflow-x-auto no-scrollbar lg:mx-0 lg:mb-0 lg:flex-col lg:items-stretch lg:w-56 lg:shrink-0 lg:sticky lg:top-24 lg:p-2 lg:gap-1.5 lg:overflow-visible">
               <NavTab
                 id="generate"
                 active={activeTab === 'generate'}
@@ -2228,7 +2228,7 @@ export default function App() {
             </div>
 
             {/* Persistent Tab Panels Viewport: Never unmount tabs to ensure all background processes, inputs, and state are preserved */}
-            <div className="tab-panels-viewport relative">
+            <div className="tab-panels-viewport relative lg:flex-1 lg:min-w-0">
               {/* Tab 1: Studio / Generation */}
               <div 
                 id="tab-panel-generate"
