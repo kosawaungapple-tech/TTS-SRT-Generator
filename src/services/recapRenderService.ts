@@ -38,6 +38,8 @@ export interface SceneRecapRenderParams {
   blurAmount: number;
   /** Bar colour for letterbox / contain. */
   bgColor: string;
+  /** Timed text layers (transparent full-frame PNGs shown between start and end seconds of the recap). */
+  textLayers?: { png: Blob; start: number; end: number }[];
   /** Optional picture adjustments (zoom/crop with pan, brightness/contrast/saturation). */
   adjust?: { zoom: number; panX: number; panY: number; brightness: number; contrast: number; saturation: number } | null;
   /** Subtitle look (same object the editor preview uses). null = no subtitles. */
@@ -102,7 +104,7 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
 
   // 3a) The worker must be new enough for the features asked for (an old one silently ignores them).
   {
-    const need = p.adjust ? '1.8.0' : p.subtitleBlur ? '1.6.0' : p.bgm ? '1.5.0' : p.logoPng ? '1.4.0' : '';
+    const need = p.textLayers?.length ? '1.9.0' : p.adjust ? '1.8.0' : p.subtitleBlur ? '1.6.0' : p.bgm ? '1.5.0' : p.logoPng ? '1.4.0' : '';
     if (need) {
       try {
         const hb = (p.serverUrl ?? getRenderServerUrl()).replace(/\/+$/, '');
@@ -150,6 +152,10 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
   form.append('framing', p.framing);
   form.append('blurAmount', String(p.blurAmount));
   form.append('bgColor', p.bgColor);
+  if (p.textLayers?.length) {
+    p.textLayers.forEach((t, i) => form.append(`textlayer_${i}`, t.png, `textlayer_${i}.png`));
+    form.append('textLayerTimes', JSON.stringify(p.textLayers.map(t => ({ start: t.start, end: t.end }))));
+  }
   if (p.adjust) {
     form.append('adjZoom', String(p.adjust.zoom));
     form.append('adjPanX', String(p.adjust.panX));

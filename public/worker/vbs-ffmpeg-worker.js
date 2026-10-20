@@ -168,7 +168,7 @@ const server = http.createServer((req, res) => {
       status: 'online',
       engine: 'vbs-ffmpeg-worker',
       hosted: HOSTED,
-      version: '1.8.0',
+      version: '1.9.0',
       protected: !!WORKER_KEY,
       ffmpegAvailable: isFfmpegInstalled,
       ffmpegVersion: ffmpegVersionStr,
@@ -603,6 +603,17 @@ const server = http.createServer((req, res) => {
 
         const logoPart = parsed.files['logo'];
         const logoPath = logoPart && logoPart.data && logoPart.data.length ? saveTemp('logo.png', logoPart.data) : undefined;
+        // Timed text layers drawn by the browser (transparent full-frame PNGs shown between start and end seconds).
+        const textLayers = [];
+        try {
+          const times = JSON.parse(parsed.fields['textLayerTimes'] || '[]');
+          (Array.isArray(times) ? times : []).slice(0, 12).forEach((t, i) => {
+            const f = parsed.files['textlayer_' + i];
+            if (f && f.data && f.data.length && Number.isFinite(Number(t.start)) && Number.isFinite(Number(t.end))) {
+              textLayers.push({ file: saveTemp(`textlayer_${i}.png`, f.data), start: Number(t.start), end: Number(t.end) });
+            }
+          });
+        } catch { /* ignore bad layer list */ }
         const bgmPart = parsed.files['bgm'];
         const bgmPath = bgmPart && bgmPart.data && bgmPart.data.length ? saveTemp('bgm.bin', bgmPart.data) : undefined;
         const framingRaw = parsed.fields['framing'] || 'blurred-fit';
@@ -615,6 +626,7 @@ const server = http.createServer((req, res) => {
           scenes,
           outputPath,
           logoPath,
+          textLayers,
           bgmPath,
           blurBand: parsed.fields['blurBandH'] ? { y: parseFloat(parsed.fields['blurBandY'] || '0.8'), h: parseFloat(parsed.fields['blurBandH']) } : undefined,
           bgmVolume: parsed.fields['bgmVolume'] ? parseFloat(parsed.fields['bgmVolume']) : undefined,
@@ -888,6 +900,8 @@ async function renderRecap(opts) {
     if (subsList) finalArgs.push('-f', 'concat', '-safe', '0', '-i', subsList);
     const logoIdx = opts.logoPath ? nextIn++ : -1;
     if (opts.logoPath) finalArgs.push('-loop', '1', '-framerate', String(fps), '-i', opts.logoPath);
+    const layers = Array.isArray(opts.textLayers) ? opts.textLayers : [];
+    const layerIdx = layers.map(l => { finalArgs.push('-loop', '1', '-framerate', String(fps), '-i', l.file); return nextIn++; });
     const audioIdx = nextIn++;
     finalArgs.push('-i', joinedAudio);
     const bgmIdx = opts.bgmPath ? nextIn++ : -1;
@@ -895,7 +909,7 @@ async function renderRecap(opts) {
 
     const parts = [];
     let vLabel = null;
-    if (subsList || opts.logoPath) {
+    if (subsList || opts.logoPath || layers.length) {
       let chain = '[0:v]';
       if (subsList) {
         parts.push(`[${subIdx}:v]fps=${fps},format=rgba[s]`);
@@ -907,6 +921,11 @@ async function renderRecap(opts) {
         parts.push(`${chain}[lg]overlay=0:0:format=auto:shortest=1[v2]`);
         chain = '[v2]';
       }
+      layers.forEach((l, k) => {
+        parts.push(`[${layerIdx[k]}:v]format=rgba[tl${k}]`);
+        parts.push(`${chain}[tl${k}]overlay=0:0:format=auto:shortest=1:enable='between(t,${l.start.toFixed(3)},${l.end.toFixed(3)})'[vt${k}]`);
+        chain = `[vt${k}]`;
+      });
       parts.push(`${chain}format=yuv420p[v]`);
       vLabel = '[v]';
     }

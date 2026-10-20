@@ -16,6 +16,8 @@ import { RecapPreview } from './RecapPreview';
 import { FfmpegWorkerManager } from './FfmpegWorkerManager';
 import { RecapShare } from './RecapShare';
 import { SceneEditor } from './SceneEditor';
+import { TextLayersEditor } from './TextLayersEditor';
+import { renderTextLayerPng, type TextLayer } from '../utils/recapTextLayers';
 import { getExtraKeys } from '../services/geminiKeyPool';
 import { loadLogoImage, renderLogoPng, type LogoPosition } from '../utils/recapLogo';
 import { SUBTITLE_PRESETS, getSubtitleStyle } from '../utils/subtitlePresets';
@@ -180,6 +182,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [subScale, setSubScale] = useState(1);
   const [framing, setFraming] = useState<'blurred-fit' | 'cover' | 'letterbox'>('blurred-fit');
   const [blurAmount, setBlurAmount] = useState(40);
+  const [textLayers, setTextLayers] = useState<TextLayer[]>([]);
   const [zoom, setZoom] = useState(1);
   const [panX, setPanX] = useState(0);
   const [panY, setPanY] = useState(0);
@@ -633,6 +636,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         framing,
         blurAmount,
         adjust: adjust || null,
+        textLayers: (await Promise.all(textLayers.map(async l => ({ png: await renderTextLayerPng(l, w, h), start: l.start, end: l.end }))))
+          .filter((t): t is { png: Blob; start: number; end: number } => !!t.png),
         bgColor: '#000000',
         subtitleStyle: getSubtitleStyle(subPreset, subY, subScale),
         subtitleBlur: blurSubOn ? { y: blurSubY / 100, h: blurSubH / 100 } : null,
@@ -935,6 +940,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                 framing={framing}
                 blurAmount={blurAmount}
                 adjust={adjust}
+                textLayers={textLayers}
                 subPreset={subPreset}
                 subY={subY}
                 subScale={subScale}
@@ -960,6 +966,11 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                 isMm={isMm}
                 onApply={applySceneEdits}
               />
+            </div>
+          )}
+          {result.hasVideoTimes && (
+            <div className="mt-5 pt-5 border-t border-white/10">
+              <TextLayersEditor layers={textLayers} onChange={setTextLayers} duration={result.duration} isMm={isMm} />
             </div>
           )}
           <div className="mt-5 pt-5 border-t border-white/10">
