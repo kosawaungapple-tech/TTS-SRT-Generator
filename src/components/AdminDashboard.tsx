@@ -1286,10 +1286,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     try {
       await setDoc(doc(db, 'user_controls', id), {
         isActive: !currentStatus,
+        ...(!currentStatus ? { status: 'active' } : {}),
         vbsId: id,
         updatedAt: serverTimestamp()
       }, { merge: true });
-      setVbsUsers(prev => prev.map(u => u.vbsId === id ? { ...u, isActive: !currentStatus } : u));
+      setVbsUsers(prev => prev.map(u => u.vbsId === id ? { ...u, isActive: !currentStatus, ...(!currentStatus ? { status: 'active' as const } : {}) } : u));
       setToast({
         message: 'User Status Updated!',
         type: 'success',
@@ -1943,6 +1944,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <td className="px-4 py-4">
                           <div className="flex items-center gap-2">
                             <div className={`w-2 h-2 rounded-full shrink-0 ${u.isActive ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]'}`} title={u.isActive ? t('admin.active') : t('admin.deactivated')} />
+                            {!u.isActive && u.status === 'pending' && (<span className="px-1.5 py-0.5 rounded-md bg-amber-400/20 text-amber-500 text-[9px] font-black uppercase tracking-wider">Pending</span>)}
                             {(u.role === 'admin' || u.vbsId.toLowerCase().includes('admin')) ? (
                               <span className="px-2 py-1 rounded-md bg-gradient-to-r from-purple-600/10 to-amber-500/10 text-purple-600 dark:text-purple-400 text-[9px] font-black uppercase tracking-tighter border border-purple-500/20 shadow-[0_0_15px_rgba(168,85,247,0.15)] flex items-center gap-1.5 whitespace-nowrap">
                                 <ShieldCheck size={10} className="text-amber-500" /> {t('admin.adminRole')}
