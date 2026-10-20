@@ -2158,7 +2158,7 @@ export default function App() {
               whileTap={{ scale: 0.98 }}
               type="submit"
               disabled={isVerifyingCode || !accessCodeInput.trim() || !isAuthReady}
-              className="w-full py-4 bg-amber-400 text-black rounded-[20px] font-bold text-lg hover:bg-amber-500 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-amber-400/30 metallic-btn"
+              className="w-full py-4 bg-amber-400 text-black rounded-[20px] font-bold text-lg hover:bg-amber-500 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-amber-400/30"
             >
               {isVerifyingCode || !isAuthReady ? (
                 <div className="flex items-center gap-2">
