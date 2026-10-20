@@ -24,6 +24,11 @@ export interface VBSUserControl {
   allowAdminKey?: boolean;
   /** Admin allows this user to render recap videos on the shared render server / admin PC. */
   renderEnabled?: boolean;
+  /** 'pending' = signed up by the user, waiting for the admin to activate. */
+  status?: 'pending' | 'active';
+  selfRegistered?: boolean;
+  /** SHA-256 of `${vbsId}:${password}` for self-registered users (the password itself is never stored). */
+  passwordHash?: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   createdAt?: any;
 }

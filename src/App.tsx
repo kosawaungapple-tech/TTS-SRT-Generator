@@ -865,6 +865,65 @@ export default function App() {
     }
   }, [isAccessGranted]);
 
+  const [registerMode, setRegisterMode] = useState(false);
+  const [regId, setRegId] = useState('');
+  const [regPass, setRegPass] = useState('');
+  const [regNote, setRegNote] = useState('');
+  const [regDone, setRegDone] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false);
+
+  const hashPassword = async (id: string, pass: string) => {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${id}:${pass}`));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  };
+
+  /** Self sign-up: creates a pending account; it can only be used after the admin activates it. */
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const id = regId.trim();
+    if (!/^[A-Za-z0-9_-]{3,32}$/.test(id)) {
+      setError(language === 'mm' ? 'User ID က စာလုံး/ဂဏန်း/_/- ၃ လုံးမှ ၃၂ လုံးအထိ ဖြစ်ရပါမယ်' : 'User ID must be 3-32 letters, digits, _ or -');
+      return;
+    }
+    if (regPass.length < 6) {
+      setError(language === 'mm' ? 'Password အနည်းဆုံး ၆ လုံး ရှိရပါမယ်' : 'Password must be at least 6 characters');
+      return;
+    }
+    setIsRegistering(true);
+    setError(null);
+    try {
+      const existing = await getDocFromServer(doc(db, 'user_controls', id));
+      if (existing.exists()) {
+        setError(language === 'mm' ? 'ဒီ User ID ကို သုံးပြီးသားပါ၊ တခြားတစ်ခု ရွေးပါ' : 'That User ID is already taken');
+        return;
+      }
+      await setDoc(doc(db, 'user_controls', id), {
+        vbsId: id,
+        dailyUsage: 0,
+        credits: 0,
+        lastUsedDate: new Date().toDateString(),
+        isUnlimited: false,
+        membershipStatus: 'standard',
+        isBlocked: false,
+        expiryDate: null,
+        role: 'user',
+        note: regNote.trim().slice(0, 200),
+        passwordHash: await hashPassword(id, regPass),
+        password: null,
+        isActive: false,
+        status: 'pending',
+        selfRegistered: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setRegDone(true);
+    } catch (err) {
+      setError(`${language === 'mm' ? 'စာရင်းသွင်းမရပါ' : 'Sign-up failed'}: ${(err as { message?: string }).message || ''}`);
+    } finally {
+      setIsRegistering(false);
+    }
+  };
+
   const handleLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     
@@ -919,6 +978,11 @@ export default function App() {
 
       const codeData = codeDoc.data() as VBSUserControl;
       
+      // Self-registered accounts keep only a hash of the password
+      if (codeData.passwordHash && codeData.passwordHash !== await hashPassword(code, passwordInput)) {
+        setError(t('auth.invalidPassword'));
+        return;
+      }
       // Check password if it exists in DB
       if (codeData.password && codeData.password.trim() !== '' && codeData.password !== passwordInput.trim()) {
         console.warn('Invalid password for access code');
@@ -937,6 +1001,10 @@ export default function App() {
       }
 
       // Requirement 3: If document exists AND isActive is true, grant access immediately
+      if (!codeData.isActive && codeData.status === 'pending') {
+        setError(language === 'mm' ? 'သင့်အကောင့်ကို Admin က အတည်ပြုဖို့ စောင့်နေဆဲပါ။ အတည်ပြုပြီးရင် ဝင်လို့ရပါမယ်။' : 'Your account is waiting for the admin to activate it. You can sign in once it is approved.');
+        return;
+      }
       if (!codeData.isActive) {
         console.warn('Access Code is inactive');
         setError(t('auth.deactivated'));
@@ -2110,7 +2178,7 @@ export default function App() {
             </p>
           </div>
           
-          <form onSubmit={handleLogin} className="space-y-5">
+          <form onSubmit={handleLogin} className={registerMode ? 'hidden' : 'space-y-5'}>
             <div className="relative">
               <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
               <input
@@ -2173,6 +2241,33 @@ export default function App() {
               )}
             </motion.button>
               </form>
+          {registerMode ? (
+            regDone ? (
+              <div className="space-y-4 text-center">
+                <p className="text-emerald-400 text-sm font-medium leading-relaxed">
+                  {language === 'mm' ? 'စာရင်းသွင်းပြီးပါပြီ ✅ Admin က အတည်ပြု (activate) လုပ်ပေးပြီးမှ ဝင်လို့ရပါမယ်။ အတည်ပြုပြီးရင် သင့် User ID နဲ့ Password နဲ့ ဝင်ပါ။' : 'Signed up ✅ You can sign in once the admin activates your account, using your User ID and password.'}
+                </p>
+                <button type="button" onClick={() => { setRegisterMode(false); setRegDone(false); setAccessCodeInput(regId.trim()); setRegPass(''); }} className="text-amber-400 text-sm font-bold underline">
+                  {language === 'mm' ? 'ဝင်ရောက်ရန် စာမျက်နှာသို့' : 'Back to sign in'}
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleRegister} className="space-y-4 text-left">
+                <input value={regId} onChange={e => setRegId(e.target.value)} placeholder={language === 'mm' ? 'User ID ရွေးပါ (ဥပမာ mgmg_01)' : 'Choose a User ID (e.g. mgmg_01)'} autoCapitalize="none" className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] px-5 py-4 text-base font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/30" />
+                <input type="password" value={regPass} onChange={e => setRegPass(e.target.value)} placeholder={language === 'mm' ? 'Password (၆ လုံးအထက်)' : 'Password (6+ characters)'} className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] px-5 py-4 text-base font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/30" />
+                <input value={regNote} onChange={e => setRegNote(e.target.value)} placeholder={language === 'mm' ? 'နာမည် / Telegram (Admin သိနိုင်ဖို့)' : 'Your name / Telegram (so the admin knows you)'} className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] px-5 py-4 text-base text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/30" />
+                {error && <div className="text-red-500 text-sm font-medium flex items-center justify-center gap-2"><AlertCircle size={16} /> {error}</div>}
+                <button type="submit" disabled={isRegistering || !isAuthReady} className="w-full py-4 bg-amber-400 text-black rounded-[20px] font-bold text-lg disabled:opacity-50">
+                  {isRegistering ? '…' : (language === 'mm' ? 'အကောင့်ဖွင့်မည်' : 'Create account')}
+                </button>
+              </form>
+            )
+          ) : null}
+          <button type="button" onClick={() => { setRegisterMode(m => !m); setRegDone(false); setError(null); }} className="text-sm font-bold text-amber-400 underline">
+            {registerMode
+              ? (language === 'mm' ? 'အကောင့်ရှိပြီးသား — ဝင်ရန်' : 'I already have an account')
+              : (language === 'mm' ? 'အကောင့်အသစ် ဖွင့်ရန်' : 'Create a new account')}
+          </button>
             </div>
           </div>
         ) : null}
