@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import crypto from 'crypto';
-import { adminReady, getAdmin } from '../_lib/fb';
+import { adminReady, getAdmin } from '../_lib/fb.js';
 
 /**
  * Gives a signed, short-lived render token to a valid, activated user, plus the address of the render server.

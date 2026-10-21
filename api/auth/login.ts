@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { adminReady, getAdmin, OWNER_ID } from '../_lib/fb';
-import { verifyPassword, safeEq } from '../_lib/pass';
-import { clientIp, tooMany } from '../_lib/rate';
+import { adminReady, getAdmin, OWNER_ID } from '../_lib/fb.js';
+import { verifyPassword, safeEq } from '../_lib/pass.js';
+import { clientIp, tooMany } from '../_lib/rate.js';
 
 /**
  * Server-side login. Checks the access code + password and hands back a Firebase custom token whose claims

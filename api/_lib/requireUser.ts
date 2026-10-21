@@ -1,5 +1,5 @@
 import type { VercelRequest } from '@vercel/node';
-import { adminReady, getAdmin } from './fb';
+import { adminReady, getAdmin } from './fb.js';
 
 /**
  * Who is calling? Reads the Firebase ID token the website sends in the `x-vbs-token` header.
