@@ -680,7 +680,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
 
   return (
     <div className="max-w-2xl lg:max-w-[1500px] mx-auto space-y-5 lg:space-y-0 lg:grid lg:grid-cols-12 lg:gap-5 lg:items-start">
-      <div className={`${panel} lg:col-span-5 xl:col-span-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto`}>
+      <div className={`${panel} lg:col-span-5 xl:col-span-4`}>
         {/* Header */}
         <div className="flex items-center gap-3.5 mb-6">
           <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-300 to-orange-500 grid place-items-center shadow-lg shadow-amber-500/30">
@@ -904,7 +904,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       </div>
 
       {!result && (
-        <div className={`${panel} hidden lg:grid lg:col-span-7 xl:col-span-8 min-h-[360px] place-items-center text-center`}>
+        <div className={`${panel} hidden lg:grid lg:col-span-7 xl:col-span-8 lg:self-start lg:sticky lg:top-4 min-h-[360px] place-items-center text-center`}>
           <div className="max-w-sm">
             <div className="text-5xl mb-4">🎬</div>
             <div className="text-[15px] font-extrabold text-white mb-1">{isMm ? 'ရလဒ်ကို ဒီမှာ တွေ့ရမယ်' : 'Your recap will appear here'}</div>
