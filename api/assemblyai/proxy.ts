@@ -1,5 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
+import { requireUser } from '../_lib/requireUser';
+
 export const config = {
   api: {
     bodyParser: {
@@ -15,7 +17,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization, x-assemblyai-key'
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization, x-assemblyai-key, x-vbs-token'
   );
 
   if (req.method === 'OPTIONS') {
@@ -25,6 +27,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const apiKey = (req.headers['x-assemblyai-key'] as string) || 
                  (req.headers['authorization'] as string)?.replace(/^Bearer\s+/i, '') ||
                  process.env.ASSEMBLYAI_API_KEY;
+
+  const authHeaderValue = String(req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
+  const ownKey = !!(req.headers['x-assemblyai-key'] as string) || (!!authHeaderValue && authHeaderValue.split('.').length !== 3);
+  if (!ownKey && !(await requireUser(req))) {
+    return res.status(401).json({ error: 'Please sign in again.' });
+  }
 
   if (!apiKey || !apiKey.trim()) {
     return res.status(400).json({ error: 'AssemblyAI API Key is missing. Please provide key in header or environment.' });

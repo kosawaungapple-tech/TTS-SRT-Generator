@@ -1,0 +1,82 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    // Sessions - tracks Access Code session for users & admins
+    match /sessions/{userId} {
+      allow read: if true;
+      allow write: if isValidId(userId);
+    }
+
+    // User controls - authorized user accounts
+    match /user_controls/{vbsId} {
+      allow read: if true;
+      allow write: if isValidId(vbsId);
+    }
+
+    // Legacy users collection
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if isValidId(userId);
+    }
+
+    // API Key stats
+    match /adminKeyStats/{keyId} {
+      allow read: if true;
+      allow write: if isValidId(keyId);
+    }
+
+    // System and credit settings
+    match /settings/{doc} {
+      allow read: if true;
+      allow write: if isValidId(doc);
+    }
+
+    // Activity logs
+    match /activity_logs/{logId} {
+      allow read: if true;
+      allow write: if isValidId(logId);
+    }
+
+    // Global pronunciation rules
+    match /globalRules/{ruleId} {
+      allow read: if true;
+      allow write: if isValidId(ruleId);
+    }
+
+    // Voiceover history
+    match /history/{id} {
+      allow read: if true;
+      allow write: if isValidId(id);
+    }
+
+    // Admin channels
+    match /admin_channels/{channelId} {
+      allow read: if true;
+      allow write: if isValidId(channelId);
+    }
+
+    // System config
+    match /system_config/{doc} {
+      allow read: if true;
+      allow write: if isValidId(doc);
+    }
+
+    // Authorized user accounts (Access Codes)
+    match /vlogs_users/{accessCode} {
+      allow read: if true;
+      allow write: if isValidId(accessCode);
+    }
+
+    // Connection test doc
+    match /test/{doc} {
+      allow read: if true;
+      allow write: if isValidId(doc);
+    }
+  }
+}
+

@@ -28,6 +28,7 @@ import { useLanguage } from './contexts/LanguageContext';
 import { formatDate } from './utils/dateUtils';
 import { formatMyanmarDuration, renderProcessedAudio, pcmToWav } from './utils/audioUtils';
 import { generateOptimizedSubtitles, generateSRT, createSrtBlob, downloadSrtFile } from './utils/subtitleUtils';
+import { getServerAuthStatus, serverLogin, serverRegister, hasServerSession, loginErrorText } from './services/serverAuth';
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId, getDocs } from './firebase';
 
 type Tab = 'generate' | 'translator' | 'transcriber' | 'video-editor' | 'thumbnail' | 'history' | 'tools' | 'admin' | 'vbs-admin';
@@ -660,6 +661,27 @@ export default function App() {
     }
   }, [isAuthReady, isSessionSynced]);
 
+  // With server-side login on, a stored "granted" flag alone is not a session: it needs the Firebase token from the server.
+  useEffect(() => {
+    if (!isAuthReady) return;
+    let cancelled = false;
+    (async () => {
+      const st = await getServerAuthStatus();
+      if (!st.configured || cancelled) return;
+      const flagged = isAccessGranted || localStorage.getItem('vbs_access_granted') === 'true';
+      if (flagged && !(await hasServerSession()) && !cancelled) {
+        localStorage.removeItem('vbs_access_granted');
+        localStorage.removeItem('vbs_access_code');
+        localStorage.removeItem('vbs_admin_auth');
+        setIsAccessGranted(false);
+        setAccessCode(null);
+        setProfile(null);
+        setIsStepTwo(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isAuthReady, isAccessGranted]);
+
   // Initialize API Channel Sync
   useEffect(() => {
     if (isAuthReady && auth.currentUser) {
@@ -859,9 +881,9 @@ export default function App() {
       }
     };
     
-    // Only seed if we are not authenticated
+    // Only seed if we are not authenticated, and never once the server-side login is in charge
     if (!isAccessGranted) {
-      seedDefaultAdmin();
+      getServerAuthStatus().then(st => { if (!st.configured) seedDefaultAdmin(); });
     }
   }, [isAccessGranted]);
 
@@ -892,6 +914,22 @@ export default function App() {
     setIsRegistering(true);
     setError(null);
     try {
+      if ((await getServerAuthStatus()).configured) {
+        const r = await serverRegister(id, regPass, regNote);
+        if (!r.ok) {
+          const mm = language === 'mm';
+          const m: Record<string, string> = {
+            id_taken: mm ? 'ဒီ User ID ကို သုံးပြီးသားပါ၊ တခြားတစ်ခု ရွေးပါ' : 'That User ID is already taken',
+            invalid_id: mm ? 'ဒီ User ID ကို သုံးလို့မရပါ' : 'That User ID cannot be used',
+            weak_password: mm ? 'Password အနည်းဆုံး ၆ လုံး ရှိရပါမယ်' : 'Password must be at least 6 characters',
+            too_many_attempts: mm ? 'အကြိမ်များလွန်းပါတယ်၊ ခဏနေမှ ထပ်ကြိုးစားပါ' : 'Too many attempts, try again later',
+          };
+          setError(m[r.error || ''] || (mm ? 'စာရင်းသွင်းမရပါ' : 'Sign-up failed'));
+          return;
+        }
+        setRegDone(true);
+        return;
+      }
       const existing = await getDocFromServer(doc(db, 'user_controls', id));
       if (existing.exists()) {
         setError(language === 'mm' ? 'ဒီ User ID ကို သုံးပြီးသားပါ၊ တခြားတစ်ခု ရွေးပါ' : 'That User ID is already taken');
@@ -933,7 +971,51 @@ export default function App() {
       return;
     }
 
-    // [COMMANDER BYPASS - URGENT]
+    // Server-side login (when the Firebase service account is set up on Vercel): every account, the admin included,
+    // is checked with its password on the server. The old direct flow below is only the fallback.
+    const serverStatus = await getServerAuthStatus();
+    if (serverStatus.configured) {
+      if (!isStepTwo) {
+        setIsStepTwo(true);
+        setError(null);
+        return;
+      }
+      setIsVerifyingCode(true);
+      setError(null);
+      try {
+        const r = await serverLogin(code, passwordInput);
+        if (!r.ok) {
+          setError(loginErrorText((r as { error: string }).error, language === 'mm'));
+          return;
+        }
+        const data = (r as { profile: VBSUserControl }).profile;
+        setIsAccessGranted(true);
+        setAccessCode(code);
+        setVbsId(code);
+        localStorage.setItem('VBS_USER_ID', code);
+        localStorage.setItem('vbs_access_granted', 'true');
+        localStorage.setItem('vbs_access_code', code);
+        setProfile(data);
+        if (data.api_key_stored && isPlausibleApiKey(data.api_key_stored)) {
+          const trimmedKey = data.api_key_stored.trim();
+          localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
+          setLocalApiKey(trimmedKey);
+          apiChannelManager.setUserChannel(trimmedKey);
+        } else {
+          localStorage.removeItem('VLOGS_BY_SAW_API_KEY');
+          setLocalApiKey(null);
+          apiChannelManager.clearUserChannel();
+        }
+        logActivity(code, 'login', 'User logged into the platform');
+        setToast({ message: data.role === 'admin' ? 'Welcome back, Commander!' : 'Welcome back!', type: 'success' });
+        setTimeout(() => setToast(null), 3000);
+      } finally {
+        setIsVerifyingCode(false);
+      }
+      return;
+    }
+
+    // [COMMANDER BYPASS - legacy mode only, used until the server-side login is set up]
     if (code === 'saw_vlogs_2026') {
       setIsAccessGranted(true);
       setAccessCode(code);

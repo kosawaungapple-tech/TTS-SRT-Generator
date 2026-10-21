@@ -2,81 +2,75 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128;
+    // ---- Who is calling? ------------------------------------------------------------------------
+    // Users sign in through the server (/api/auth/login), which issues a Firebase token carrying
+    //   vbsId  = the access code of the account
+    //   admin  = true only for admin accounts
+    // Anonymous visitors have neither, so they can read and write nothing below.
+    function signedIn() { return request.auth != null; }
+    function isMember() { return signedIn() && 'vbsId' in request.auth.token; }
+    function me() { return request.auth.token.vbsId; }
+    function isAdmin() { return isMember() && request.auth.token.get('admin', false) == true; }
+    function isOwner(id) { return isMember() && me() == id; }
+    function onlyChanges(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
+
+    // ---- Accounts -------------------------------------------------------------------------------
+    // Contains password (hash) and per-user keys: only the owner and the admin can read it.
+    match /user_controls/{id} {
+      allow read: if isAdmin() || isOwner(id);
+      allow create: if isAdmin();
+      // A user may only touch their own usage counters, and can only ever lower their credits, never raise them.
+      allow update: if isAdmin() || (
+        isOwner(id)
+        && onlyChanges(['dailyUsage', 'lastUsedDate', 'lastLoginAt', 'dailyTasks', 'credits', 'updatedAt'])
+        && request.resource.data.get('credits', 0) <= resource.data.get('credits', 0)
+      );
+      allow delete: if isAdmin() || isOwner(id);   // account deletion from inside the app
     }
 
-    // Sessions - tracks Access Code session for users & admins
-    match /sessions/{userId} {
-      allow read: if true;
-      allow write: if isValidId(userId);
+    match /sessions/{id} {
+      allow read, write: if isAdmin() || (signedIn() && (request.auth.uid == id || isOwner(id)));
     }
 
-    // User controls - authorized user accounts
-    match /user_controls/{vbsId} {
-      allow read: if true;
-      allow write: if isValidId(vbsId);
+    match /users/{id} {                      // legacy collection
+      allow read, write: if isAdmin();
+      allow delete: if isOwner(id);
     }
 
-    // Legacy users collection
-    match /users/{userId} {
-      allow read: if true;
-      allow write: if isValidId(userId);
+    // ---- Admin-only data ------------------------------------------------------------------------
+    match /admin_channels/{id} { allow read, write: if isAdmin(); }      // the admin's Gemini API keys
+    match /system_config/{doc} { allow read, write: if isAdmin(); }
+    match /vlogs_users/{code} { allow read, write: if isAdmin(); }
+    match /adminKeyStats/{id} {
+      allow read: if isAdmin();
+      allow create, update: if isMember();   // usage counters
     }
 
-    // API Key stats
-    match /adminKeyStats/{keyId} {
-      allow read: if true;
-      allow write: if isValidId(keyId);
-    }
-
-    // System and credit settings
+    // ---- Shared settings: members read, only the admin writes -----------------------------------
     match /settings/{doc} {
-      allow read: if true;
-      allow write: if isValidId(doc);
+      allow read: if isMember();
+      allow write: if isAdmin();
+      allow update: if isMember() && doc == 'global' && onlyChanges(['total_generations']);
+    }
+    match /globalRules/{id} {
+      allow read: if isMember();
+      allow write: if isAdmin();
     }
 
-    // Activity logs
-    match /activity_logs/{logId} {
-      allow read: if true;
-      allow write: if isValidId(logId);
-    }
-
-    // Global pronunciation rules
-    match /globalRules/{ruleId} {
-      allow read: if true;
-      allow write: if isValidId(ruleId);
-    }
-
-    // Voiceover history
+    // ---- A user's own records -------------------------------------------------------------------
     match /history/{id} {
-      allow read: if true;
-      allow write: if isValidId(id);
+      allow read: if isAdmin() || (isMember() && resource.data.userId == me());
+      allow create: if isMember() && request.resource.data.userId == me();
+      allow update, delete: if isAdmin() || (isMember() && resource.data.userId == me());
+    }
+    match /activity_logs/{id} {
+      allow read: if isAdmin();
+      allow create: if isMember() && request.resource.data.vbsId == me();
     }
 
-    // Admin channels
-    match /admin_channels/{channelId} {
-      allow read: if true;
-      allow write: if isValidId(channelId);
-    }
-
-    // System config
-    match /system_config/{doc} {
-      allow read: if true;
-      allow write: if isValidId(doc);
-    }
-
-    // Authorized user accounts (Access Codes)
-    match /vlogs_users/{accessCode} {
-      allow read: if true;
-      allow write: if isValidId(accessCode);
-    }
-
-    // Connection test doc
-    match /test/{doc} {
-      allow read: if true;
-      allow write: if isValidId(doc);
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
-

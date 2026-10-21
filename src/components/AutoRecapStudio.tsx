@@ -19,6 +19,7 @@ import { SceneEditor } from './SceneEditor';
 import { TextLayersEditor } from './TextLayersEditor';
 import { renderTextLayerPng, type TextLayer } from '../utils/recapTextLayers';
 import { getExtraKeys } from '../services/geminiKeyPool';
+import { authHeader } from '../services/serverAuth';
 import { loadLogoImage, renderLogoPng, type LogoPosition } from '../utils/recapLogo';
 import { SUBTITLE_PRESETS, getSubtitleStyle } from '../utils/subtitlePresets';
 import { VOICE_OPTIONS } from '../constants';
@@ -605,7 +606,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         try { code = localStorage.getItem('vbs_access_code') || ''; } catch { /* storage unavailable */ }
         const tr = await fetch('/api/render/token', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
           body: JSON.stringify({ accessCode: code }),
         }).catch(() => null);
         const td = tr ? await tr.json().catch(() => ({})) : {};

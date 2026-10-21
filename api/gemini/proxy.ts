@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { requireUser } from '../_lib/requireUser';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Add CORS headers for production
@@ -7,7 +8,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization'
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization, x-vbs-token'
   );
 
   if (req.method === 'OPTIONS') {
@@ -43,6 +44,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       !providedKey.toLowerCase().includes('placeholder') && 
       !providedKey.includes('...');
 
+    // The shared server key is only for signed-in, activated users. A caller's own key costs us nothing.
+    if (!isPlausiblePersonalKey && !(await requireUser(req))) {
+      return res.status(401).json({ error: 'Please sign in again.' });
+    }
     const apiKey = isPlausiblePersonalKey ? providedKey.trim() : process.env.GEMINI_API_KEY;
 
     if (!apiKey) {

@@ -38,6 +38,7 @@ import {
   Laptop
 } from 'lucide-react';
 import { FfmpegWorkerManager } from './FfmpegWorkerManager';
+import { getServerAuthStatus, serverLogin, loginErrorText } from '../services/serverAuth';
 import { SharedWorkerSettings } from './SharedWorkerSettings';
 import { downloadSetupScript } from '../utils/engineSetupGenerator';
 import { WorkerEngineService, WorkerHealthInfo } from '../services/workerEngineService';
@@ -243,6 +244,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Admin Auth Protection
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [adminIdInput, setAdminIdInput] = useState('');
+  const [adminPwInput, setAdminPwInput] = useState('');
+  const [serverLoginOn, setServerLoginOn] = useState(false);
+  useEffect(() => { getServerAuthStatus().then(st => setServerLoginOn(st.configured)); }, []);
   const [authError, setAuthError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'users' | 'system' | 'rules' | 'announcements' | 'fonts' | 'ffmpeg-worker'>('users');
 
@@ -432,7 +436,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (savedAdminAuth === 'true') {
       const adminCode = localStorage.getItem('vbs_access_code') || '';
       
-      if (isAdmin(adminCode)) {
+      if (serverLoginOn) {
+        // Server-side login: only a real admin token counts, not a flag in localStorage.
+        const u = auth.currentUser;
+        u?.getIdTokenResult().then(t => {
+          if (t.claims.admin === true) setIsAuthenticated(true);
+          else localStorage.removeItem('vbs_admin_auth');
+        }).catch(() => localStorage.removeItem('vbs_admin_auth'));
+      } else if (isAdmin(adminCode)) {
         setIsAuthenticated(true);
       } else {
         localStorage.removeItem('vbs_admin_auth');
@@ -457,7 +468,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         if (onAdminLogin) onAdminLogin(adminCode);
       }
     }
-  }, [isAuthReady]);
+  }, [isAuthReady, serverLoginOn]);
 
   const handleSyncSessionNow = async () => {
     const adminCode = localStorage.getItem('vbs_access_code') || 'saw_vlogs_2026';
@@ -488,8 +499,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     
     try {
       const code = adminIdInput.trim();
-      
-      if (isAdmin(code)) {
+
+      let allowed = isAdmin(code);
+      if (serverLoginOn) {
+        const r = await serverLogin(code, adminPwInput);
+        if (!r.ok) {
+          setAuthError(loginErrorText((r as { error: string }).error, false));
+          return;
+        }
+        allowed = (r as { profile: { role?: string } }).profile.role === 'admin';
+      }
+
+      if (allowed) {
         setIsAuthenticated(true);
         localStorage.setItem('vbs_admin_auth', 'true');
         localStorage.setItem('vbs_access_granted', 'true');
@@ -1394,6 +1415,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 />
               </div>
             </div>
+
+            {serverLoginOn && (
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-1">Password</label>
+                <input
+                  type="password"
+                  value={adminPwInput}
+                  onChange={(e) => setAdminPwInput(e.target.value)}
+                  autoComplete="current-password"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-4 text-sm text-slate-900 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-purple/50 transition-all"
+                  required
+                />
+              </div>
+            )}
 
             {authError && (
               <p className="text-red-500 text-xs font-bold flex items-center gap-1 px-2">
