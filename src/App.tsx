@@ -2184,7 +2184,7 @@ export default function App() {
           <AnnouncementPanel announcements={globalSettings.announcements} />
         )}
 
-        <main className="flex-1 container mx-auto px-4 sm:px-6 py-6 sm:py-8 overflow-x-hidden">
+        <main className="flex-1 w-full max-w-[1760px] mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 overflow-x-hidden">
           {isConfigLoading ? (
           <div className="flex flex-col items-center justify-center py-40">
             <div className="flex items-center justify-center gap-1.5 h-12 mb-6">
@@ -2358,8 +2358,62 @@ export default function App() {
         {!isConfigLoading && !isPrivacyRoute && !isTermsRoute && isAccessGranted && (
           <div className={(isAdminRoute || isAdminConfigRoute) ? 'hidden' : ''}>
           <div className="space-y-8 lg:space-y-0 lg:flex lg:items-start lg:gap-8">
+            {/* Desktop sidebar */}
+            <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:shrink-0 lg:sticky lg:top-24 gap-3">
+              <div className="rounded-3xl border border-white/10 bg-gradient-to-b from-slate-900/80 to-black/80 p-3 shadow-2xl shadow-black/40">
+                <div className="px-3 pt-2 pb-3 text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">{language === 'mm' ? 'လုပ်ငန်းခွင်' : 'Workspace'}</div>
+                {([
+                  { key: 'studio', icon: <Mic2 size={18} />, title: t('nav.studio'), sub: language === 'mm' ? 'စာမှ အသံ' : 'Text to speech', active: activeTab === 'generate', busy: isStudioProcessing, locked: false,
+                    go: () => handleTabSwitch('generate') },
+                  { key: 'srt', icon: <FileText size={18} />, title: language === 'mm' ? 'SRT စာတန်းထိုး' : 'Speech → SRT', sub: language === 'mm' ? 'အသံမှ စာတန်း' : 'Subtitles from audio', active: activeTab === 'transcriber' && subtitlesSubTab === 'transcriber', busy: isTranscriberProcessing, locked: !isPremium,
+                    go: () => { if (!isPremium) { showToast(t('video.premiumRequired'), 'error'); return; } setSubtitlesSubTab('transcriber'); handleTabSwitch('transcriber'); } },
+                  { key: 'recap', icon: <Clapperboard size={18} />, title: 'Auto Recap', sub: language === 'mm' ? 'ဗီဒီယို Recap အလိုအလျောက်' : 'Video recap, automated', active: activeTab === 'transcriber' && subtitlesSubTab === 'auto-recap', busy: isVideoEditorProcessing, locked: !isPremium,
+                    go: () => { if (!isPremium) { showToast(t('video.premiumRequired'), 'error'); return; } setSubtitlesSubTab('auto-recap'); handleTabSwitch('transcriber'); } },
+                ]).map(it => (
+                  <button
+                    key={it.key}
+                    type="button"
+                    onClick={it.go}
+                    className={`relative w-full flex items-center gap-3 px-2.5 py-2.5 mb-1 rounded-2xl text-left transition-all border ${it.active ? 'bg-amber-400/10 border-amber-400/30' : 'border-transparent hover:bg-white/5'}`}
+                  >
+                    {it.active && <span className="absolute left-0 top-3 bottom-3 w-1 rounded-r-full bg-amber-400" />}
+                    <span className={`w-10 h-10 rounded-xl grid place-items-center shrink-0 transition ${it.active ? 'bg-amber-400 text-black shadow-lg shadow-amber-400/30' : 'bg-white/5 text-slate-300'}`}>
+                      {it.locked && !it.active ? <Lock size={15} className="text-slate-500" /> : it.icon}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className={`block text-[13.5px] font-bold leading-tight truncate ${it.active ? 'text-white' : 'text-slate-200'}`}>{it.title}</span>
+                      <span className="block text-[11px] text-slate-500 truncate mt-0.5">{it.sub}</span>
+                    </span>
+                    {it.busy && <span className="relative flex h-2.5 w-2.5 shrink-0"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" /><span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" /></span>}
+                  </button>
+                ))}
+                <div className="my-2 mx-3 h-px bg-white/10" />
+                <button
+                  type="button"
+                  onClick={() => handleTabSwitch('tools')}
+                  className={`relative w-full flex items-center gap-3 px-2.5 py-2.5 rounded-2xl text-left transition-all border ${activeTab === 'tools' ? 'bg-amber-400/10 border-amber-400/30' : 'border-transparent hover:bg-white/5'}`}
+                >
+                  {activeTab === 'tools' && <span className="absolute left-0 top-3 bottom-3 w-1 rounded-r-full bg-amber-400" />}
+                  <span className={`w-10 h-10 rounded-xl grid place-items-center shrink-0 ${activeTab === 'tools' ? 'bg-amber-400 text-black shadow-lg shadow-amber-400/30' : 'bg-white/5 text-slate-300'}`}><Settings size={18} /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className={`block text-[13.5px] font-bold leading-tight ${activeTab === 'tools' ? 'text-white' : 'text-slate-200'}`}>{t('nav.settings')}</span>
+                    <span className="block text-[11px] text-slate-500 truncate mt-0.5">{language === 'mm' ? 'အကောင့်၊ Credits၊ API' : 'Account, credits, API'}</span>
+                  </span>
+                </button>
+              </div>
+              {userControl && (
+                <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4 flex items-center justify-between">
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Credits</div>
+                    <div className={`mt-1 text-2xl font-extrabold font-mono ${(userControl.credits || 0) > 0 || isVbsAdmin ? 'text-amber-400' : 'text-rose-500'}`}>{isVbsAdmin ? '∞' : (userControl.credits || 0)}</div>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-amber-400/10 border border-amber-400/20 grid place-items-center"><Sparkles size={18} className="text-amber-400" /></div>
+                </div>
+              )}
+            </aside>
+
             {/* Tab Navigation: top bar on phones/tablets, a side bar on desktop */}
-            <div className="flex items-center gap-1 sm:gap-2 bg-white/5 backdrop-blur-xl border border-white/10 p-1 rounded-xl sm:rounded-2xl w-full sm:w-fit mx-auto shadow-2xl relative z-40 mb-8 sm:mb-10 overflow-x-auto no-scrollbar lg:mx-0 lg:mb-0 lg:flex-col lg:items-stretch lg:w-56 lg:shrink-0 lg:sticky lg:top-24 lg:p-2 lg:gap-1.5 lg:overflow-visible">
+            <div className="flex items-center gap-1 sm:gap-2 bg-white/5 backdrop-blur-xl border border-white/10 p-1 rounded-xl sm:rounded-2xl w-full sm:w-fit mx-auto shadow-2xl relative z-40 mb-8 sm:mb-10 overflow-x-auto no-scrollbar lg:hidden">
               <NavTab
                 id="generate"
                 active={activeTab === 'generate'}
@@ -2651,7 +2705,7 @@ export default function App() {
                 ) : (
                   <div className="space-y-6">
                     {/* Sub-Tabs under AI Subtitles: Speech → SRT | Auto Recap */}
-                    <div className="flex items-center justify-center gap-2 max-w-2xl mx-auto lg:mx-0 lg:w-fit lg:min-w-[28rem] bg-black/50 p-1.5 rounded-2xl border border-white/10 backdrop-blur-xl shadow-2xl">
+                    <div className="flex lg:hidden items-center justify-center gap-2 max-w-2xl mx-auto bg-black/50 p-1.5 rounded-2xl border border-white/10 backdrop-blur-xl shadow-2xl">
                       <button
                         type="button"
                         onClick={() => {

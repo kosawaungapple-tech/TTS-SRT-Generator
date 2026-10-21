@@ -21,7 +21,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-white/10 bg-black/80 backdrop-blur-2xl transition-all duration-300">
-      <div className="container mx-auto px-4 sm:px-6 h-20 flex items-center justify-between">
+      <div className="w-full max-w-[1760px] mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
         <div 
           className="flex items-center gap-3 cursor-pointer group"
           onClick={() => {
