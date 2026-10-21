@@ -688,49 +688,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
 
   const panel = 'rounded-[28px] border border-white/10 bg-gradient-to-b from-slate-900/90 to-black/90 p-5 sm:p-6 shadow-2xl shadow-black/50';
 
-  return (
-    <div className="max-w-2xl lg:max-w-none mx-auto space-y-5 lg:space-y-0 lg:grid lg:grid-cols-12 lg:gap-6 lg:items-start">
-      <div className={`${panel} lg:col-span-5 xl:col-span-4 lg:order-2`}>
-        {/* Header */}
-        <div className="flex items-center gap-3.5 mb-5 pb-5 border-b border-white/10">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-300 to-orange-500 grid place-items-center shadow-lg shadow-amber-500/30">
-            <Clapperboard size={22} className="text-black" />
-          </div>
-          <div>
-            <h2 className="text-lg font-extrabold text-white leading-tight">Auto Recap</h2>
-            <p className="text-[12px] text-slate-400">{isMm ? 'ဗီဒီယိုကို ကြည့်ပြီး ဇာတ်ညွှန်း · Voiceover · SRT ထုတ်ပေးမည်' : 'Watches your video → script · voiceover · SRT'}</p>
-          </div>
-        </div>
-
-        {/* Video */}
-        {!file ? (
-          <label className="lg:hidden group block rounded-3xl border-2 border-dashed border-white/15 bg-white/[0.02] px-5 py-9 text-center cursor-pointer transition hover:border-amber-400/60 hover:bg-amber-400/[0.04]">
-            <input type="file" accept="video/*" className="hidden" onChange={e => pickFile(e.target.files?.[0] || null)} />
-            <div className="mx-auto mb-3 w-14 h-14 rounded-2xl bg-amber-400/10 border border-amber-400/30 grid place-items-center group-hover:scale-105 transition">
-              <Upload className="text-amber-400" size={24} />
-            </div>
-            <div className="text-[15px] font-bold text-white">{isMm ? 'Recap လုပ်မယ့် ဗီဒီယိုကို ရွေးပါ' : 'Choose the video to recap'}</div>
-            <div className="text-[12px] text-slate-500 mt-1">MP4 · MOV · WebM</div>
-          </label>
-        ) : (
-          <div className="flex items-center gap-3.5 rounded-3xl bg-white/[0.04] border border-white/10 p-3">
-            <div className="w-24 h-16 rounded-2xl overflow-hidden bg-black grid place-items-center shrink-0 border border-white/10">
-              {thumb ? <img src={thumb} alt="" className="w-full h-full object-cover" /> : <Film size={20} className="text-slate-600" />}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-bold text-white truncate">{file.name}</div>
-              <div className="flex items-center gap-2 mt-1.5 text-[11px] text-slate-400">
-                <span className="px-2 py-0.5 rounded-full bg-white/10">{duration > 0 ? fmt(duration) : '…'}</span>
-                <span className="px-2 py-0.5 rounded-full bg-white/10">{(file.size / 1048576).toFixed(1)} MB</span>
-              </div>
-            </div>
-            <label className="shrink-0 w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 grid place-items-center cursor-pointer transition" title={isMm ? 'ပြောင်းမည်' : 'Change'}>
-              <input type="file" accept="video/*" className="hidden" onChange={e => pickFile(e.target.files?.[0] || null)} />
-              <RefreshCw size={16} className="text-slate-200" />
-            </label>
-          </div>
-        )}
-
+  const settingsBlock = (
+    <>
         {/* What kind of video */}
         <Group n={1} title={isMm ? 'အကြောင်းအရာ' : 'Content'}>
         <div>
@@ -805,6 +764,53 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         </div>
 
         </Group>
+    </>
+  );
+
+  return (
+    <div className="max-w-2xl lg:max-w-none mx-auto space-y-5 lg:space-y-0 lg:grid lg:grid-cols-12 lg:gap-6 lg:items-start">
+      <div className={`${panel} lg:col-span-5 xl:col-span-4 lg:order-2`}>
+        {/* Header */}
+        <div className="flex items-center gap-3.5 mb-5 pb-5 border-b border-white/10">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-300 to-orange-500 grid place-items-center shadow-lg shadow-amber-500/30">
+            <Clapperboard size={22} className="text-black" />
+          </div>
+          <div>
+            <h2 className="text-lg font-extrabold text-white leading-tight">Auto Recap</h2>
+            <p className="text-[12px] text-slate-400">{isMm ? 'ဗီဒီယိုကို ကြည့်ပြီး ဇာတ်ညွှန်း · Voiceover · SRT ထုတ်ပေးမည်' : 'Watches your video → script · voiceover · SRT'}</p>
+          </div>
+        </div>
+
+        {/* Video */}
+        {!file ? (
+          <label className="lg:hidden group block rounded-3xl border-2 border-dashed border-white/15 bg-white/[0.02] px-5 py-9 text-center cursor-pointer transition hover:border-amber-400/60 hover:bg-amber-400/[0.04]">
+            <input type="file" accept="video/*" className="hidden" onChange={e => pickFile(e.target.files?.[0] || null)} />
+            <div className="mx-auto mb-3 w-14 h-14 rounded-2xl bg-amber-400/10 border border-amber-400/30 grid place-items-center group-hover:scale-105 transition">
+              <Upload className="text-amber-400" size={24} />
+            </div>
+            <div className="text-[15px] font-bold text-white">{isMm ? 'Recap လုပ်မယ့် ဗီဒီယိုကို ရွေးပါ' : 'Choose the video to recap'}</div>
+            <div className="text-[12px] text-slate-500 mt-1">MP4 · MOV · WebM</div>
+          </label>
+        ) : (
+          <div className="flex items-center gap-3.5 rounded-3xl bg-white/[0.04] border border-white/10 p-3">
+            <div className="w-24 h-16 rounded-2xl overflow-hidden bg-black grid place-items-center shrink-0 border border-white/10">
+              {thumb ? <img src={thumb} alt="" className="w-full h-full object-cover" /> : <Film size={20} className="text-slate-600" />}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-bold text-white truncate">{file.name}</div>
+              <div className="flex items-center gap-2 mt-1.5 text-[11px] text-slate-400">
+                <span className="px-2 py-0.5 rounded-full bg-white/10">{duration > 0 ? fmt(duration) : '…'}</span>
+                <span className="px-2 py-0.5 rounded-full bg-white/10">{(file.size / 1048576).toFixed(1)} MB</span>
+              </div>
+            </div>
+            <label className="shrink-0 w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 grid place-items-center cursor-pointer transition" title={isMm ? 'ပြောင်းမည်' : 'Change'}>
+              <input type="file" accept="video/*" className="hidden" onChange={e => pickFile(e.target.files?.[0] || null)} />
+              <RefreshCw size={16} className="text-slate-200" />
+            </label>
+          </div>
+        )}
+
+        <div className="lg:hidden">{settingsBlock}</div>
 
         {/* Start */}
         <div className="lg:sticky lg:bottom-3 z-10 mt-4 -mx-1 px-1 pt-2 pb-1 bg-gradient-to-t from-black via-black/95 to-transparent rounded-b-2xl">
@@ -921,8 +927,9 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         )}
       </div>
 
+      <div className="lg:col-span-7 xl:col-span-8 lg:order-1 space-y-5 min-w-0">
       {!result && (
-        <div className={`${panel} hidden lg:grid lg:col-span-7 xl:col-span-8 lg:order-1 lg:self-start lg:sticky lg:top-4 min-h-[560px] place-items-center text-center`}>
+        <div className={`${panel} hidden lg:grid min-h-[440px] place-items-center text-center`}>
           {!file ? (
             <label className="group w-full h-full min-h-[500px] grid place-items-center rounded-3xl border-2 border-dashed border-white/15 bg-white/[0.015] cursor-pointer transition hover:border-amber-400/60 hover:bg-amber-400/[0.04]">
               <input type="file" accept="video/*" className="hidden" onChange={e => pickFile(e.target.files?.[0] || null)} />
@@ -951,7 +958,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       )}
 
       {result && (
-        <div className={`${panel} lg:col-span-7 xl:col-span-8 lg:order-1`}>
+        <div className={panel}>
           <div className="flex items-center gap-3 mb-5">
             <div className="w-11 h-11 rounded-2xl bg-emerald-400/15 border border-emerald-400/30 grid place-items-center">
               <CheckCircle2 size={22} className="text-emerald-400" />
@@ -1283,6 +1290,9 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           </div>
         </div>
       )}
+
+        <div className="hidden lg:grid lg:grid-cols-2 gap-5 items-start [&>section]:mt-0">{settingsBlock}</div>
+      </div>
     </div>
   );
 };
