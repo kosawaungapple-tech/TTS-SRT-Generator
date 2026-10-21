@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { requireUser } from '../_lib/requireUser';
 
 // Gemini custom voices (voice replication) + synthesis with a custom voice.
 // Uses the caller's Google AI Studio key (falls back to the server key).
@@ -8,13 +9,14 @@ const TTS_MODEL = 'gemini-3.8-flash-tts';
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-vbs-token');
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
     const { action, apiKey: provided, sourceAudio, consentAudio, voice, text, style, displayName } = req.body || {};
     const personal = typeof provided === 'string' && provided.trim().length >= 25 && !provided.includes('...');
+    if (!personal && !(await requireUser(req))) return res.status(401).json({ error: 'Please sign in again.' });
     const key = personal ? provided.trim() : process.env.GEMINI_API_KEY;
     if (!key) return res.status(400).json({ error: 'No API Key available.' });
     const headers = { 'x-goog-api-key': key, 'Content-Type': 'application/json' };
