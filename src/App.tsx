@@ -2651,7 +2651,7 @@ export default function App() {
                 ) : (
                   <div className="space-y-6">
                     {/* Sub-Tabs under AI Subtitles: Speech → SRT | Auto Recap */}
-                    <div className="flex items-center justify-center gap-2 max-w-2xl mx-auto bg-black/50 p-1.5 rounded-2xl border border-white/10 backdrop-blur-xl shadow-2xl">
+                    <div className="flex items-center justify-center gap-2 max-w-2xl mx-auto lg:mx-0 lg:w-fit lg:min-w-[28rem] bg-black/50 p-1.5 rounded-2xl border border-white/10 backdrop-blur-xl shadow-2xl">
                       <button
                         type="button"
                         onClick={() => {
@@ -2686,7 +2686,7 @@ export default function App() {
                     </div>
 
                     {/* Content View: Keep both mounted to preserve transcription state and media buffers */}
-                    <div className={subtitlesSubTab === 'transcriber' ? 'block max-w-4xl mx-auto' : 'hidden'}>
+                    <div className={subtitlesSubTab === 'transcriber' ? 'block max-w-4xl mx-auto lg:mx-0' : 'hidden'}>
                       <VideoTranscriber 
                         onTranscriptionComplete={(transcribedText) => {
                           setText(transcribedText);
