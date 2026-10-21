@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { requireUser } from '../_lib/requireUser';
+import { requireUser } from '../_lib/requireUser.js';
 
 // Gemini custom voices (voice replication) + synthesis with a custom voice.
 // Uses the caller's Google AI Studio key (falls back to the server key).

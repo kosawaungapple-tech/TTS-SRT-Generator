@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { requireUser } from '../_lib/requireUser';
+import { requireUser } from '../_lib/requireUser.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Add CORS headers for production

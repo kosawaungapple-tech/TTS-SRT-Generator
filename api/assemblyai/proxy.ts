@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-import { requireUser } from '../_lib/requireUser';
+import { requireUser } from '../_lib/requireUser.js';
 
 export const config = {
   api: {
