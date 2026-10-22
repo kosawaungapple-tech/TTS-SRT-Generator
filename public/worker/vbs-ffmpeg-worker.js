@@ -168,7 +168,7 @@ const server = http.createServer((req, res) => {
       status: 'online',
       engine: 'vbs-ffmpeg-worker',
       hosted: HOSTED,
-      version: '1.9.0',
+      version: '1.10.0',
       protected: !!WORKER_KEY,
       ffmpegAvailable: isFfmpegInstalled,
       ffmpegVersion: ffmpegVersionStr,
@@ -800,7 +800,7 @@ function sceneFilterGraph(o) {
 
 async function renderRecap(opts) {
   const { videoPath, audioPaths, scenes, outputPath } = opts;
-  const paddingSeconds = 0.25, minSpeed = 0.8, maxSpeed = 1.25, fps = 30;
+  const paddingSeconds = 0.25, minSpeed = 0.9, maxSpeed = 1.25, fps = 30;
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'recap-'));
   try {
     const sourceDuration = await probeDuration(videoPath);
@@ -826,19 +826,48 @@ async function renderRecap(opts) {
       let cutLen = clipLen, factor, holdSeconds = 0;
       if (speed > maxSpeed) { cutLen = Math.min(clipLen, target * maxSpeed); factor = 1 / maxSpeed; }
       else if (speed < minSpeed) {
-        // Narration is longer than the scene: play slower AND take extra footage that follows the scene
-        // (instead of freezing on the last frame). Only freeze if the source video itself runs out.
+        // Narration is longer than the scene: play it only a little slower and HOLD (freeze + slow zoom-in)
+        // for the rest, so the picture never jumps into the next scene's footage and stays in step with the voice.
         factor = 1 / minSpeed;
-        cutLen = Math.max(clipLen, Math.min(target * minSpeed, sourceDuration - start));
+        cutLen = clipLen;
         holdSeconds = Math.max(0, target - cutLen * factor);
       }
       else factor = 1 / speed;
 
       const vOut = path.join(work, `v_${i}.mp4`);
-      await runCmd('ffmpeg', ['-y', '-v', 'error', '-ss', start.toFixed(3), '-t', cutLen.toFixed(3), '-i', videoPath, '-an',
-        '-filter_complex', sceneFilterGraph({ factor, fps, outW, outH, framing, keepSourceFrame,
-          blurAmount: opts.blurAmount || 20, bgColor: opts.bgColor || '#000000', holdSeconds, blurBand: opts.blurBand, adjust: opts.adjust }),
-        '-map', '[v]', '-t', target.toFixed(3), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-r', String(fps), vOut]);
+      const gOpts = { fps, outW, outH, framing, keepSourceFrame, blurAmount: opts.blurAmount || 20, bgColor: opts.bgColor || '#000000', blurBand: opts.blurBand, adjust: opts.adjust };
+      const encode = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-r', String(fps)];
+      if (opts.freezeZoom !== false && holdSeconds >= 0.8) {
+        // clip -> freeze (zoom in) -> clip [-> freeze -> clip] : long holds are split in two
+        const holds = holdSeconds > 8 ? 2 : 1;
+        const pieces = [];
+        for (let k = 0; k <= holds; k++) {
+          const a0 = (cutLen * k) / (holds + 1), a1 = (cutLen * (k + 1)) / (holds + 1);
+          const cp = path.join(work, `v_${i}_c${k}.mp4`);
+          await runCmd('ffmpeg', ['-y', '-v', 'error', '-ss', (start + a0).toFixed(3), '-t', (a1 - a0).toFixed(3), '-i', videoPath, '-an',
+            '-filter_complex', sceneFilterGraph({ ...gOpts, factor, holdSeconds: 0 }),
+            '-map', '[v]', '-t', ((a1 - a0) * factor).toFixed(3), ...encode, cp]);
+          pieces.push(cp);
+          if (k < holds) {
+            const png = path.join(work, `v_${i}_f${k}.png`);
+            await runCmd('ffmpeg', ['-y', '-v', 'error', '-ss', (start + a1).toFixed(3), '-i', videoPath, '-an', '-frames:v', '1',
+              '-filter_complex', sceneFilterGraph({ ...gOpts, factor: 1, holdSeconds: 0 }), '-map', '[v]', png]);
+            const frames = Math.max(2, Math.round((holdSeconds / holds) * fps));
+            const fp = path.join(work, `v_${i}_z${k}.mp4`);
+            await runCmd('ffmpeg', ['-y', '-v', 'error', '-i', png,
+              '-vf', `scale=trunc(iw*1.5/2)*2:-2,zoompan=z='1+0.12*on/${frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${outW}x${outH}:fps=${fps},format=yuv420p`,
+              '-frames:v', String(frames), ...encode, fp]);
+            pieces.push(fp);
+          }
+        }
+        const lst = path.join(work, `v_${i}_list.txt`);
+        fs.writeFileSync(lst, pieces.map(x => `file '${x.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`).join('\n'));
+        await runCmd('ffmpeg', ['-y', '-v', 'error', '-f', 'concat', '-safe', '0', '-i', lst, '-t', target.toFixed(3), '-c', 'copy', vOut]);
+      } else {
+        await runCmd('ffmpeg', ['-y', '-v', 'error', '-ss', start.toFixed(3), '-t', cutLen.toFixed(3), '-i', videoPath, '-an',
+          '-filter_complex', sceneFilterGraph({ ...gOpts, factor, holdSeconds }),
+          '-map', '[v]', '-t', target.toFixed(3), ...encode, vOut]);
+      }
 
       const aOut = path.join(work, `a_${i}.wav`);
       await runCmd('ffmpeg', ['-y', '-v', 'error', '-i', audioPaths[i],

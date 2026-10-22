@@ -135,6 +135,7 @@ function voiceRules(language: 'mm' | 'en', style: string, tone: string): string 
 - မြန်မာ ရီကပ်ဇာတ်ကားပြောသူ၏ သဘာဝစကားပြော (…တယ်၊ …ပါတယ်၊ …လိုက်တော့၊ …ပေမယ့်) ကို သုံးပါ။ စာအုပ်စာပေဟန် (၏၊ ၌၊ သည်) မသုံးပါနှင့်။
 - စာကြောင်းတိုတို၊ ပုံရိပ်ပေါ်စေသော ကြိယာများဖြင့် ရေးပါ။ တစ်ကြောင်းတည်းတွင် အကြောင်းအရာ တစ်ခုသာ ထားပါ။
 - အလွတ်အချော့ စကားလုံးများ ("အလွန်စိတ်ဝင်စားဖွယ်", "ထူးဆန်းသော ဇာတ်လမ်း" စသည့် ယေဘုယျချီးမွမ်းစကား) နှင့် ထပ်ခါထပ်ခါ ပြောခြင်း မလုပ်ပါနှင့်။ ဖြစ်ရပ်၊ လုပ်ရပ်၊ အကြောင်းအကျိုး ကိုသာ ပြောပါ။
+- ပုံပြင်ပြောသူလို ပြောပါ၊ အနှစ်ချုပ်လို မရေးပါနှင့်: အခြေအနေကို အရင်ပုံဖော်၊ ပြီးမှ ဖြစ်ရပ်ကို ဆက်ပါ။ "ဘာဖြစ်ခဲ့လဲ → ဘာကြောင့်အရေးကြီးလဲ → ဘာဆုံးရှုံးနိုင်လဲ" ဆိုတဲ့ အစီအစဉ်နဲ့ ဇာတ်ကောင်တွေ ဘာလုပ်နေလဲ၊ ဘာတွေးနေလဲ ဆိုတာ ထည့်ပြောပါ။ အလှည့်အပြောင်းနေရာမှာ စာကြောင်းတိုတစ်ကြောင်းနဲ့ ရပ်ပါ။
 - Timestamp၊ ခေါင်းစဉ်၊ [Scene]၊ (Sound effect)၊ emoji၊ markdown မထည့်ပါနှင့်။
 - မူရင်းတွင် မပါသော ဇာတ်ကောင်၊ အမည်၊ ဖြစ်ရပ်၊ ဇာတ်သိမ်း မဖန်တီးပါနှင့်။
 - ရသ (EMOTION) ကို အသက်သွင်းပါ: ဇာတ်ကောင်ရဲ့ ကြောက်စိတ်၊ မျှော်လင့်ချက်၊ နှောင်ကြိုးတွေကို ပြောပါ (မျက်နှာအမူအရာ၊ အသံ၊ အခြေအနေကနေ ထင်ရှားတာကိုသာ)။ ပရိသတ်ကို မေးခွန်းမေးပါ ("ဒီလူ ဘာကြောင့် ပြုံးနေတာလဲ?")။ တင်းမာတဲ့နေရာမှာ စာကြောင်းတို၊ သက်သာတဲ့နေရာမှာ ရှည်ပါ။ အပိုင်းတစ်ခုချင်းကို နောက်အပိုင်းကို စိတ်ဝင်စားစေမယ့် မေးခွန်း/အရိပ်အမြွက်ဖြင့် ပိတ်ပါ။
@@ -340,7 +341,7 @@ ${bibleText(bible)}
 
 ${prevTail ? `The narration so far ends with: "${prevTail}"\nContinue naturally from it; do not repeat it.\n` : ''}${opening ? 'The first paragraph is the HOOK: open on the most gripping real situation from the events (no generic praise, no "this movie is about").\n' : ''}${closing ? 'The last paragraph lands the ending exactly as the events say, with one closing line.\n' : ''}
 ${LANG_RULE(language)}
-Write each section below using ONLY its allowed events. Every paragraph must list the event numbers it is based on; a paragraph may not state a fact that is not in those events. Add cause→effect, the characters' feelings and the stakes that the events imply, and vivid sensory detail from what is described, but no new facts, names or plot points. Cover EVERY listed event — never skip one. 
+Write each section below using ONLY its allowed events. Every paragraph must list the event numbers it is based on; a paragraph may not state a fact that is not in those events. Tell it like a gifted storyteller talking to a friend, not like a summary: set the scene first, then let each beat land (what happened → why it matters → what it costs or risks), name who does what, and let the turning points breathe with a short punchy line. Add cause→effect, the characters' feelings and the stakes that the events imply, and vivid sensory detail from what is described, but no new facts, names or plot points. Cover EVERY listed event — never skip one. 
 Return JSON: {"sections":[{"section":<number>,"paragraphs":[{"events":[<numbers>],"text":"narration"}]}]}
 
 ${lines}`;
@@ -369,8 +370,8 @@ ${lines}`;
   let res = parse(raw);
   const want = batch.reduce((n, b) => n + b.chars, 0);
   const have = (r: Para[][] | null) => (r ? r.flat().reduce((n, p) => n + p.text.length, 0) : 0);
-  if (res && have(res) < want * 0.7) {
-    const raw2 = await llm(prompt + `\n\nIMPORTANT: your previous answer was too short (${have(res)} of ~${want} characters) and flat. Rewrite it fuller: go through every event, add what the characters see, feel and risk, and keep the emotional build-up. Still cite events correctly.`, { json: true });
+  if (res && have(res) < want * 0.88) {
+    const raw2 = await llm(prompt + `\n\nIMPORTANT: your previous answer was too short (${have(res)} of ~${want} characters) and flat. The narration MUST reach at least ${Math.round(want * 0.95)} characters. Rewrite it fuller: go through every event, add what the characters see, feel and risk, and keep the emotional build-up. Still cite events correctly.`, { json: true });
     const res2 = parse(raw2);
     if (res2 && have(res2) > have(res)) { res = res2; raw = raw2; }
   }

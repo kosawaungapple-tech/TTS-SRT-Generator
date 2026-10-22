@@ -321,7 +321,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           sourceSeconds: duration,
           targetLanguage: language,
           cues,
-          coverage: length === 'short' ? 0.4 : length === 'full' ? 1 : 0.7,
+          coverage: length === 'short' ? 0.55 : length === 'full' ? 1 : 0.85,
           getFrames: async (a, b) => {
             const n = 5;
             return captureVideoFrames(file, Array.from({ length: n }, (_, i) => a + ((b - a) * (i + 0.5)) / n), 448, 0.6);
@@ -370,7 +370,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       const sceneAudios: Blob[] = resume && draftRef.current?.audios ? [...draftRef.current.audios] : [];
       if (sceneAudios.length > segments.length) sceneAudios.length = segments.length;
       // The voiceover must fit the video: each scene gets the time of the part of the video it tells.
-      const coverageFactor = length === 'short' ? 0.4 : length === 'full' ? 1 : 0.7;
+      const coverageFactor = length === 'short' ? 0.55 : length === 'full' ? 1 : 0.85;
       const totalTarget = duration > 0 ? duration * coverageFactor : 0;
       const totalChars = segments.reduce((n, sg) => n + sg.text.length, 0) || 1;
       const lang: 'mm' | 'en' = language === 'en' ? 'en' : 'mm';
@@ -716,8 +716,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             value={length}
             onChange={setLength}
             options={[
-              { id: 'short', label: isMm ? 'အဓိက' : 'Highlights', sub: '40%' },
-              { id: 'medium', label: isMm ? 'ပုံမှန်' : 'Standard', sub: '70%' },
+              { id: 'short', label: isMm ? 'အဓိက' : 'Highlights', sub: '55%' },
+              { id: 'medium', label: isMm ? 'ပုံမှန်' : 'Standard', sub: '85%' },
               { id: 'full', label: isMm ? 'အပြည့်' : 'Whole video', sub: '100%' },
             ]}
           />
