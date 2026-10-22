@@ -9,6 +9,20 @@ export const SharedWorkerSettings: React.FC = () => {
   const [url, setUrl] = useState('');
   const [requireGrant, setRequireGrant] = useState(true);
   const [msg, setMsg] = useState('');
+  const [liveAge, setLiveAge] = useState<number | null>(null);
+
+  useEffect(() => {
+    let stop = false;
+    const check = () => getDoc(doc(db, 'settings', 'render_live'))
+      .then(s => {
+        const d = s.data() as { lastSeen?: number } | undefined;
+        if (!stop) setLiveAge(d?.lastSeen ? Math.round((Date.now() - d.lastSeen) / 1000) : null);
+      })
+      .catch(() => { /* offline */ });
+    void check();
+    const t = setInterval(check, 20000);
+    return () => { stop = true; clearInterval(t); };
+  }, []);
 
   useEffect(() => {
     getDoc(doc(db, 'settings', 'render_server'))
@@ -31,10 +45,15 @@ export const SharedWorkerSettings: React.FC = () => {
   return (
     <div className="mt-6 p-5 rounded-3xl bg-white/5 border border-white/10 space-y-3">
       <h4 className="text-sm font-bold text-white">Share this PC with users (shared render address)</h4>
+      <div className={`flex items-center gap-2 text-xs font-bold ${liveAge !== null && liveAge < 150 ? 'text-emerald-400' : 'text-slate-400'}`}>
+        <span className={`w-2 h-2 rounded-full ${liveAge !== null && liveAge < 150 ? 'bg-emerald-400' : 'bg-slate-600'}`} />
+        {liveAge !== null && liveAge < 150 ? `PC online - phones can render now (seen ${liveAge}s ago)` : 'PC offline (no automatic worker has checked in)'}
+      </div>
       <p className="text-[11px] text-slate-400 leading-relaxed">
-        1) Start a second worker for users: <span className="font-mono">RENDER_SECRET=&lt;secret&gt; PORT=5006 node vbs-ffmpeg-worker.js</span> (your own worker on 5005 is not touched).<br />
-        2) Open a tunnel to it: <span className="font-mono">cloudflared tunnel --url http://localhost:5006</span> and paste the https address below.<br />
-        3) Put the same secret in Vercel as <span className="font-mono">RENDER_SECRET</span> (once). Then use the laptop button in the user list to allow each user.
+        <b>Automatic (recommended):</b> install <span className="font-mono">cloudflared</span> once, then start the user worker:<br />
+        <span className="font-mono">RENDER_SECRET=&lt;secret&gt; PORT=5006 node vbs-ffmpeg-worker.js</span><br />
+        It opens the tunnel and tells the website its address every minute - phones need nothing. Put the same secret in Vercel as <span className="font-mono">RENDER_SECRET</span> (once). Allow each user with the laptop button in the user list.<br />
+        <b>Manual (fallback):</b> paste a fixed https address below; it is only used when no automatic worker is online.
       </p>
       <input
         value={url}

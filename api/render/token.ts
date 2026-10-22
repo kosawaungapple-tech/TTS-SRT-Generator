@@ -14,7 +14,7 @@ const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'directed-reporter-wkx2q';
 const DATABASE_ID = process.env.FIREBASE_DATABASE_ID || 'ai-studio-recap1062026srts-ff74dc66-bac1-45e8-851d-dcb5797f03e0';
 const WEB_API_KEY = process.env.FIREBASE_WEB_API_KEY || 'AIzaSyCw5gC3dGaBGnuxqnn6VEQFuWG_fcAwyYs';
 
-type Fields = Record<string, { booleanValue?: boolean; stringValue?: string }>;
+type Fields = Record<string, { booleanValue?: boolean; stringValue?: string; integerValue?: string; doubleValue?: number }>;
 const REST = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/${encodeURIComponent(DATABASE_ID)}/documents`;
 
 async function readRest(path: string): Promise<Record<string, unknown> | null | undefined> {
@@ -23,7 +23,7 @@ async function readRest(path: string): Promise<Record<string, unknown> | null | 
   if (!r.ok) return undefined;
   const f = ((await r.json()) as { fields?: Fields }).fields || {};
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(f)) out[k] = v.booleanValue ?? v.stringValue;
+  for (const [k, v] of Object.entries(f)) out[k] = v.booleanValue ?? v.stringValue ?? (v.integerValue !== undefined ? Number(v.integerValue) : v.doubleValue);
   return out;
 }
 
@@ -46,7 +46,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const secret = process.env.RENDER_SECRET;
   const cfg = (await readDoc('settings/render_server')) || {};
-  const serverUrl = String((cfg.url as string) || process.env.RENDER_SERVER_URL || '').trim().replace(/\/+$/, '');
+  // The PC worker publishes its own (changing) address every minute; use it while it is fresh.
+  const live = (await readDoc('settings/render_live')) || null;
+  const liveFresh = !!live && typeof live.url === 'string' && typeof live.lastSeen === 'number' && Date.now() - (live.lastSeen as number) < 150_000;
+  const manualUrl = String((cfg.url as string) || process.env.RENDER_SERVER_URL || '').trim().replace(/\/+$/, '');
+  if (secret && !liveFresh && live && !manualUrl) {
+    return res.status(503).json({ error: 'worker_offline', message: 'The render PC is offline right now.' });
+  }
+  const serverUrl = liveFresh ? String(live!.url).replace(/\/+$/, '') : manualUrl;
   const requireGrant = cfg.requireGrant === true;
   if (!secret || !serverUrl) {
     return res.status(503).json({ error: 'not_configured', message: 'The render server is not set up yet.' });
