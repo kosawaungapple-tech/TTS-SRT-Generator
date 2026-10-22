@@ -160,7 +160,8 @@ async function watchVideo(
   // Talky videos: the dialogue already carries the story, so look at fewer, longer windows (half the calls).
   const spoken = (opts.cues || []).reduce((n, c) => n + c.text.replace(/\s+/g, '').length, 0);
   const winSec = spoken / Math.max(1, dur) >= 4 ? 40 : 20;
-  const count = Math.max(1, Math.min(30, Math.ceil(dur / winSec)));
+  // a feature film gets more (and longer) windows than a short clip
+  const count = Math.max(1, Math.min(dur > 1800 ? 60 : 30, Math.ceil(dur / winSec)));
   const len = dur / count;
   const bible: Bible = { setting: '', characters: [], events: [], times: [] };
   const seen = new Set<string>();
@@ -539,7 +540,7 @@ ${source.slice(0, 24000)}`,
     watching ? opts.coverage ?? 1 : undefined
   );
   const sectionCount = watching
-    ? Math.max(3, Math.min(24, Math.round(((opts.sourceSeconds as number) * (opts.coverage ?? 1)) / 25), bible.events.length))
+    ? Math.max(3, Math.min(48, Math.round(((opts.sourceSeconds as number) * (opts.coverage ?? 1)) / 25), bible.events.length))
     : Math.max(2, Math.min(14, Math.round(totalChars / (language === 'mm' ? 450 : 700)), bible.events.length));
 
   opts.onStage?.({ stage: 'outline' });

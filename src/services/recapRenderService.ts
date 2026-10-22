@@ -27,6 +27,8 @@ export interface SceneRecapRenderParams {
   gemini: GeminiTTSService;
   videoFile: File | Blob;
   videoFileName?: string;
+  /** Video already uploaded to the PC worker (long videos): sent instead of the file itself. */
+  videoId?: string;
   scenes: RecapPlanScene[];
   tts: TTSConfig;
   /** Already generated narration (one WAV per scene); skips the TTS step. */
@@ -111,7 +113,7 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
   {
     const needsFx = !!(p.fx && (p.fx.transition.type !== 'none' || p.fx.fadeIn > 0 || p.fx.fadeOut > 0 || p.fx.filter !== 'none' || p.fx.intro.on || p.fx.outro.on || !p.fx.duck.on || p.fx.duck.strength !== 'normal'))
       || scenes.some(s => (s.speed ?? 0) > 0) || !!p.textLayers?.some(t => t.anim && t.anim !== 'none');
-    const need = needsFx ? '1.11.0' : p.textLayers?.length ? '1.9.0' : p.adjust ? '1.8.0' : p.subtitleBlur ? '1.6.0' : p.bgm ? '1.5.0' : p.logoPng ? '1.4.0' : '';
+    const need = p.videoId ? '1.12.0' : needsFx ? '1.11.0' : p.textLayers?.length ? '1.9.0' : p.adjust ? '1.8.0' : p.subtitleBlur ? '1.6.0' : p.bgm ? '1.5.0' : p.logoPng ? '1.4.0' : '';
     if (need) {
       try {
         const hb = (p.serverUrl ?? getRenderServerUrl()).replace(/\/+$/, '');
@@ -137,7 +139,8 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
   // 3) Send everything to the render server.
   p.onProgress?.(step, totalSteps, 'Rendering video...');
   const form = new FormData();
-  form.append('video', p.videoFile, p.videoFileName || 'video.mp4');
+  if (p.videoId) form.append('videoId', p.videoId);
+  else form.append('video', p.videoFile, p.videoFileName || 'video.mp4');
   form.append(
     'scenes',
     JSON.stringify(scenes.map((s, i) => ({ start: s.start, end: s.end, narration: s.narration, subs: sceneSubs[i], speed: s.speed || 0 })))
