@@ -34,6 +34,8 @@ interface Props {
     hasVideoTimes: boolean;
   } | null;
   isMm: boolean;
+  /** CSS approximation of the chosen colour look */
+  filterCss?: string;
 }
 
 const fmt = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
@@ -145,9 +147,10 @@ export const RecapPreview: React.FC<Props> = p => {
             className="absolute inset-0 w-full h-full"
             style={{
               objectFit: p.framing === 'cover' && p.aspect !== 'original' ? 'cover' : 'contain',
+              ...(p.filterCss && !p.adjust ? { filter: p.filterCss } : {}),
               ...(p.adjust ? {
                 transform: `scale(${p.adjust.zoom}) translate(${(-p.adjust.panX * (p.adjust.zoom - 1) / (2 * p.adjust.zoom) * 100).toFixed(2)}%, ${(-p.adjust.panY * (p.adjust.zoom - 1) / (2 * p.adjust.zoom) * 100).toFixed(2)}%)`,
-                filter: `brightness(${1 + p.adjust.brightness}) contrast(${p.adjust.contrast}) saturate(${p.adjust.saturation})`,
+                filter: `brightness(${1 + p.adjust.brightness}) contrast(${p.adjust.contrast}) saturate(${p.adjust.saturation}) ${p.filterCss || ''}`,
               } : {}),
             }}
           />

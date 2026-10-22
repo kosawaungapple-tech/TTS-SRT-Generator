@@ -52,6 +52,13 @@ export const TextLayersEditor: React.FC<Props> = ({ layers, onChange, duration, 
               <label className="text-[10px] text-slate-400">{isMm ? 'အရွယ်အစား' : 'Size'}
                 <input type="range" className="w-full accent-amber-400" min={2} max={14} step={0.5} value={l.size} onChange={e => set(l.id, { size: Number(e.target.value) })} />
               </label>
+              <label className="text-[10px] text-slate-400">{isMm ? 'ပေါ်လာပုံ' : 'Animation'}
+                <select className={inp} value={l.anim || 'none'} onChange={e => set(l.id, { anim: e.target.value as TextLayer['anim'] })}>
+                  <option value="none">{isMm ? 'ချက်ချင်းပေါ်' : 'None'}</option>
+                  <option value="fade">Fade</option>
+                  <option value="slide">{isMm ? 'အောက်ကနေ တက်လာ' : 'Slide up + fade'}</option>
+                </select>
+              </label>
               <div className="flex items-end gap-3 text-[10px] text-slate-300">
                 <input type="color" value={l.color} onChange={e => set(l.id, { color: e.target.value })} className="w-7 h-7 rounded bg-transparent" />
                 <label className="flex items-center gap-1"><input type="checkbox" checked={l.stroke} onChange={e => set(l.id, { stroke: e.target.checked })} />{isMm ? 'အနား' : 'Outline'}</label>

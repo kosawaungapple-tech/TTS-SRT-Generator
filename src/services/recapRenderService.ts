@@ -4,6 +4,7 @@ import { WorkerEngineService } from './workerEngineService';
 import { renderSubtitlePng, type SubtitleStyle } from '../utils/subtitleOverlay';
 import { planSubtitlePieces, type RecapFramingMode } from '../utils/recapGeometry';
 import { splitSentenceIntoCueBlocks } from '../utils/subtitleUtils';
+import type { RecapFx } from '../utils/recapFx';
 
 /**
  * Client side of the scene-based recap pipeline:
@@ -39,7 +40,11 @@ export interface SceneRecapRenderParams {
   /** Bar colour for letterbox / contain. */
   bgColor: string;
   /** Timed text layers (transparent full-frame PNGs shown between start and end seconds of the recap). */
-  textLayers?: { png: Blob; start: number; end: number }[];
+  textLayers?: { png: Blob; start: number; end: number; anim?: 'none' | 'fade' | 'slide' }[];
+  /** Edit tools: transitions, fades, colour look, ducking, intro/outro cards (needs worker 1.11.0+). */
+  fx?: RecapFx | null;
+  introPng?: Blob | null;
+  outroPng?: Blob | null;
   /** Optional picture adjustments (zoom/crop with pan, brightness/contrast/saturation). */
   adjust?: { zoom: number; panX: number; panY: number; brightness: number; contrast: number; saturation: number } | null;
   /** Subtitle look (same object the editor preview uses). null = no subtitles. */
@@ -104,7 +109,9 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
 
   // 3a) The worker must be new enough for the features asked for (an old one silently ignores them).
   {
-    const need = p.textLayers?.length ? '1.9.0' : p.adjust ? '1.8.0' : p.subtitleBlur ? '1.6.0' : p.bgm ? '1.5.0' : p.logoPng ? '1.4.0' : '';
+    const needsFx = !!(p.fx && (p.fx.transition.type !== 'none' || p.fx.fadeIn > 0 || p.fx.fadeOut > 0 || p.fx.filter !== 'none' || p.fx.intro.on || p.fx.outro.on || !p.fx.duck.on || p.fx.duck.strength !== 'normal'))
+      || scenes.some(s => (s.speed ?? 0) > 0) || !!p.textLayers?.some(t => t.anim && t.anim !== 'none');
+    const need = needsFx ? '1.11.0' : p.textLayers?.length ? '1.9.0' : p.adjust ? '1.8.0' : p.subtitleBlur ? '1.6.0' : p.bgm ? '1.5.0' : p.logoPng ? '1.4.0' : '';
     if (need) {
       try {
         const hb = (p.serverUrl ?? getRenderServerUrl()).replace(/\/+$/, '');
@@ -115,7 +122,7 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
         for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) { ok = (a[i] || 0) > (b[i] || 0); break; } }
         if (!ok) {
           throw new Error(
-            `Your PC worker is v${h?.version || 'old'}, but blur / BGM / logo / picture adjustments need v${need} or newer. ` +
+            `Your PC worker is v${h?.version || 'old'}, but blur / BGM / logo / picture adjustments / transitions / filters need v${need} or newer. ` +
               `Download the latest vbs-ffmpeg-worker.js, close the old worker and start it again. ` +
               `သင့် PC worker က version အဟောင်းဖြစ်နေလို့ blur/BGM/logo မပါပါဘူး — vbs-ffmpeg-worker.js အသစ်ကို ပြန်ယူပြီး အဟောင်းကို ပိတ်ကာ ပြန်စပါ။`
           );
@@ -133,7 +140,7 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
   form.append('video', p.videoFile, p.videoFileName || 'video.mp4');
   form.append(
     'scenes',
-    JSON.stringify(scenes.map((s, i) => ({ start: s.start, end: s.end, narration: s.narration, subs: sceneSubs[i] })))
+    JSON.stringify(scenes.map((s, i) => ({ start: s.start, end: s.end, narration: s.narration, subs: sceneSubs[i], speed: s.speed || 0 })))
   );
   audios.forEach((b, i) => form.append(`audio_${i}`, b, `scene_${i}.wav`));
   subtitleImages.forEach(s => form.append(`sub_${s.scene}_${s.index}`, s.blob, `sub_${s.scene}_${s.index}.png`));
@@ -154,7 +161,15 @@ export async function renderSceneRecap(p: SceneRecapRenderParams): Promise<Scene
   form.append('bgColor', p.bgColor);
   if (p.textLayers?.length) {
     p.textLayers.forEach((t, i) => form.append(`textlayer_${i}`, t.png, `textlayer_${i}.png`));
-    form.append('textLayerTimes', JSON.stringify(p.textLayers.map(t => ({ start: t.start, end: t.end }))));
+    form.append('textLayerTimes', JSON.stringify(p.textLayers.map(t => ({ start: t.start, end: t.end, anim: t.anim || 'none' }))));
+  }
+  if (p.fx) {
+    form.append('fx', JSON.stringify({
+      transition: p.fx.transition, fadeIn: p.fx.fadeIn, fadeOut: p.fx.fadeOut, filter: p.fx.filter, duck: p.fx.duck,
+      intro: { on: !!p.introPng && p.fx.intro.on, dur: p.fx.intro.dur }, outro: { on: !!p.outroPng && p.fx.outro.on, dur: p.fx.outro.dur },
+    }));
+    if (p.introPng && p.fx.intro.on) form.append('card_intro', p.introPng, 'card_intro.png');
+    if (p.outroPng && p.fx.outro.on) form.append('card_outro', p.outroPng, 'card_outro.png');
   }
   if (p.adjust) {
     form.append('adjZoom', String(p.adjust.zoom));

@@ -168,7 +168,7 @@ const server = http.createServer((req, res) => {
       status: 'online',
       engine: 'vbs-ffmpeg-worker',
       hosted: HOSTED,
-      version: '1.10.0',
+      version: '1.11.0',
       protected: !!WORKER_KEY,
       ffmpegAvailable: isFfmpegInstalled,
       ffmpegVersion: ffmpegVersionStr,
@@ -598,7 +598,7 @@ const server = http.createServer((req, res) => {
             const f = parsed.files[`sub_${i}_${j}`];
             if (f && f.data && f.data.length) subs.push({ from: s.from, to: s.to, file: saveTemp(`sub_${i}_${j}.png`, f.data) });
           });
-          scenes.push({ start: rawScenes[i].start, end: rawScenes[i].end, narration: rawScenes[i].narration, subs });
+          scenes.push({ start: rawScenes[i].start, end: rawScenes[i].end, narration: rawScenes[i].narration, subs, speed: Number(rawScenes[i].speed) || 0 });
         }
 
         const logoPart = parsed.files['logo'];
@@ -607,13 +607,17 @@ const server = http.createServer((req, res) => {
         const textLayers = [];
         try {
           const times = JSON.parse(parsed.fields['textLayerTimes'] || '[]');
-          (Array.isArray(times) ? times : []).slice(0, 12).forEach((t, i) => {
+          (Array.isArray(times) ? times : []).slice(0, 20).forEach((t, i) => {
             const f = parsed.files['textlayer_' + i];
             if (f && f.data && f.data.length && Number.isFinite(Number(t.start)) && Number.isFinite(Number(t.end))) {
-              textLayers.push({ file: saveTemp(`textlayer_${i}.png`, f.data), start: Number(t.start), end: Number(t.end) });
+              textLayers.push({ file: saveTemp(`textlayer_${i}.png`, f.data), start: Number(t.start), end: Number(t.end), anim: ['fade', 'slide'].includes(t.anim) ? t.anim : 'none' });
             }
           });
         } catch { /* ignore bad layer list */ }
+        let fx = {};
+        try { fx = JSON.parse(parsed.fields['fx'] || '{}') || {}; } catch { fx = {}; }
+        const cardFile = (key) => { const c = parsed.files[key]; return c && c.data && c.data.length ? saveTemp(key + '.png', c.data) : undefined; };
+        const introPath = cardFile('card_intro'), outroPath = cardFile('card_outro');
         const bgmPart = parsed.files['bgm'];
         const bgmPath = bgmPart && bgmPart.data && bgmPart.data.length ? saveTemp('bgm.bin', bgmPart.data) : undefined;
         const framingRaw = parsed.fields['framing'] || 'blurred-fit';
@@ -627,6 +631,9 @@ const server = http.createServer((req, res) => {
           outputPath,
           logoPath,
           textLayers,
+          fx,
+          introPath,
+          outroPath,
           bgmPath,
           blurBand: parsed.fields['blurBandH'] ? { y: parseFloat(parsed.fields['blurBandY'] || '0.8'), h: parseFloat(parsed.fields['blurBandH']) } : undefined,
           bgmVolume: parsed.fields['bgmVolume'] ? parseFloat(parsed.fields['bgmVolume']) : undefined,
@@ -768,6 +775,18 @@ function adjustChain(a) {
   return parts.length ? parts.join(',') + ',' : '';
 }
 
+// Colour looks (CapCut-style presets). Applied to the picture only, before subtitles / logo / text are laid on top.
+const FILTER_PRESETS = {
+  cinematic: 'eq=contrast=1.12:saturation=0.9,colorbalance=rs=-0.04:bs=0.06:rh=0.07:bh=-0.05,vignette=PI/6',
+  warm: 'colorbalance=rs=0.08:rm=0.06:bs=-0.08:bm=-0.05,eq=saturation=1.1',
+  cool: 'colorbalance=rs=-0.06:bs=0.08:bm=0.05,eq=saturation=1.05',
+  bw: 'hue=s=0,eq=contrast=1.1',
+  vivid: 'eq=saturation=1.45:contrast=1.08',
+  vintage: 'curves=preset=vintage,noise=alls=7:allf=t',
+  matte: 'eq=contrast=0.9:brightness=0.04:saturation=0.8',
+  sharp: 'unsharp=5:5:0.9:5:5:0.0',
+};
+
 function sceneFilterGraph(o) {
   const W = o.outW, H = o.outH;
   // Optional: blur a horizontal band of the SOURCE frame (its burned-in subtitles) before anything else.
@@ -799,7 +818,10 @@ function sceneFilterGraph(o) {
 }
 
 async function renderRecap(opts) {
-  const { videoPath, audioPaths, scenes, outputPath } = opts;
+  const { videoPath, outputPath } = opts;
+  const fx = opts.fx || {};
+  let scenes = opts.scenes;
+  let audioPaths = opts.audioPaths;
   const paddingSeconds = 0.25, minSpeed = 0.9, maxSpeed = 1.25, fps = 30;
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'recap-'));
   try {
@@ -813,9 +835,33 @@ async function renderRecap(opts) {
     else { outW = evenNum(srcW); outH = evenNum(srcH); }
     const framing = opts.framing || 'blurred-fit';
 
+    // Intro / outro cards (full-frame PNGs drawn by the browser) become two extra silent "scenes".
+    const cardDur = (c, d) => Math.max(1, Math.min(8, Number(c && c.dur) || d));
+    let introDur = 0;
+    if (opts.introPath && fx.intro && fx.intro.on) {
+      introDur = cardDur(fx.intro, 2.5);
+      scenes = [{ card: { file: opts.introPath, dur: introDur }, subs: [] }, ...scenes];
+      audioPaths = [null, ...audioPaths];
+    }
+    if (opts.outroPath && fx.outro && fx.outro.on) {
+      scenes = [...scenes, { card: { file: opts.outroPath, dur: cardDur(fx.outro, 3) }, subs: [] }];
+      audioPaths = [...audioPaths, null];
+    }
+
     const sceneDurations = [], speechDurations = [], videoParts = [], audioParts = [];
     for (let i = 0; i < scenes.length; i++) {
       const sc = scenes[i];
+      if (sc.card) {
+        const dur = sc.card.dur;
+        const vC = path.join(work, `v_${i}.mp4`);
+        await runCmd('ffmpeg', ['-y', '-v', 'error', '-loop', '1', '-framerate', String(fps), '-i', sc.card.file, '-t', dur.toFixed(3),
+          '-vf', `scale=${outW}:${outH}:force_original_aspect_ratio=increase,crop=${outW}:${outH},setsar=1,fps=${fps},format=yuv420p`,
+          '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-r', String(fps), vC]);
+        const aC = path.join(work, `a_${i}.wav`);
+        await runCmd('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo', '-t', dur.toFixed(3), '-c:a', 'pcm_s16le', aC]);
+        videoParts.push(vC); audioParts.push(aC); sceneDurations.push(dur); speechDurations.push(0);
+        continue;
+      }
       const start = Math.max(0, Math.min(sourceDuration - 0.1, Number(sc.start) || 0));
       const end = Math.max(start + 0.5, Math.min(sourceDuration, Number(sc.end) || start + 5));
       const clipLen = end - start;
@@ -824,7 +870,14 @@ async function renderRecap(opts) {
 
       const speed = clipLen / target;
       let cutLen = clipLen, factor, holdSeconds = 0;
-      if (speed > maxSpeed) { cutLen = Math.min(clipLen, target * maxSpeed); factor = 1 / maxSpeed; }
+      const userSpeed = Number(sc.speed) > 0 ? Math.min(3, Math.max(0.25, Number(sc.speed))) : 0;
+      if (userSpeed) {
+        // chosen by the user: play the footage at this rate (0.5 = slow motion); hold the last picture if the source runs out
+        factor = 1 / userSpeed;
+        cutLen = Math.max(0.3, Math.min(target * userSpeed, sourceDuration - start));
+        holdSeconds = Math.max(0, target - cutLen * factor);
+      }
+      else if (speed > maxSpeed) { cutLen = Math.min(clipLen, target * maxSpeed); factor = 1 / maxSpeed; }
       else if (speed < minSpeed) {
         // Narration is longer than the scene: play it only a little slower and HOLD (freeze + slow zoom-in)
         // for the rest, so the picture never jumps into the next scene's footage and stays in step with the voice.
@@ -882,7 +935,30 @@ async function renderRecap(opts) {
       return f;
     };
     const joinedVideo = path.join(work, 'joined.mp4');
-    await runCmd('ffmpeg', ['-y', '-v', 'error', '-f', 'concat', '-safe', '0', '-i', writeList('v.txt', videoParts), '-c', 'copy', joinedVideo]);
+    const XFADE = ['fade', 'fadeblack', 'fadewhite', 'dissolve', 'wipeleft', 'wiperight', 'slideleft', 'slideright', 'slideup', 'slidedown', 'circleopen', 'circleclose', 'zoomin', 'pixelize', 'radial', 'smoothleft'];
+    const tType = fx.transition && XFADE.includes(fx.transition.type) ? fx.transition.type : 'none';
+    let joinedOk = false;
+    if (tType !== 'none' && videoParts.length > 1) {
+      try {
+        const lens = [];
+        for (const vp of videoParts) lens.push(await probeDuration(vp));
+        const td = Math.max(0.1, Math.min(1.5, Number(fx.transition.dur) || 0.5, Math.min(...lens) * 0.45));
+        const inArgs = [];
+        videoParts.forEach(vp => inArgs.push('-i', vp));
+        const gp = [];
+        videoParts.forEach((_, i) => gp.push(i < videoParts.length - 1 ? `[${i}:v]tpad=stop_mode=clone:stop_duration=${td.toFixed(3)}[p${i}]` : `[${i}:v]null[p${i}]`));
+        let prev = '[p0]', off = 0;
+        for (let i = 1; i < videoParts.length; i++) {
+          off += lens[i - 1];
+          const out = i === videoParts.length - 1 ? '[xv]' : `[x${i}]`;
+          gp.push(`${prev}[p${i}]xfade=transition=${tType}:duration=${td.toFixed(3)}:offset=${off.toFixed(3)}${out}`);
+          prev = out;
+        }
+        await runCmd('ffmpeg', ['-y', '-v', 'error', ...inArgs, '-filter_complex', gp.join(';'), '-map', '[xv]', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '19', '-r', String(fps), '-pix_fmt', 'yuv420p', joinedVideo]);
+        joinedOk = true;
+      } catch (e) { console.warn('[VBS Worker] transition pass failed, joining without transitions:', String(e.message || e).slice(0, 200)); }
+    }
+    if (!joinedOk) await runCmd('ffmpeg', ['-y', '-v', 'error', '-f', 'concat', '-safe', '0', '-i', writeList('v.txt', videoParts), '-c', 'copy', joinedVideo]);
     const joinedAudio = path.join(work, 'joined.wav');
     await runCmd('ffmpeg', ['-y', '-v', 'error', '-f', 'concat', '-safe', '0', '-i', writeList('a.txt', audioParts), '-c', 'copy', joinedAudio]);
     const totalDuration = sceneDurations.reduce((a, b) => a + b, 0);
@@ -938,8 +1014,11 @@ async function renderRecap(opts) {
 
     const parts = [];
     let vLabel = null;
-    if (subsList || opts.logoPath || layers.length) {
+    const presetChain = FILTER_PRESETS[fx.filter] || '';
+    const fIn = Math.max(0, Math.min(3, Number(fx.fadeIn) || 0)), fOut = Math.max(0, Math.min(3, Number(fx.fadeOut) || 0));
+    if (subsList || opts.logoPath || layers.length || presetChain || fIn > 0 || fOut > 0) {
       let chain = '[0:v]';
+      if (presetChain) { parts.push(`${chain}${presetChain}[vp]`); chain = '[vp]'; }
       if (subsList) {
         parts.push(`[${subIdx}:v]fps=${fps},format=rgba[s]`);
         parts.push(`${chain}[s]overlay=0:0:format=auto:eof_action=pass[v1]`);
@@ -951,23 +1030,43 @@ async function renderRecap(opts) {
         chain = '[v2]';
       }
       layers.forEach((l, k) => {
-        parts.push(`[${layerIdx[k]}:v]format=rgba[tl${k}]`);
-        parts.push(`${chain}[tl${k}]overlay=0:0:format=auto:shortest=1:enable='between(t,${l.start.toFixed(3)},${l.end.toFixed(3)})'[vt${k}]`);
+        const S = (l.start + introDur), E = (l.end + introDur);
+        const D = Math.max(0.1, Math.min(0.5, (E - S) / 3));
+        const fadeF = l.anim === 'fade' || l.anim === 'slide'
+          ? `,fade=t=in:st=${S.toFixed(3)}:d=${D.toFixed(3)}:alpha=1,fade=t=out:st=${(E - D).toFixed(3)}:d=${D.toFixed(3)}:alpha=1` : '';
+        const yExpr = l.anim === 'slide' ? `'if(lt(t,${(S + D).toFixed(3)}),(1-max(0,t-${S.toFixed(3)})/${D.toFixed(3)})*main_h*0.05,0)'` : '0';
+        parts.push(`[${layerIdx[k]}:v]format=rgba${fadeF}[tl${k}]`);
+        parts.push(`${chain}[tl${k}]overlay=0:${yExpr}:eval=frame:format=auto:shortest=1:enable='between(t,${S.toFixed(3)},${E.toFixed(3)})'[vt${k}]`);
         chain = `[vt${k}]`;
       });
-      parts.push(`${chain}format=yuv420p[v]`);
+      const fadeV = [fIn > 0 ? `fade=t=in:st=0:d=${fIn.toFixed(3)}` : '', fOut > 0 ? `fade=t=out:st=${Math.max(0, totalDuration - fOut).toFixed(3)}:d=${fOut.toFixed(3)}` : ''].filter(Boolean).join(',');
+      parts.push(`${chain}${fadeV ? fadeV + ',' : ''}format=yuv420p[v]`);
       vLabel = '[v]';
     }
     let aLabel = `${audioIdx}:a:0`;
     if (opts.bgmPath) {
-      // Background music: looped, set to the chosen level, ducked under the voice, faded out at the end.
+      // Background music: looped, set to the chosen level, (optionally) ducked under the voice, faded out at the end.
       const vol = Math.max(0.02, Math.min(1, Number(opts.bgmVolume) || 0.2));
       const fadeStart = Math.max(0, totalDuration - 2);
-      parts.push(`[${audioIdx}:a]aresample=44100,asplit=2[voice][vkey]`);
-      parts.push(`[${bgmIdx}:a]aresample=44100,aformat=channel_layouts=stereo,volume=${vol.toFixed(3)},atrim=0:${totalDuration.toFixed(3)},afade=t=out:st=${fadeStart.toFixed(3)}:d=2[bgm]`);
-      parts.push('[bgm][vkey]sidechaincompress=threshold=0.04:ratio=6:attack=20:release=500[bgmd]');
-      parts.push('[voice][bgmd]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]');
+      const duck = !fx.duck || fx.duck.on !== false;
+      const DUCK = { soft: 'threshold=0.06:ratio=3:attack=30:release=600', normal: 'threshold=0.04:ratio=6:attack=20:release=500', strong: 'threshold=0.02:ratio=12:attack=10:release=400' };
+      const bgmF = `[${bgmIdx}:a]aresample=44100,aformat=channel_layouts=stereo,volume=${vol.toFixed(3)},atrim=0:${totalDuration.toFixed(3)},afade=t=out:st=${fadeStart.toFixed(3)}:d=2`;
+      if (duck) {
+        parts.push(`[${audioIdx}:a]aresample=44100,asplit=2[voice][vkey]`);
+        parts.push(`${bgmF}[bgm]`);
+        parts.push(`[bgm][vkey]sidechaincompress=${DUCK[fx.duck && fx.duck.strength] || DUCK.normal}[bgmd]`);
+        parts.push('[voice][bgmd]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]');
+      } else {
+        parts.push(`[${audioIdx}:a]aresample=44100[voice]`);
+        parts.push(`${bgmF}[bgmd]`);
+        parts.push('[voice][bgmd]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]');
+      }
       aLabel = '[a]';
+    }
+    if (fIn > 0 || fOut > 0) {
+      const af = [fIn > 0 ? `afade=t=in:st=0:d=${fIn.toFixed(3)}` : '', fOut > 0 ? `afade=t=out:st=${Math.max(0, totalDuration - fOut).toFixed(3)}:d=${fOut.toFixed(3)}` : ''].filter(Boolean).join(',');
+      parts.push(`${aLabel.startsWith('[') ? aLabel : `[${aLabel}]`}${af}[af]`);
+      aLabel = '[af]';
     }
     if (parts.length) finalArgs.push('-filter_complex', parts.join(';'));
     finalArgs.push('-map', vLabel || '0:v:0', '-map', aLabel);
