@@ -5,6 +5,7 @@ import { GeminiTTSService, type RecapPlanScene } from '../services/geminiService
 import { assemblyAiService } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
 import { renderSceneRecap } from '../services/recapRenderService';
+import { isLongVideo, uploadVideoToWorker, fetchWorkerSpeech } from '../services/workerSession';
 import { captureVideoFrames } from '../utils/videoFrames';
 import { applyLoudnessGain, audioBufferToWav, normalizeLoudness, renderProcessedAudio } from '../utils/audioUtils';
 import { generateSRT, downloadSrtFile, splitSentenceIntoCueBlocks } from '../utils/subtitleUtils';
@@ -196,6 +197,11 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [blurAmount, setBlurAmount] = useState(40);
   const [textLayers, setTextLayers] = useState<TextLayer[]>([]);
   const [fx, setFx] = useState<RecapFx>(defaultFx);
+  /** 0 = by coverage (Highlights / Standard / Whole); otherwise the recap length in minutes (for long films) */
+  const [targetMin, setTargetMin] = useState(0);
+  const sessionRef = useRef<{ file: File; id: string } | null>(null);
+  const coverage = targetMin > 0 && duration > 0 ? Math.min(1, (targetMin * 60) / duration) : length === 'short' ? 0.55 : length === 'full' ? 1 : 0.85;
+  const longFilm = !!file && isAdmin && isLongVideo(file, duration);
   const [overlays, setOverlays] = useState<ImageOverlay[]>([]);
   const [zoom, setZoom] = useState(1);
   const [panX, setPanX] = useState(0);
@@ -259,6 +265,16 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     }
   };
 
+  /** Long videos live on the PC worker: uploaded once (streamed to disk), reused for the speech track and the render. */
+  const ensureSession = async (signal?: AbortSignal): Promise<string> => {
+    if (!file) throw new Error('No video');
+    if (sessionRef.current && sessionRef.current.file === file) return sessionRef.current.id;
+    const mb = Math.round(file.size / 1048576);
+    const r = await uploadVideoToWorker(file, f => setProgress({ text: `${isMm ? 'PC Worker ဆီ ဗီဒီယို ပို့နေသည်' : 'Sending the video to your PC worker'} (${mb} MB) ${Math.round(f * 100)}%`, percent: Math.max(1, Math.round(f * 12)) }), signal);
+    sessionRef.current = { file, id: r.videoId };
+    return r.videoId;
+  };
+
   const run = async (resume = false) => {
     if (!file) {
       showToast(isMm ? 'ဗီဒီယိုဖိုင် အရင်တင်ပါ' : 'Please upload a video first', 'error');
@@ -266,6 +282,10 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     }
     if (!duration) {
       showToast(isMm ? 'ဗီဒီယိုအရှည်ကို ဖတ်မရပါ — mp4 ဖိုင်ကို စမ်းပါ' : 'Could not read the video length', 'error');
+      return;
+    }
+    if (!isAdmin && file.size > 190 * 1048576) {
+      showToast(isMm ? 'ဒီဗီဒီယိုက ကြီးလွန်းပါတယ် (190 MB ထက်ကျော်) — ရှည်တဲ့ ဇာတ်ကားကို Admin ရဲ့ PC Worker နဲ့ပဲ လုပ်လို့ရပါတယ်' : 'This video is too large for the shared server (over 190 MB). Long films can only be recapped with the admin PC worker.', 'error');
       return;
     }
     const ctrl = new AbortController();
@@ -299,7 +319,15 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         stageRef.current = '1 listen (AssemblyAI)'; lap('1 listen (AssemblyAI)');
         setProgress({ text: isMm ? '၁/၄ စကားပြောကို နားထောင်နေသည်…' : '1/4 Listening to the speech…', percent: 3 });
         // Upload only the sound (small WAV) instead of the whole video: big uploads from a phone often die with "Load failed".
-        const speech = (await extractSpeechWav(file)) || file;
+        // A long film is sent to the PC worker once, which extracts the speech (the browser cannot hold a whole movie in memory).
+        let speech: Blob;
+        if (longFilm) {
+          const vid = await ensureSession(ctrl.signal);
+          setProgress({ text: isMm ? '၁/၄ စကားပြောကို ထုတ်ယူနေသည်…' : '1/4 Extracting the speech…', percent: 13 });
+          speech = await fetchWorkerSpeech(vid);
+        } else {
+          speech = (await extractSpeechWav(file)) || file;
+        }
         const tr = await assemblyAiService.processToSrt({
           apiKey: key,
           file: speech,
@@ -320,11 +348,11 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         {
           style: 'Cinematic recap that follows the story itself: infer the genre and mood (drama, thriller, action, comedy, romance...) from what actually happens and let it shift scene by scene. Never impose a genre the footage does not show.',
           tone: 'Engaging, emotional, cinematic and captivating',
-          targetMinutes: length === 'short' ? 1.5 : length === 'full' ? 9 : 4,
+          targetMinutes: targetMin > 0 ? targetMin : length === 'short' ? 1.5 : length === 'full' ? 9 : 4,
           sourceSeconds: duration,
           targetLanguage: language,
           cues,
-          coverage: length === 'short' ? 0.55 : length === 'full' ? 1 : 0.85,
+          coverage,
           getFrames: async (a, b) => {
             const n = 5;
             return captureVideoFrames(file, Array.from({ length: n }, (_, i) => a + ((b - a) * (i + 0.5)) / n), 448, 0.6);
@@ -373,7 +401,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       const sceneAudios: Blob[] = resume && draftRef.current?.audios ? [...draftRef.current.audios] : [];
       if (sceneAudios.length > segments.length) sceneAudios.length = segments.length;
       // The voiceover must fit the video: each scene gets the time of the part of the video it tells.
-      const coverageFactor = length === 'short' ? 0.55 : length === 'full' ? 1 : 0.85;
+      const coverageFactor = coverage;
       const totalTarget = duration > 0 ? duration * coverageFactor : 0;
       const totalChars = segments.reduce((n, sg) => n + sg.text.length, 0) || 1;
       const lang: 'mm' | 'en' = language === 'en' ? 'en' : 'mm';
@@ -636,10 +664,16 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         serverUrl = td.url;
         authToken = td.token;
       }
+      let videoId: string | undefined;
+      if (longFilm) {
+        setRendering(isMm ? 'PC Worker ဆီ ဗီဒီယို ပို့နေသည်…' : 'Sending the video to your PC worker…');
+        videoId = await ensureSession();
+      }
       const scenes: RecapPlanScene[] = result.segments.map((s, i) => ({ fromCue: i, toCue: i, start: s.start, end: s.end, narration: s.text, speed: s.speed || 0 }));
       const r = await renderSceneRecap({
         serverUrl,
         authToken,
+        videoId,
         gemini: gemini(),
         videoFile: file,
         videoFileName: file.name,
@@ -732,6 +766,38 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             ]}
           />
         </div>
+
+        {/* Fixed length: for long films (e.g. a 2-hour movie into a 15 or 30 minute recap) */}
+        {duration >= 480 && (
+          <div className="mt-5">
+            <Label icon={<Film size={12} />}>{isMm ? 'Recap ကြာချိန် သတ်မှတ်မယ် (ဇာတ်ကားရှည်အတွက်)' : 'Recap length (for long films)'}</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {[0, 5, 10, 15, 20, 30, 45, 60].filter(m => m === 0 || m * 60 < duration * 0.9).map(m => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setTargetMin(m)}
+                  className={`px-3 py-2 rounded-xl text-[12px] font-bold border transition ${targetMin === m ? 'bg-amber-400 text-black border-amber-400' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'}`}
+                >
+                  {m === 0 ? (isMm ? 'အပေါ်ကအတိုင်း' : 'As above') : `${m} ${isMm ? 'မိနစ်' : 'min'}`}
+                </button>
+              ))}
+            </div>
+            {targetMin > 0 && (
+              <p className="mt-2 text-[11.5px] leading-relaxed text-slate-500">
+                {isMm
+                  ? `${fmt(duration)} ရှိတဲ့ ဗီဒီယိုကို ~${targetMin} မိနစ် Recap အဖြစ် အကျဉ်းချုပ်မယ်။ ဇာတ်လမ်းတစ်ခုလုံးကို အစအဆုံး ဖော်ပြပြီး တစ်ပိုင်းချင်းစီမှာ မူရင်းထဲက အပိုင်းအစတွေကို ရောစပ်ပြပါမယ်။`
+                  : `Condenses the ${fmt(duration)} video into a ~${targetMin} minute recap that tells the whole story, showing several moments from each stretch.`}
+                {duration > 1800 && (isMm ? ' ကြာပါလိမ့်မယ် (ဇာတ်ကားရှည်ဆိုရင် မိနစ် ၃၀–၆၀ ထိ ကြာနိုင်ပါတယ်) — ဖွင့်ထားပြီး စောင့်ပါ။' : ' This takes a while (30-60 minutes for a feature film) - keep the page open.')}
+              </p>
+            )}
+            {longFilm && (
+              <p className="mt-2 text-[11.5px] leading-relaxed text-sky-300/80">
+                {isMm ? 'ဇာတ်ကားရှည်ဖြစ်လို့ ဗီဒီယိုကို PC Worker ဆီ တစ်ခါပို့ပြီး အဲဒီမှာပဲ အသံထုတ်/render လုပ်ပါမယ်။ Worker v1.12.0 နဲ့ ဖွင့်ထားရပါမယ်။' : 'Long film: the video is sent once to your PC worker, which extracts the speech and renders it. Needs worker v1.12.0.'}
+              </p>
+            )}
+          </div>
+        )}
 
         </Group>
 

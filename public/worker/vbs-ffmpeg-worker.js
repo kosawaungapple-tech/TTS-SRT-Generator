@@ -94,6 +94,26 @@ const OUTPUT_DIR = path.join(__dirname, 'worker_output');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
+/** Path of a video uploaded with /api/recap/upload, or null. */
+function sessionVideo(id) {
+  if (!/^[a-f0-9]{16}$/.test(String(id || ''))) return null;
+  const f = path.join(UPLOADS_DIR, `sess_${id}.bin`);
+  return fs.existsSync(f) ? f : null;
+}
+// Uploaded long videos are kept for 24 hours, then removed.
+function cleanSessions() {
+  try {
+    const now = Date.now();
+    for (const f of fs.readdirSync(UPLOADS_DIR)) {
+      if (!f.startsWith('sess_')) continue;
+      const fp = path.join(UPLOADS_DIR, f);
+      if (now - fs.statSync(fp).mtimeMs > 24 * 3600 * 1000) fs.rmSync(fp, { force: true });
+    }
+  } catch {}
+}
+cleanSessions();
+setInterval(cleanSessions, 3600 * 1000).unref();
+
 // Check FFmpeg availability
 let ffmpegVersionStr = 'Unknown';
 let isFfmpegInstalled = false;
@@ -168,7 +188,7 @@ const server = http.createServer((req, res) => {
       status: 'online',
       engine: 'vbs-ffmpeg-worker',
       hosted: HOSTED,
-      version: '1.11.0',
+      version: '1.12.0',
       protected: !!WORKER_KEY,
       ffmpegAvailable: isFfmpegInstalled,
       ffmpegVersion: ffmpegVersionStr,
@@ -509,6 +529,52 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // 3b. Long videos (movies): the file is sent ONCE, streamed straight to disk (no memory buffering), then reused for
+  // speech extraction and for rendering. Only on your own PC worker (not on a shared hosted server).
+  if (req.method === 'POST' && (pathname === '/api/recap/upload' || pathname === '/api/recap/audio')) {
+    const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+    if (HOSTED) { req.resume(); return json(403, { success: false, error: 'Large uploads are only available on your own PC worker.' }); }
+    if (pathname === '/api/recap/upload') {
+      const id = crypto.randomBytes(8).toString('hex');
+      const dest = path.join(UPLOADS_DIR, `sess_${id}.bin`);
+      const out = fs.createWriteStream(dest);
+      let bytes = 0, failed = false;
+      req.on('data', c => { bytes += c.length; });
+      req.pipe(out);
+      out.on('error', e => { failed = true; try { fs.rmSync(dest, { force: true }); } catch {} json(500, { success: false, error: 'Could not save the video: ' + e.message }); });
+      req.on('aborted', () => { failed = true; out.destroy(); try { fs.rmSync(dest, { force: true }); } catch {} });
+      out.on('finish', async () => {
+        if (failed) return;
+        try {
+          const duration = await probeDuration(dest);
+          json(200, { success: true, videoId: id, bytes, duration });
+        } catch (e) {
+          try { fs.rmSync(dest, { force: true }); } catch {}
+          json(400, { success: false, error: 'That file is not a readable video: ' + String(e.message || e).slice(0, 160) });
+        }
+      });
+      return;
+    }
+    let body = '';
+    req.on('data', c => { body += c; if (body.length > 10000) req.destroy(); });
+    req.on('end', async () => {
+      try {
+        const { videoId } = JSON.parse(body || '{}');
+        const src = sessionVideo(videoId);
+        if (!src) return json(404, { success: false, error: 'The uploaded video is no longer on the worker. Upload it again.' });
+        // mono 16 kHz speech track, small enough to send to speech-to-text (about 20 MB per hour)
+        const mp3 = path.join(UPLOADS_DIR, `sess_${videoId}_speech.mp3`);
+        await runCmd('ffmpeg', ['-y', '-v', 'error', '-i', src, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'libmp3lame', '-b:a', '48k', mp3]);
+        const size = fs.statSync(mp3).size;
+        res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': size });
+        const rs = fs.createReadStream(mp3);
+        rs.pipe(res);
+        rs.on('close', () => { try { fs.rmSync(mp3, { force: true }); } catch {} });
+      } catch (e) { json(500, { success: false, error: String(e.message || e).slice(0, 300) }); }
+    });
+    return;
+  }
+
   // 4. Scene-based Recap Rendering (one narration clip per scene -> one finished video)
   if (req.method === 'POST' && (pathname === '/api/recap/render' || pathname === '/recap/render')) {
     const contentType = req.headers['content-type'] || '';
@@ -572,11 +638,13 @@ const server = http.createServer((req, res) => {
         }
         const parsed = parseMultipart(Buffer.concat(recapChunks), recapBoundary);
         const videoPart = parsed.files['video'];
-        if (!videoPart || !videoPart.data || videoPart.data.length === 0) return fail(400, 'No video file provided');
+        const sessionPath = !HOSTED ? sessionVideo(parsed.fields['videoId']) : null;
+        if (parsed.fields['videoId'] && !sessionPath) return fail(404, 'The uploaded video is no longer on the worker (kept for 24 hours). Upload it again.');
+        if (!sessionPath && (!videoPart || !videoPart.data || videoPart.data.length === 0)) return fail(400, 'No video file provided');
 
         let rawScenes;
         try { rawScenes = JSON.parse(parsed.fields['scenes'] || '[]'); } catch { return fail(400, 'scenes must be valid JSON'); }
-        if (!Array.isArray(rawScenes) || rawScenes.length === 0 || rawScenes.length > 80) return fail(400, 'scenes must contain 1-80 items');
+        if (!Array.isArray(rawScenes) || rawScenes.length === 0 || rawScenes.length > 240) return fail(400, 'scenes must contain 1-240 items');
 
         const stamp = Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         const saveTemp = (name, data) => {
@@ -586,7 +654,7 @@ const server = http.createServer((req, res) => {
           return f;
         };
 
-        const videoPath = saveTemp('video.bin', videoPart.data);
+        const videoPath = sessionPath || saveTemp('video.bin', videoPart.data);
         const audioPaths = [];
         const scenes = [];
         for (let i = 0; i < rawScenes.length; i++) {
@@ -888,6 +956,29 @@ async function renderRecap(opts) {
       else factor = 1 / speed;
 
       const vOut = path.join(work, `v_${i}.mp4`);
+      // A long stretch of footage told in a short narration (movie -> 15-30 min recap): instead of showing only the first
+      // part of the stretch, show several short moments spread across it, so the picture follows what the voice says.
+      if (!userSpeed && speed > 1.6 && fx.montage !== false && target >= 6) {
+        const n = Math.max(2, Math.min(12, Math.round(target / 4)));
+        const pieceLen = target / n;
+        const pieces = [];
+        for (let k = 0; k < n; k++) {
+          const ps = start + (Math.max(0, clipLen - pieceLen) * k) / (n - 1);
+          const cp = path.join(work, `v_${i}_m${k}.mp4`);
+          await runCmd('ffmpeg', ['-y', '-v', 'error', '-ss', ps.toFixed(3), '-t', pieceLen.toFixed(3), '-i', videoPath, '-an',
+            '-filter_complex', sceneFilterGraph({ fps, outW, outH, framing, keepSourceFrame, blurAmount: opts.blurAmount || 20, bgColor: opts.bgColor || '#000000', blurBand: opts.blurBand, adjust: opts.adjust, factor: 1, holdSeconds: 0 }),
+            '-map', '[v]', '-t', pieceLen.toFixed(3), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-r', String(fps), cp]);
+          pieces.push(cp);
+        }
+        const lstM = path.join(work, `v_${i}_mlist.txt`);
+        fs.writeFileSync(lstM, pieces.map(x => `file '${x.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`).join('\n'));
+        await runCmd('ffmpeg', ['-y', '-v', 'error', '-f', 'concat', '-safe', '0', '-i', lstM, '-t', target.toFixed(3), '-c', 'copy', vOut]);
+        const aM = path.join(work, `a_${i}.wav`);
+        await runCmd('ffmpeg', ['-y', '-v', 'error', '-i', audioPaths[i],
+          '-af', `apad=pad_dur=${paddingSeconds.toFixed(3)},atrim=0:${target.toFixed(3)},aresample=44100`, '-ac', '2', aM]);
+        videoParts.push(vOut); audioParts.push(aM); sceneDurations.push(target); speechDurations.push(narrDur);
+        continue;
+      }
       const gOpts = { fps, outW, outH, framing, keepSourceFrame, blurAmount: opts.blurAmount || 20, bgColor: opts.bgColor || '#000000', blurBand: opts.blurBand, adjust: opts.adjust };
       const encode = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-r', String(fps)];
       if (opts.freezeZoom !== false && holdSeconds >= 0.8) {
