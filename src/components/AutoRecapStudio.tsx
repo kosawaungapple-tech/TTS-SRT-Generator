@@ -16,8 +16,9 @@ import { RecapPreview } from './RecapPreview';
 import { FfmpegWorkerManager } from './FfmpegWorkerManager';
 import { RecapShare } from './RecapShare';
 import { SceneEditor } from './SceneEditor';
-import { TextLayersEditor } from './TextLayersEditor';
 import { renderTextLayerPng, type TextLayer } from '../utils/recapTextLayers';
+import { EditToolsPanel } from './EditToolsPanel';
+import { defaultFx, renderCardPng, renderImageOverlayPng, FILTER_CSS, type ImageOverlay, type RecapFx } from '../utils/recapFx';
 import { getExtraKeys } from '../services/geminiKeyPool';
 import { authHeader } from '../services/serverAuth';
 import { loadLogoImage, renderLogoPng, type LogoPosition } from '../utils/recapLogo';
@@ -34,7 +35,7 @@ interface Props {
 
 type SourceMode = 'speech' | 'visual';
 
-interface Segment { start: number; end: number; text: string }
+interface Segment { start: number; end: number; text: string; speed?: number }
 
 interface Result {
   script: string;
@@ -194,6 +195,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [framing, setFraming] = useState<'blurred-fit' | 'cover' | 'letterbox'>('blurred-fit');
   const [blurAmount, setBlurAmount] = useState(40);
   const [textLayers, setTextLayers] = useState<TextLayer[]>([]);
+  const [fx, setFx] = useState<RecapFx>(defaultFx);
+  const [overlays, setOverlays] = useState<ImageOverlay[]>([]);
   const [zoom, setZoom] = useState(1);
   const [panX, setPanX] = useState(0);
   const [panY, setPanY] = useState(0);
@@ -495,13 +498,13 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const baseName = (file?.name || 'recap').replace(/\.[^/.]+$/, '');
   const [dlBusy, setDlBusy] = useState(false);
   /** Applies the scene editor: skipped scenes are dropped, the rest are re-ordered / re-trimmed, and the voiceover + subtitles are rebuilt to match. */
-  const applySceneEdits = async (plan: { idx: number; on: boolean; start: number; end: number }[]) => {
+  const applySceneEdits = async (plan: { idx: number; on: boolean; start: number; end: number; speed: number }[]) => {
     const base = baseRef.current;
     if (!base || !result) return;
     const kept = plan.filter(p => p.on);
     if (!kept.length) { showToast(isMm ? 'အနည်းဆုံး scene တစ်ခု ရှိရပါမယ်' : 'Keep at least one scene', 'error'); return; }
     try {
-      const segments = kept.map(p => ({ start: p.start, end: p.end, text: base.segments[p.idx].text }));
+      const segments = kept.map(p => ({ start: p.start, end: p.end, text: base.segments[p.idx].text, speed: p.speed || 0 }));
       const joined = await joinScenes(segments, kept.map(p => base.sceneAudios[p.idx]), false);
       URL.revokeObjectURL(result.voiceoverUrl);
       setResult({
@@ -633,7 +636,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         serverUrl = td.url;
         authToken = td.token;
       }
-      const scenes: RecapPlanScene[] = result.segments.map((s, i) => ({ fromCue: i, toCue: i, start: s.start, end: s.end, narration: s.text }));
+      const scenes: RecapPlanScene[] = result.segments.map((s, i) => ({ fromCue: i, toCue: i, start: s.start, end: s.end, narration: s.text, speed: s.speed || 0 }));
       const r = await renderSceneRecap({
         serverUrl,
         authToken,
@@ -649,8 +652,13 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         framing,
         blurAmount,
         adjust: adjust || null,
-        textLayers: (await Promise.all(textLayers.map(async l => ({ png: await renderTextLayerPng(l, w, h), start: l.start, end: l.end }))))
-          .filter((t): t is { png: Blob; start: number; end: number } => !!t.png),
+        textLayers: [
+          ...(await Promise.all(textLayers.map(async l => ({ png: await renderTextLayerPng(l, w, h), start: l.start, end: l.end, anim: l.anim || 'none' })))),
+          ...(await Promise.all(overlays.map(async o => ({ png: await renderImageOverlayPng(o, w, h), start: o.start, end: o.end, anim: o.anim })))),
+        ].filter((t): t is { png: Blob; start: number; end: number; anim: 'none' | 'fade' | 'slide' } => !!t.png),
+        fx,
+        introPng: await renderCardPng(fx.intro, w, h),
+        outroPng: await renderCardPng(fx.outro, w, h),
         bgColor: '#000000',
         subtitleStyle: getSubtitleStyle(subPreset, subY, subScale),
         subtitleBlur: blurSubOn ? { y: blurSubY / 100, h: blurSubH / 100 } : null,
@@ -988,6 +996,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                 blurAmount={blurAmount}
                 adjust={adjust}
                 textLayers={textLayers}
+                filterCss={FILTER_CSS[fx.filter]}
                 subPreset={subPreset}
                 subY={subY}
                 subScale={subScale}
@@ -1013,11 +1022,6 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                 isMm={isMm}
                 onApply={applySceneEdits}
               />
-            </div>
-          )}
-          {result.hasVideoTimes && (
-            <div className="mt-5 pt-5 border-t border-white/10">
-              <TextLayersEditor layers={textLayers} onChange={setTextLayers} duration={result.duration} isMm={isMm} />
             </div>
           )}
           <div className="mt-5 pt-5 border-t border-white/10">
@@ -1065,6 +1069,23 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           <p className="mt-3 text-[11.5px] leading-relaxed text-slate-500">
             {isMm ? 'Voiceover နဲ့ SRT က အချိန်တူညီပါတယ် — CapCut Desktop/Web မှာ နှစ်ခုစလုံးကို 0:00 မှာ တင်လိုက်ရုံပါ။' : 'Voiceover and SRT share one timeline — drop both at 0:00 in CapCut Desktop / Web.'}
           </p>
+
+          {result.hasVideoTimes && (
+            <div className="mt-5">
+              <EditToolsPanel
+                fx={fx}
+                onFx={setFx}
+                textLayers={textLayers}
+                onTextLayers={setTextLayers}
+                overlays={overlays}
+                onOverlays={setOverlays}
+                duration={result.duration}
+                hasBgm={!!bgmFile}
+                thumb={thumb}
+                isMm={isMm}
+              />
+            </div>
+          )}
 
           <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.03] p-4 space-y-5">
             <div className="text-[13px] font-extrabold text-white">{isMm ? '🎛️ ဗီဒီယို ပြင်ဆင်ချက်များ' : '🎛️ Video options'}</div>

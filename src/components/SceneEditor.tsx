@@ -1,10 +1,10 @@
 import React, { useRef, useState } from 'react';
 import { ArrowUp, ArrowDown, Play, Pause, RotateCcw, Check } from 'lucide-react';
 
-export interface ScenePlanItem { idx: number; on: boolean; start: number; end: number }
+export interface ScenePlanItem { idx: number; on: boolean; start: number; end: number; /** 0 = fit to the narration */ speed: number }
 
 interface Props {
-  base: { start: number; end: number; text: string }[];
+  base: { start: number; end: number; text: string; speed?: number }[];
   srcUrl: string | null;
   videoDuration: number;
   isMm: boolean;
@@ -15,7 +15,7 @@ const fmt = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart
 
 /** Before rendering: skip scenes, re-order them, and change which part of the footage each scene shows. */
 export const SceneEditor: React.FC<Props> = ({ base, srcUrl, videoDuration, isMm, onApply }) => {
-  const fresh = () => base.map((s, i) => ({ idx: i, on: true, start: s.start, end: s.end }));
+  const fresh = () => base.map((s, i) => ({ idx: i, on: true, start: s.start, end: s.end, speed: s.speed || 0 }));
   const [plan, setPlan] = useState<ScenePlanItem[]>(fresh);
   const [playing, setPlaying] = useState<number | null>(null);
   const vids = useRef<Record<number, HTMLVideoElement | null>>({});
@@ -83,6 +83,16 @@ export const SceneEditor: React.FC<Props> = ({ base, srcUrl, videoDuration, isMm
                 </label>
                 <label className="text-[10px] text-slate-400 flex items-center gap-1">{isMm ? 'ဆုံး' : 'to'}
                   <input type="number" step={0.5} min={0} max={max} value={Number(p.end.toFixed(1))} onChange={e => setEnd(pos, Number(e.target.value))} className={num} />
+                </label>
+                <label className="text-[10px] text-slate-400 flex items-center gap-1">{isMm ? 'အမြန်နှုန်း' : 'speed'}
+                  <select value={p.speed} onChange={e => patch(pos, { speed: Number(e.target.value) })} className="bg-slate-900 border border-white/10 rounded-lg px-1.5 py-1 text-[11px] text-white">
+                    <option value={0}>{isMm ? 'အလိုအလျောက်' : 'Auto'}</option>
+                    <option value={0.5}>0.5x ({isMm ? 'Slow-mo' : 'slow-mo'})</option>
+                    <option value={0.75}>0.75x</option>
+                    <option value={1}>1x</option>
+                    <option value={1.5}>1.5x</option>
+                    <option value={2}>2x</option>
+                  </select>
                 </label>
                 <span className="text-[10px] text-slate-500">{fmt(p.start)}–{fmt(p.end)}</span>
               </div>

@@ -14,10 +14,12 @@ export interface TextLayer {
   stroke: boolean;
   /** dark box behind the text */
   box: boolean;
+  /** how it appears */
+  anim?: 'none' | 'fade' | 'slide';
 }
 
 export function newTextLayer(id: number, start = 0, end = 3): TextLayer {
-  return { id, text: '', start, end, x: 50, y: 12, size: 6, color: '#ffffff', stroke: true, box: false };
+  return { id, text: '', start, end, x: 50, y: 12, size: 6, color: '#ffffff', stroke: true, box: false, anim: 'fade' };
 }
 
 /** Draws one text layer on a transparent full-frame PNG that the render worker lays over the video between start and end. */

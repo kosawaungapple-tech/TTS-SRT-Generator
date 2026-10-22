@@ -40,6 +40,8 @@ export interface RecapPlanScene {
   start: number; // seconds in the source video
   end: number; // seconds in the source video
   narration: string;
+  /** optional: play the footage at this rate (0.5 = slow motion); omitted = fit to the narration */
+  speed?: number;
 }
 
 export class GeminiTTSService {
