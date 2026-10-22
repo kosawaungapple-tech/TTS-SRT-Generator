@@ -985,4 +985,49 @@ async function renderRecap(opts) {
 server.requestTimeout = 0; // long uploads / renders must not be cut off
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[VBS Worker] HTTP Server actively listening on 0.0.0.0:${PORT}`);
+  if (HOSTED) startAutoPublish();
 });
+
+// ---------------------------------------------------------------------------
+// Auto-publish (hosted mode): opens a Cloudflare quick tunnel to this worker and tells the website its
+// current address every minute, so phones can render on this PC with nothing to set up.
+//   SITE_URL     website address (default https://tts-srt-generator.vercel.app)
+//   PUBLIC_URL   if you already have a fixed https address, it is published as is and no tunnel is started
+//   NO_AUTO=1    turn this off
+// Needs `cloudflared` installed (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/).
+// ---------------------------------------------------------------------------
+function startAutoPublish() {
+  if (process.env.NO_AUTO === '1') return;
+  const site = (process.env.SITE_URL || 'https://tts-srt-generator.vercel.app').replace(/\/+$/, '');
+  let current = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
+  const publish = async () => {
+    if (!current) return;
+    const ts = Date.now();
+    const sig = crypto.createHmac('sha256', process.env.RENDER_SECRET).update(`${ts}.${current}`).digest('hex');
+    try {
+      const r = await fetch(`${site}/api/render/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: current, ts, sig }) });
+      if (!r.ok) console.warn(`[Auto] website refused the address (${r.status}): ${(await r.text()).slice(0, 160)}`);
+    } catch (e) { console.warn('[Auto] could not reach the website:', e.message); }
+  };
+  setInterval(publish, 60 * 1000);
+  if (current) { console.log(`[Auto] publishing ${current} to ${site}`); void publish(); return; }
+
+  const run = () => {
+    let child;
+    try { child = spawn('cloudflared', ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`], { stdio: ['ignore', 'ignore', 'pipe'] }); }
+    catch (e) { console.warn('[Auto] cloudflared could not start:', e.message); return; }
+    child.on('error', e => {
+      if (e.code === 'ENOENT') console.warn('[Auto] cloudflared is not installed - install it, or set PUBLIC_URL, to let phones use this PC automatically.');
+      else console.warn('[Auto] cloudflared error:', e.message);
+    });
+    child.stderr.on('data', d => {
+      const m = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i.exec(String(d));
+      if (m && m[0] !== current) { current = m[0]; console.log(`[Auto] 📱 phones can now use this PC: ${current}`); void publish(); }
+    });
+    child.on('exit', code => {
+      current = '';
+      if (code !== null) { console.warn('[Auto] tunnel closed, restarting in 5s'); setTimeout(run, 5000); }
+    });
+  };
+  run();
+}
