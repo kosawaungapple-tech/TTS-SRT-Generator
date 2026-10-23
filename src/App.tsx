@@ -2365,7 +2365,7 @@ export default function App() {
                 {([
                   { key: 'studio', icon: <Mic2 size={18} />, title: t('nav.studio'), sub: language === 'mm' ? 'စာမှ အသံ' : 'Text to speech', active: activeTab === 'generate', busy: isStudioProcessing, locked: false,
                     go: () => handleTabSwitch('generate') },
-                  { key: 'srt', icon: <FileText size={18} />, title: language === 'mm' ? 'SRT စာတန်းထိုး' : 'Speech → SRT', sub: language === 'mm' ? 'အသံမှ စာတန်း' : 'Subtitles from audio', active: activeTab === 'transcriber' && subtitlesSubTab === 'transcriber', busy: isTranscriberProcessing, locked: !isPremium,
+                  { key: 'srt', icon: <FileText size={18} />, title: language === 'mm' ? 'စကားပြော → SRT' : 'Speech → SRT', sub: language === 'mm' ? 'အသံမှ စာတန်း' : 'Subtitles from audio', active: activeTab === 'transcriber' && subtitlesSubTab === 'transcriber', busy: isTranscriberProcessing, locked: !isPremium,
                     go: () => { if (!isPremium) { showToast(t('video.premiumRequired'), 'error'); return; } setSubtitlesSubTab('transcriber'); handleTabSwitch('transcriber'); } },
                   { key: 'recap', icon: <Clapperboard size={18} />, title: 'Auto Recap', sub: language === 'mm' ? 'ဗီဒီယို Recap အလိုအလျောက်' : 'Video recap, automated', active: activeTab === 'transcriber' && subtitlesSubTab === 'auto-recap', busy: isVideoEditorProcessing, locked: !isPremium,
                     go: () => { if (!isPremium) { showToast(t('video.premiumRequired'), 'error'); return; } setSubtitlesSubTab('auto-recap'); handleTabSwitch('transcriber'); } },
