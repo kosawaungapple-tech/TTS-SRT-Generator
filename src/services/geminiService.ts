@@ -1203,6 +1203,7 @@ ${list.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.te
       cues?: { start: number; end: number; text: string }[];
       getFrames?: (startSec: number, endSec: number) => Promise<string[]>;
       coverage?: number;
+      part?: { index: number; count: number; prevTail?: string };
       onStage?: (s: RecapStage) => void;
     }
   ): Promise<{ text: string; segments?: RecapSegment[] }> {
@@ -1257,6 +1258,7 @@ ${list.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.te
       cues: options?.cues,
       getFrames: options?.getFrames,
       coverage: options?.coverage,
+      part: options?.part,
       onStage: options?.onStage,
     });
   }

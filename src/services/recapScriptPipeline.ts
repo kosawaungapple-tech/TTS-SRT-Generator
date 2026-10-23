@@ -41,6 +41,8 @@ export interface RecapScriptOptions {
   getFrames?: (startSec: number, endSec: number) => Promise<string[]>;
   /** How much of the source the recap should cover: short highlights .4, medium .7, full 1 */
   coverage?: number;
+  /** This narration is one part of a long film's recap split into several videos */
+  part?: { index: number; count: number; prevTail?: string };
   onStage?: (s: RecapStage) => void;
 }
 
@@ -140,6 +142,16 @@ function voiceRules(language: 'mm' | 'en', style: string, tone: string): string 
 - မူရင်းတွင် မပါသော ဇာတ်ကောင်၊ အမည်၊ ဖြစ်ရပ်၊ ဇာတ်သိမ်း မဖန်တီးပါနှင့်။
 - ရသ (EMOTION) ကို အသက်သွင်းပါ: ဇာတ်ကောင်ရဲ့ ကြောက်စိတ်၊ မျှော်လင့်ချက်၊ နှောင်ကြိုးတွေကို ပြောပါ (မျက်နှာအမူအရာ၊ အသံ၊ အခြေအနေကနေ ထင်ရှားတာကိုသာ)။ ပရိသတ်ကို မေးခွန်းမေးပါ ("ဒီလူ ဘာကြောင့် ပြုံးနေတာလဲ?")။ တင်းမာတဲ့နေရာမှာ စာကြောင်းတို၊ သက်သာတဲ့နေရာမှာ ရှည်ပါ။ အပိုင်းတစ်ခုချင်းကို နောက်အပိုင်းကို စိတ်ဝင်စားစေမယ့် မေးခွန်း/အရိပ်အမြွက်ဖြင့် ပိတ်ပါ။
 - စတိုင်ကို သာဓကအတိုင်း ခံစားပါ၊ အကြောင်းအရာကို မကူးပါနှင့်: "တစ်ညတည်းနဲ့ သူ့ဘဝတစ်ခုလုံး ပြောင်းသွားမယ်လို့ ဘယ်သူမှ မထင်ခဲ့ဘူး။ ဒါပေမယ့် တံခါးကို ဖွင့်လိုက်တဲ့အချိန်မှာ သူမြင်လိုက်ရတာက... ဒါကို ကြည့်ပြီး ခြေထောက်တောင် မလှုပ်နိုင်တော့ဘူး။"`;
+}
+
+function partRule(part: RecapScriptOptions['part'], language: 'mm' | 'en'): string {
+  if (!part || part.count <= 1) return '';
+  const first = part.index === 0, last = part.index >= part.count - 1;
+  return `\nMULTI-PART RECAP: this narration is PART ${part.index + 1} of ${part.count} of the recap of ONE long film; the viewer watches the parts in order. ` +
+    (first ? 'Open with the hook. ' : 'Do NOT introduce the film or its characters from scratch: carry on the story as if the viewer has just watched the previous part. ') +
+    (part.prevTail ? `The previous part ended with: "${part.prevTail.slice(-500)}" — keep every character named exactly as in that text. ` : '') +
+    (last ? 'This is the final part: land the ending. ' : 'Do NOT wrap the story up or reveal an ending: finish on a cliffhanger that pulls into the next part. ') +
+    (language === 'mm' ? '' : '');
 }
 
 function bibleText(b: Bible): string {
@@ -326,14 +338,15 @@ async function writeBatch(
   total: number,
   prevTail: string,
   rules: string,
-  language: 'mm' | 'en'
+  language: 'mm' | 'en',
+  partCtx?: { first: boolean; last: boolean }
 ): Promise<Para[][]> {
   const lines = batch.map(b => {
     const evs = b.section.events.map(n => `E${n}. ${bible.events[n - 1]}`).join('\n');
     return `SECTION ${b.index + 1}/${total} — ${b.section.title}\nFeeling to evoke: ${b.section.emotion || 'fitting the events'}\nEnd the section with this pull toward what comes next: ${b.section.tease || '(natural cliffhanger)'}\nTarget length ≈ ${b.chars} characters (do not write less than ${Math.round(b.chars * 0.9)}).\nAllowed events:\n${evs}`;
   }).join('\n\n');
-  const opening = batch[0].index === 0;
-  const closing = batch[batch.length - 1].index === total - 1;
+  const opening = batch[0].index === 0 && (!partCtx || partCtx.first);
+  const closing = batch[batch.length - 1].index === total - 1 && (!partCtx || partCtx.last);
   const prompt = `You are a professional ${language === 'mm' ? 'Burmese ' : ''}movie/video recap scriptwriter.
 ${rules}
 
@@ -509,7 +522,8 @@ export async function generateGroundedRecap(
   const style = opts.style || 'Cinematic movie recap';
   const tone = opts.tone || 'Engaging, dramatic';
   const minutes = opts.targetMinutes ?? 4;
-  const rules = voiceRules(language, style, tone);
+  const rules = voiceRules(language, style, tone) + partRule(opts.part, language);
+  const partCtx = opts.part && opts.part.count > 1 ? { first: opts.part.index === 0, last: opts.part.index >= opts.part.count - 1 } : undefined;
 
   if (opts.mode === 'quick') {
     opts.onStage?.({ stage: 'quick' });
@@ -577,7 +591,7 @@ ${source.slice(0, 24000)}`,
   await Promise.all([0, 1, 2].map(async () => {
     while (nextBatch < batches.length) {
       const bi = nextBatch++;
-      results[bi] = await writeBatch(llm, bible, batches[bi], planned.length, '', rules, language);
+      results[bi] = await writeBatch(llm, bible, batches[bi], planned.length, '', rules, language, partCtx);
       writtenCount += batches[bi].length;
       opts.onStage?.({ stage: 'write', done: writtenCount, total: planned.length });
     }
