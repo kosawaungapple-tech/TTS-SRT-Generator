@@ -45,6 +45,8 @@ export interface RecapScriptOptions {
   part?: { index: number; count: number; prevTail?: string };
   /** How many Gemini calls may run at once (more when several API keys are set) */
   concurrency?: number;
+  /** Dub style: key lines are spoken by the characters (tagged `[Name|♂] line` / `[Name|♀] line`), the rest is narration */
+  dub?: boolean;
   onStage?: (s: RecapStage) => void;
 }
 
@@ -154,6 +156,11 @@ function partRule(part: RecapScriptOptions['part'], language: 'mm' | 'en'): stri
     (part.prevTail ? `The previous part ended with: "${part.prevTail.slice(-500)}" — keep every character named exactly as in that text. ` : '') +
     (last ? 'This is the final part: land the ending. ' : 'Do NOT wrap the story up or reveal an ending: finish on a cliffhanger that pulls into the next part. ') +
     (language === 'mm' ? '' : '');
+}
+
+function dubRule(dub: boolean | undefined): string {
+  if (!dub) return '';
+  return `\nDUB STYLE: this recap is performed by a cast. The narrator tells the story, and at the key moments the characters SPEAK their own important lines (what they say, or plausibly say, according to the events) as direct first-person speech. Put every spoken line on its OWN line inside the paragraph text, written exactly like this: [Name|♂] the line   or   [Name|♀] the line   (♂ = male character, ♀ = female character; Name = the character's name in the output language's script, spelled the same way every time). Narration lines have NO tag. At most 1-3 spoken lines per paragraph, each short (under about 25 words), always emotional and in character, never inventing plot that is not in the events. Use at most 4 different speaking characters in the whole recap. Never write the tag for the narrator.`;
 }
 
 function bibleText(b: Bible): string {
@@ -524,7 +531,7 @@ export async function generateGroundedRecap(
   const style = opts.style || 'Cinematic movie recap';
   const tone = opts.tone || 'Engaging, dramatic';
   const minutes = opts.targetMinutes ?? 4;
-  const rules = voiceRules(language, style, tone) + partRule(opts.part, language);
+  const rules = voiceRules(language, style, tone) + partRule(opts.part, language) + dubRule(opts.dub);
   const partCtx = opts.part && opts.part.count > 1 ? { first: opts.part.index === 0, last: opts.part.index >= opts.part.count - 1 } : undefined;
 
   if (opts.mode === 'quick') {
@@ -613,7 +620,7 @@ ${source.slice(0, 24000)}`,
     } catch { /* keep */ }
   }
 
-  if (watching && bible.times) {
+  if (watching && bible.times && !opts.dub) {
     opts.onStage?.({ stage: 'edit' });
     const polished = await editParagraphs(llm, bible, paragraphs, rules, language);
     polished.forEach((t, i) => { paragraphs[i] = t; });
@@ -641,5 +648,5 @@ ${source.slice(0, 24000)}`,
   }
 
   opts.onStage?.({ stage: 'edit' });
-  return { text: await editPass(llm, bible, draft, rules) };
+  return { text: opts.dub ? draft : await editPass(llm, bible, draft, rules) };
 }

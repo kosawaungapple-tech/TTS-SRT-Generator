@@ -54,6 +54,12 @@ interface Result {
 // One steady narrator in every scene: separate TTS calls can drift into different-sounding voices.
 const NARRATOR_STYLE = 'Read as ONE single narrator with the exact same voice, pitch, age and pace in every part. Never act out characters or change voice for quoted speech or dialogue; keep a steady, warm storyteller tone.';
 
+const DIALOGUE_STYLE = 'Perform this line as the character speaking in first person, with natural emotion and acting. Keep this character\'s voice, age and pace the same every time.';
+/** `[Name|♂] line` = a line spoken by a character in dub style; every other line is the narrator's. */
+const DUB_TAG = /^\s*\[([^\]|]+)\|([♂♀])\]\s*/;
+const hasDubTags = (t: string) => t.split('\n').some(l => DUB_TAG.test(l));
+const stripDubTags = (t: string) => t.split('\n').map(l => l.replace(DUB_TAG, '')).join('\n');
+
 const GAP = 0.25; // seconds of silence between narrated scenes
 
 function parseSrtCues(srt: string): { start: number; end: number; text: string }[] {
@@ -163,6 +169,10 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [length, setLength] = useState<'short' | 'medium' | 'full'>('medium');
   const [language, setLanguage] = useState<'mm' | 'en'>('mm');
   const [voice, setVoice] = useState('aoede');
+  /** Dub style: the characters speak their key lines in their own voices; the narrator tells the rest */
+  const [dub, setDub] = useState(false);
+  const [cast, setCast] = useState<{ name: string; voice: string }[]>([]);
+  const castRef = useRef<Map<string, string>>(new Map());
   const [speed, setSpeed] = useState(1.0);
   const [aspect, setAspect] = useState('original');
   const [busy, setBusy] = useState(false);
@@ -291,7 +301,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
 
   const pickFile = async (f: File | null) => {
     setFile(f);
-    partResults.current = {}; partTails.current = {}; cuesRef.current = null; boundsRef.current = null; setPartsVer(v => v + 1); setIsCombined(false); setPartIdx(0);
+    partResults.current = {}; partTails.current = {}; cuesRef.current = null; boundsRef.current = null; castRef.current = new Map(); setCast([]); setPartsVer(v => v + 1); setIsCombined(false); setPartIdx(0);
     setResult(null);
     setVideoUrl(null);
     setThumb(null);
@@ -437,6 +447,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           coverage,
           part: splitActive ? { index: part, count: partCount, prevTail: partTails.current[part - 1] } : undefined,
           concurrency: Math.min(6, getExtraKeys().length + 2),
+          dub,
           getFrames: async (a, b) => {
             const n = 5;
             return captureVideoFrames(file, Array.from({ length: n }, (_, i) => pr.from + a + ((b - a) * (i + 0.5)) / n), 448, 0.6);
@@ -494,14 +505,47 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         const c = new Ctx0();
         try { return (await c.decodeAudioData(await blob.arrayBuffer())).duration; } finally { void c.close(); }
       };
-      const speakOnce = async (text: string, i: number) => {
-        const r = await g.generateTTS(text, { voiceId: voice, speed, pitch: 0, volume: 100, vocalStyle: 'Expressive', styleInstruction: NARRATOR_STYLE }, undefined, undefined, (s, msg) =>
+      const speakWith = async (text: string, i: number, voiceId: string, style: string) => {
+        const r = await g.generateTTS(text, { voiceId, speed, pitch: 0, volume: 100, vocalStyle: 'Expressive', styleInstruction: style }, undefined, undefined, (s, msg) =>
           setProgress(p => ({ text: `${msg} (${s}s)`, percent: p?.percent ?? 60 }))
         );
         if (!r?.audioUrl) throw new Error(`No audio for part ${i + 1}`);
         const blob = await (await fetch(r.audioUrl)).blob();
         if (!blob.size) throw new Error(`Empty audio for part ${i + 1}`);
         return blob;
+      };
+      /** The voice of a character: one per name, a different one for each (by gender), never the narrator's. */
+      const voiceFor = (name: string, gender: '♂' | '♀') => {
+        const key = name.trim();
+        const have = castRef.current.get(key);
+        if (have) return have;
+        const pool = VOICE_OPTIONS.filter(v => v.gender === (gender === '♂' ? 'male' : 'female') && v.id !== voice);
+        const used = new Set(castRef.current.values());
+        const pick = (pool.find(v => !used.has(v.id)) || pool[castRef.current.size % Math.max(1, pool.length)] || VOICE_OPTIONS.find(v => v.id !== voice))!.id;
+        castRef.current.set(key, pick);
+        setCast(Array.from(castRef.current, ([n, v]) => ({ name: n, voice: v })));
+        return pick;
+      };
+      const speakOnce = async (text: string, i: number) => {
+        if (!dub || !hasDubTags(text)) return speakWith(stripDubTags(text), i, voice, NARRATOR_STYLE);
+        // Dub style: narration lines and character lines are voiced separately, then joined into the one scene clip.
+        const parts: { voiceId: string; style: string; text: string }[] = [];
+        for (const raw of text.split('\n')) {
+          const line = raw.trim();
+          if (!line) continue;
+          const m = DUB_TAG.exec(line);
+          if (m) {
+            const body = line.replace(DUB_TAG, '').trim();
+            if (body) parts.push({ voiceId: voiceFor(m[1], m[2] as '♂' | '♀'), style: DIALOGUE_STYLE, text: body });
+          } else if (parts.length && parts[parts.length - 1].voiceId === voice) {
+            parts[parts.length - 1].text += ' ' + line; // consecutive narration is one reading
+          } else {
+            parts.push({ voiceId: voice, style: NARRATOR_STYLE, text: line });
+          }
+        }
+        const blobs: Blob[] = [];
+        for (const pt of parts) blobs.push(await speakWith(pt.text, i, pt.voiceId, pt.style));
+        return blobs.length === 1 ? blobs[0] : mergeAudio(blobs, 0.12);
       };
       // Scenes are voiced a few at a time (the API allows it) instead of one after another.
       const voiced: (Blob | undefined)[] = segments.map((_, i) => sceneAudios[i]);
@@ -527,7 +571,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                 // 1) cheap and instant: speed the voice up locally (pitch-preserving) up to 1.25x — no extra API calls
                 const MAX_FAST = 1.25;
                 setProgress(p => ({ text: `${isMm ? '၃/၄ ဗီဒီယိုအချိန်နဲ့ ကိုက်အောင် ညှိနေသည်' : '3/4 Fitting the narration to the video'} (${i + 1}/${segments.length})`, percent: p?.percent ?? 60 }));
-                if (dur / budget > MAX_FAST) {
+                if (dur / budget > MAX_FAST && !hasDubTags(segments[i].text)) {
                   // 2) only if it is far too long: shorten the paragraph and voice it again (slow: 2 more API calls)
                   const target = Math.max(20, Math.round(segments[i].text.length * ((budget * MAX_FAST) / dur) * 0.97));
                   const shorter = await g.condenseNarration(segments[i].text, target, lang);
@@ -833,7 +877,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         setRendering(isMm ? 'PC Worker ဆီ ဗီဒီယို ပို့နေသည်…' : 'Sending the video to your PC worker…');
         videoId = await ensureSession();
       }
-      const scenes: RecapPlanScene[] = result.segments.map((s, i) => ({ fromCue: i, toCue: i, start: s.start, end: s.end, narration: s.text, speed: s.speed || 0 }));
+      const scenes: RecapPlanScene[] = result.segments.map((s, i) => ({ fromCue: i, toCue: i, start: s.start, end: s.end, narration: stripDubTags(s.text), speed: s.speed || 0 }));
       const r = await renderSceneRecap({
         serverUrl,
         authToken,
@@ -1074,6 +1118,26 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             </div>
             <input type="range" min={0.8} max={1.3} step={0.05} value={speed} onChange={e => setSpeed(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
           </div>
+        </div>
+        <div className="mt-5 rounded-2xl border border-white/10 bg-black/30 p-3.5">
+          <label className="flex items-start gap-2.5 cursor-pointer">
+            <input type="checkbox" checked={dub} onChange={e => { setDub(e.target.checked); castRef.current = new Map(); setCast([]); }} className="accent-amber-400 w-4 h-4 mt-0.5" />
+            <span>
+              <span className="block text-[12.5px] font-bold text-white">{isMm ? '🎭 Dub Recap — ဇာတ်ကောင်တစ်ယောက်ချင်းစီ ကိုယ်ပိုင်အသံနဲ့' : '🎭 Dub Recap — characters speak in their own voices'}</span>
+              <span className="block mt-1 text-[11.5px] leading-relaxed text-slate-500">
+                {isMm
+                  ? 'အဓိကဇာတ်ကွက်တွေမှာ ဇာတ်ကောင်တွေက ကိုယ်တိုင်ပြောတဲ့ စကားတွေ ပါလာပြီး ပြောသူအလိုက် အသံမတူအောင် (အမျိုးသား/အမျိုးသမီး) ခွဲပေးပါတယ်။ ကျန်တာကို အထက်က AI အသံရှင်က ဇာတ်ကြောင်းပြောပါတယ်။ အသံသွင်းတဲ့ TTS ခေါ်ယူမှု ပိုများပါတယ်။'
+                  : 'At key moments the characters speak their own lines, each in a different voice (male / female); the narrator voice above tells the rest. Uses more TTS calls.'}
+              </span>
+            </span>
+          </label>
+          {dub && cast.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {cast.map(c => (
+                <span key={c.name} className="px-2.5 py-1 rounded-full bg-white/10 text-[11px] text-slate-200">{c.name} → {VOICE_OPTIONS.find(v => v.id === c.voice)?.voiceName || c.voice}</span>
+              ))}
+            </div>
+          )}
         </div>
 
         </Group>
@@ -1635,6 +1699,29 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
 };
 
 /** Joins the per-scene voice clips into one voiceover and builds the SRT / cue timeline for them. */
+/** Joins several voiced lines into one clip (short pause between them). */
+async function mergeAudio(blobs: Blob[], gap: number): Promise<Blob> {
+  const Ctx = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
+  const ctx = new Ctx();
+  const bufs: AudioBuffer[] = [];
+  try {
+    for (const b of blobs) bufs.push(await ctx.decodeAudioData(await b.arrayBuffer()));
+  } finally { void ctx.close(); }
+  const rate = bufs[0].sampleRate;
+  const total = bufs.reduce((n, b) => n + b.duration, 0) + gap * (bufs.length - 1);
+  const out = new AudioBuffer({ length: Math.ceil(total * rate), numberOfChannels: 1, sampleRate: rate });
+  const ch = out.getChannelData(0);
+  let t = 0;
+  for (const b of bufs) {
+    // clips from the same TTS model share a sample rate; resample by index if one differs
+    const src = b.getChannelData(0);
+    if (b.sampleRate === rate) ch.set(src, Math.round(t * rate));
+    else for (let k = 0; k < src.length; k++) { const idx = Math.round(t * rate) + Math.round((k * rate) / b.sampleRate); if (idx < ch.length) ch[idx] = src[k]; }
+    t += b.duration + gap;
+  }
+  return audioBufferToWav(out);
+}
+
 async function joinScenes(segments: Segment[], audios: Blob[], normalize: boolean) {
   const Ctx = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
   const ctx = new Ctx();
@@ -1653,7 +1740,7 @@ async function joinScenes(segments: Segment[], audios: Blob[], normalize: boolea
   buffers.forEach((buf, i) => {
     sceneTimes.push({ start: t, dur: buf.duration });
     ch.set(buf.getChannelData(0), Math.round(t * rate));
-    planSubtitlePieces(segments[i].text, splitSentenceIntoCueBlocks).forEach(pc => {
+    planSubtitlePieces(stripDubTags(segments[i].text), splitSentenceIntoCueBlocks).forEach(pc => {
       cues.push({ start: t + pc.from * buf.duration, end: t + pc.to * buf.duration, text: pc.text });
       subs.push({ index: subs.length + 1, startTime: secToSrt(t + pc.from * buf.duration), endTime: secToSrt(t + pc.to * buf.duration), text: pc.text });
     });
