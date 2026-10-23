@@ -34,6 +34,8 @@ interface Props {
     hasVideoTimes: boolean;
   } | null;
   isMm: boolean;
+  /** tallest the preview may be, in px (default 380) */
+  maxHeight?: number;
   /** CSS approximation of the chosen colour look */
   filterCss?: string;
 }
@@ -130,7 +132,7 @@ export const RecapPreview: React.FC<Props> = p => {
     <div>
       <div
         className="relative mx-auto overflow-hidden rounded-xl border border-white/15 bg-black"
-        style={{ aspectRatio: String(ratio), width: `min(100%, ${Math.round(380 * ratio)}px)`, containerType: 'inline-size' }}
+        style={{ aspectRatio: String(ratio), width: `min(100%, ${Math.round((p.maxHeight || 380) * ratio)}px)`, containerType: 'inline-size' }}
       >
         {showBlur && p.thumb && (
           <img src={p.thumb} alt="" className="absolute inset-0 w-full h-full object-cover" style={{ filter: `blur(${Math.round(p.blurAmount / 4)}px) brightness(0.65)`, transform: 'scale(1.2)' }} />
@@ -226,7 +228,7 @@ export const RecapPreview: React.FC<Props> = p => {
       </div>
 
       {recap ? (
-        <div className="mt-3 mx-auto flex items-center gap-3" style={{ width: `min(100%, ${Math.round(380 * ratio)}px)` }}>
+        <div className="mt-3 mx-auto flex items-center gap-3" style={{ width: `min(100%, ${Math.round((p.maxHeight || 380) * ratio)}px)` }}>
           <button type="button" onClick={toggle} className="shrink-0 w-10 h-10 rounded-full bg-emerald-400 text-black flex items-center justify-center">
             {playing ? <Pause size={18} /> : <Play size={18} />}
           </button>

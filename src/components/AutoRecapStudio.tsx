@@ -197,6 +197,14 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [blurAmount, setBlurAmount] = useState(40);
   const [textLayers, setTextLayers] = useState<TextLayer[]>([]);
   const [fx, setFx] = useState<RecapFx>(defaultFx);
+  // The preview stays on screen while you scroll the tools; it is taller when the page is wide enough for side-by-side columns.
+  const [wideScreen, setWideScreen] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 1536px)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1536px)');
+    const on = () => setWideScreen(mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
   /** 0 = by coverage (Highlights / Standard / Whole); otherwise the recap length in minutes (for long films) */
   const [targetMin, setTargetMin] = useState(0);
   const sessionRef = useRef<{ file: File; id: string } | null>(null);
@@ -1047,8 +1055,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
 
           <div className="2xl:grid 2xl:grid-cols-[minmax(340px,440px)_minmax(0,1fr)] 2xl:gap-8 items-start">
             {/* Left: what you hear and see */}
-            <div className="xl:sticky xl:top-4">
-          <audio controls src={result.voiceoverUrl} className="w-full mb-4" />
+            <div className="sticky top-[5.5rem] z-30 mb-5 2xl:mb-0 rounded-2xl border border-white/10 bg-slate-950/95 backdrop-blur-xl p-3 shadow-2xl shadow-black/60">
+          <audio controls src={result.voiceoverUrl} className="w-full mb-3 h-9" />
 
             {/* Live preview: the recap itself (voice + subtitles + matching footage) with the chosen look */}
             <div>
@@ -1072,14 +1080,19 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                 logoPos={logoPos}
                 logoSize={logoSize}
                 logoOpacity={logoOpacity}
+                maxHeight={wideScreen ? 470 : 230}
                 recap={result ? { voiceoverUrl: result.voiceoverUrl, cues: result.cues, duration: result.duration, sceneTimes: result.sceneTimes, segments: result.segments, hasVideoTimes: result.hasVideoTimes } : null}
                 isMm={isMm}
               />
-              <p className="mt-2 text-[11px] text-slate-500">{isMm ? 'ဒါက Recap အသံ၊ စာတန်း၊ ဗီဒီယိုအပိုင်းတွေကို ဘရောက်ဇာထဲမှာ တွဲဖွင့်ပြတာပါ။ BGM မပါပါဘူး၊ ထွက်လာမယ့် mp4 နဲ့ အတိအကျ မတူနိုင်ပါဘူး။' : 'The recap voice, subtitles and matching footage played together in your browser. No BGM, and not frame-exact with the final mp4.'}</p>
+              <p className="mt-2 hidden 2xl:block text-[11px] text-slate-500">{isMm ? 'ဒါက Recap အသံ၊ စာတန်း၊ ဗီဒီယိုအပိုင်းတွေကို ဘရောက်ဇာထဲမှာ တွဲဖွင့်ပြတာပါ။ BGM မပါပါဘူး၊ ထွက်လာမယ့် mp4 နဲ့ အတိအကျ မတူနိုင်ပါဘူး။' : 'The recap voice, subtitles and matching footage played together in your browser. No BGM, and not frame-exact with the final mp4.'}</p>
             </div>
 
+            </div>
+
+            {/* Right: files and settings */}
+            <div className="mt-6 2xl:mt-0">
           {baseRef.current && result.hasVideoTimes && (
-            <div className="mt-5 pt-5 border-t border-white/10">
+            <div className="mb-5 pb-5 border-b border-white/10">
               <SceneEditor
                 key={baseVer.current}
                 base={baseRef.current.segments}
@@ -1090,7 +1103,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
               />
             </div>
           )}
-          <div className="mt-5 pt-5 border-t border-white/10">
+          <div className="mb-5 pb-5 border-b border-white/10">
             <Label icon={<Film size={12} />}>{isAdmin ? (isMm ? 'Recap ဗီဒီယိုပါ လိုချင်ရင် (PC Worker လိုသည်)' : 'Recap video (needs PC worker)') : (isMm ? 'Recap ဗီဒီယိုပါ လိုချင်ရင် (Server မှာ render လုပ်မည်)' : 'Recap video (rendered on our server)')}</Label>
             {isAdmin && (
               <details className="mb-3 rounded-2xl border border-white/10 bg-white/5 p-3">
@@ -1111,10 +1124,6 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             )}
             {videoUrl && <RecapShare videoUrl={videoUrl} fileName={`${baseName}_recap.mp4`} defaultTitle={baseName} isMm={isMm} />}
           </div>
-            </div>
-
-            {/* Right: files and settings */}
-            <div className="mt-6 2xl:mt-0">
           <div className="grid grid-cols-3 gap-3">
             {[
               { icon: <Mic size={18} />, name: 'Voiceover', ext: '.wav', tone: 'from-violet-500 to-purple-700 text-white', onClick: () => saveBlob(result.voiceoverBlob, `${baseName}_recap_voiceover.wav`) },
