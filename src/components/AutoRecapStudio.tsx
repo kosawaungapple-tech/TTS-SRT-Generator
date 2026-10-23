@@ -216,6 +216,11 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const prRef = useRef<{ from: number; to: number } | null>(null);
   const partTails = useRef<Record<number, string>>({});
   const doneIdx = useRef(0); // which part the result on screen belongs to
+  /** The voiced scenes of every finished part; "Combine" joins them into ONE complete recap. */
+  const partResults = useRef<Record<number, { segments: Segment[]; sceneAudios: Blob[] }>>({});
+  const [partsVer, setPartsVer] = useState(0);
+  const [isCombined, setIsCombined] = useState(false);
+  const [combining, setCombining] = useState(false);
   const coverage = targetMin > 0 && duration > 0 ? Math.min(1, (targetMin * 60) / duration) : length === 'short' ? 0.55 : length === 'full' ? 1 : 0.85;
   const longFilm = !!file && isAdmin && isLongVideo(file, duration);
   const partCount = duration > 0 ? Math.max(1, Math.round((duration * coverage) / (partMin * 60))) : 1;
@@ -286,6 +291,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
 
   const pickFile = async (f: File | null) => {
     setFile(f);
+    partResults.current = {}; partTails.current = {}; cuesRef.current = null; setPartsVer(v => v + 1); setIsCombined(false); setPartIdx(0);
     setResult(null);
     setVideoUrl(null);
     setThumb(null);
@@ -325,6 +331,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     doneIdx.current = curPart;
+    setIsCombined(false);
     setBusy(true);
     setErrorInfo(null);
     stageRef.current = 'start'; lapRef.current = { name: '', at: Date.now() };
@@ -540,6 +547,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       });
       baseRef.current = { segments: segments.map(sg => ({ ...sg })), sceneAudios: joined.sceneAudios };
       baseVer.current++;
+      if (splitActive) { partResults.current[curPart] = { segments: segments.map(sg => ({ ...sg })), sceneAudios: joined.sceneAudios }; setPartsVer(v => v + 1); }
       draftRef.current = null;
       setProgress({ text: isMm ? 'ပြီးပါပြီ ✅' : 'Done ✅', percent: 100 });
       showToast(isMm ? '🎉 Auto Recap ပြီးပါပြီ — Voiceover နဲ့ SRT ကို ဒေါင်းလို့ရပါပြီ' : '🎉 Recap ready — download the voiceover and SRT', 'success');
@@ -571,7 +579,44 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     return () => URL.revokeObjectURL(u);
   }, [file]);
 
-  const baseName = (file?.name || 'recap').replace(/\.[^/.]+$/, '') + (splitActive ? `_part${(result ? doneIdx.current : curPart) + 1}` : '');
+  const doneParts = Object.keys(partResults.current).map(Number).sort((a, b) => a - b);
+  void partsVer;
+  /** Joins every finished part (in film order) into one complete recap: one voiceover, one SRT, one video to render. */
+  const combineParts = async () => {
+    const idxs = Object.keys(partResults.current).map(Number).sort((a, b) => a - b);
+    if (!idxs.length) return;
+    setCombining(true);
+    try {
+      const segs = idxs.flatMap(i => partResults.current[i].segments.map(sg => ({ ...sg })));
+      const auds = idxs.flatMap(i => partResults.current[i].sceneAudios);
+      const joined = await joinScenes(segs, auds, false);
+      if (result) URL.revokeObjectURL(result.voiceoverUrl);
+      setResult({
+        script: segs.map(sg => sg.text).join('\n\n'),
+        segments: segs,
+        hasVideoTimes: true,
+        voiceoverBlob: joined.voiceoverBlob,
+        voiceoverUrl: URL.createObjectURL(joined.voiceoverBlob),
+        sceneAudios: joined.sceneAudios,
+        sceneTimes: joined.sceneTimes,
+        srt: joined.srt,
+        cues: joined.cues,
+        duration: joined.duration,
+      });
+      baseRef.current = { segments: segs.map(sg => ({ ...sg })), sceneAudios: joined.sceneAudios };
+      baseVer.current++;
+      setVideoUrl(null);
+      setIsCombined(true);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      showToast(isMm ? `🎬 အပိုင်း ${idxs.length} ပိုင်းကို ပေါင်းပြီးပါပြီ — ${fmt(joined.duration)} ရှိတဲ့ Recap တစ်ပုဒ်တည်း၊ Render လုပ်လို့ရပါပြီ` : `🎬 ${idxs.length} parts joined — one ${fmt(joined.duration)} recap, ready to render`, 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not join the parts', 'error');
+    } finally {
+      setCombining(false);
+    }
+  };
+
+  const baseName = (file?.name || 'recap').replace(/\.[^/.]+$/, '') + (isCombined && result ? '_full' : splitActive ? `_part${(result ? doneIdx.current : curPart) + 1}` : '');
   const [dlBusy, setDlBusy] = useState(false);
   /** Applies the scene editor: skipped scenes are dropped, the rest are re-ordered / re-trimmed, and the voiceover + subtitles are rebuilt to match. */
   const applySceneEdits = async (plan: { idx: number; on: boolean; start: number; end: number; speed: number }[]) => {
@@ -596,6 +641,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         duration: joined.duration,
       });
       setVideoUrl(null);
+      if (splitActive && !isCombined) { partResults.current[doneIdx.current] = { segments, sceneAudios: joined.sceneAudios }; setPartsVer(v => v + 1); }
       showToast(isMm ? 'ပြင်ဆင်ချက်တွေ အသုံးပြုပြီးပါပြီ — Preview နဲ့ render မှာ ပါပါမယ်' : 'Edits applied — used by the preview and the render', 'success');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Could not apply the edits', 'error');
@@ -852,7 +898,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           <div className="mt-5 rounded-2xl border border-white/10 bg-black/30 p-3.5">
             <label className="flex items-center gap-2.5 cursor-pointer">
               <input type="checkbox" checked={splitOn} onChange={e => { setSplitOn(e.target.checked); setPartIdx(0); }} className="accent-amber-400 w-4 h-4" />
-              <span className="text-[12.5px] font-bold text-white">{isMm ? '✂️ ပိုင်းခွဲပြီး လုပ်မယ် (API မကုန်အောင်၊ ပိုင်းလိုက် ထုတ်မယ်)' : '✂️ Split into parts (lighter on the API)'}</span>
+              <span className="text-[12.5px] font-bold text-white">{isMm ? '✂️ ပိုင်းခွဲပြီး လုပ်မယ် (API မကုန်အောင်၊ နောက်ဆုံး တစ်ပုဒ်တည်း ပေါင်းမယ်)' : '✂️ Do it in parts, then join into one recap (lighter on the API)'}</span>
             </label>
             {splitOn && (
               <div className="mt-3 space-y-3">
@@ -874,7 +920,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                         const b = partBounds(cuesRef.current?.cues);
                         return (
                           <button key={i} type="button" onClick={() => setPartIdx(i)} className={`px-2.5 py-2 rounded-xl text-left border transition ${curPart === i ? 'bg-white text-slate-900 border-white' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'}`}>
-                            <div className="text-[12px] font-extrabold">{isMm ? `အပိုင်း ${i + 1}` : `Part ${i + 1}`}{partTails.current[i] ? ' ✓' : ''}</div>
+                            <div className="text-[12px] font-extrabold">{isMm ? `အပိုင်း ${i + 1}` : `Part ${i + 1}`}{partResults.current[i] ? ' ✓' : ''}</div>
                             <div className="text-[10.5px] font-mono opacity-70">{fmt(b[i])}–{fmt(b[i + 1])}</div>
                           </button>
                         );
@@ -882,9 +928,25 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                     </div>
                     <p className="mt-2 text-[11.5px] leading-relaxed text-slate-500">
                       {isMm
-                        ? 'အပိုင်းတစ်ခုချင်းကို သီးခြား Recap ဗီဒီယိုအဖြစ် ထုတ်ပါတယ်။ အပိုင်း ၁ ကနေ အစဉ်လိုက် လုပ်ပါ — နောက်အပိုင်းက အရင်အပိုင်းရဲ့ အဆုံးကို ဆက်ရေးပါလိမ့်မယ်။ ဇာတ်ကားတစ်ခုလုံးကို တစ်ခါပဲ နားထောင်ပါတယ်။'
-                        : 'Each part becomes its own recap video. Do them in order: every part continues where the last one ended. The whole film is listened to only once.'}
+                        ? 'အပိုင်းတစ်ခုချင်းကို အစဉ်လိုက် ဇာတ်ညွှန်း + အသံသွင်းပါ (အပိုင်း ၁ ကနေ)။ အားလုံးပြီးရင် အောက်က "ပေါင်းမယ်" ကို နှိပ်ပြီး Recap တစ်ပုဒ်တည်း ဖြစ်အောင် ပေါင်းကာ တစ်ခါတည်း Render လုပ်ပါ။ ဇာတ်ကားတစ်ခုလုံးကို တစ်ခါပဲ နားထောင်ပါတယ်။'
+                        : 'Script + voice each part in order (from part 1). When they are all done, press "Combine" to join them into ONE recap and render it once. The film is listened to only once.'}
                     </p>
+                    <div className="mt-3 flex items-center justify-between gap-2 text-[11.5px] text-slate-400">
+                      <span>{isMm ? `ပြီးပြီ: ${doneParts.length}/${partCount} ပိုင်း` : `Done: ${doneParts.length} of ${partCount} parts`}</span>
+                      {isCombined && <span className="text-emerald-300 font-bold">{isMm ? 'ပေါင်းပြီး ✓' : 'Combined ✓'}</span>}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void combineParts()}
+                      disabled={combining || busy || doneParts.length === 0}
+                      className="mt-2 w-full h-11 rounded-xl bg-emerald-400 text-black text-[12.5px] font-extrabold flex items-center justify-center gap-2 disabled:opacity-40"
+                    >
+                      {combining ? <Loader2 size={15} className="animate-spin" /> : <Layers size={15} />}
+                      {isMm ? `ပေါင်းမယ် (${doneParts.length}/${partCount} ပိုင်း → Recap တစ်ပုဒ်)` : `Combine (${doneParts.length}/${partCount} parts → one recap)`}
+                    </button>
+                    {doneParts.length > 0 && doneParts.length < partCount && (
+                      <p className="mt-1.5 text-[11px] text-amber-300/80">{isMm ? 'အပိုင်း မစုံသေးပါဘူး — ပေါင်းရင် ပြီးထားတဲ့ အပိုင်းတွေပဲ ပါပါမယ်။' : 'Not all parts are done yet — only the finished ones will be joined.'}</p>
+                    )}
                   </div>
                 ) : (
                   <p className="text-[11.5px] text-slate-500">{isMm ? 'ဒီအရှည်အတွက် ပိုင်းခွဲစရာ မလိုပါဘူး (၁ ပိုင်းတည်း)။' : 'Nothing to split at this length (one part).'}</p>
@@ -1135,10 +1197,15 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
               <CheckCircle2 size={22} className="text-emerald-400" />
             </div>
             <div>
-              <div className="text-[15px] font-extrabold text-white">{isMm ? 'Recap ပြီးပါပြီ' : 'Your recap is ready'}</div>
+              <div className="text-[15px] font-extrabold text-white">{isCombined ? (isMm ? 'ပေါင်းပြီးသား Recap အပြည့်အစုံ' : 'Full recap (all parts joined)') : (isMm ? 'Recap ပြီးပါပြီ' : 'Your recap is ready')}</div>
               <div className="text-[12px] text-slate-400">{result.segments.length} {isMm ? 'ပိုင်း' : 'parts'} · {fmt(result.duration)}</div>
             </div>
-            {splitActive && curPart < partCount - 1 && (
+            {splitActive && !isCombined && doneParts.length === partCount && (
+              <button type="button" onClick={() => void combineParts()} disabled={combining} className="ml-auto px-3.5 py-2 rounded-xl bg-emerald-400 text-black text-[12px] font-extrabold">
+                {isMm ? 'အားလုံးပေါင်းမယ် →' : 'Combine all →'}
+              </button>
+            )}
+            {splitActive && !isCombined && doneParts.length < partCount && curPart < partCount - 1 && (
               <button type="button" onClick={() => { setPartIdx(curPart + 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="ml-auto px-3.5 py-2 rounded-xl bg-amber-400 text-black text-[12px] font-extrabold">
                 {isMm ? `နောက်အပိုင်း ${curPart + 2} →` : `Next: part ${curPart + 2} →`}
               </button>
