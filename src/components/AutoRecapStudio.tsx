@@ -208,8 +208,34 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   /** 0 = by coverage (Highlights / Standard / Whole); otherwise the recap length in minutes (for long films) */
   const [targetMin, setTargetMin] = useState(0);
   const sessionRef = useRef<{ file: File; id: string } | null>(null);
+  // ---- Split a long film into several recap videos (each part is a small, separate job) ----------------------------
+  const [splitOn, setSplitOn] = useState(false);
+  const [partMin, setPartMin] = useState(3);
+  const [partIdx, setPartIdx] = useState(0);
+  const cuesRef = useRef<{ key: string; cues: { start: number; end: number; text: string }[] } | null>(null);
+  const prRef = useRef<{ from: number; to: number } | null>(null);
+  const partTails = useRef<Record<number, string>>({});
+  const doneIdx = useRef(0); // which part the result on screen belongs to
   const coverage = targetMin > 0 && duration > 0 ? Math.min(1, (targetMin * 60) / duration) : length === 'short' ? 0.55 : length === 'full' ? 1 : 0.85;
   const longFilm = !!file && isAdmin && isLongVideo(file, duration);
+  const partCount = duration > 0 ? Math.max(1, Math.round((duration * coverage) / (partMin * 60))) : 1;
+  const splitActive = splitOn && partCount > 1;
+  const curPart = Math.min(partIdx, partCount - 1);
+  /** Part boundaries: equal slices of the film, moved to the nearest gap between sentences when the speech is known. */
+  const partBounds = (cues?: { start: number; end: number }[]) => {
+    const b: number[] = [0];
+    for (let i = 1; i < partCount; i++) {
+      let t = (duration * i) / partCount;
+      if (cues?.length) {
+        let best: number | null = null;
+        for (const c of cues) if (Math.abs(c.end - t) < 45 && (best === null || Math.abs(c.end - t) < Math.abs(best - t))) best = c.end;
+        if (best !== null) t = best;
+      }
+      b.push(Math.max(b[i - 1] + 5, Math.min(duration - 5, t)));
+    }
+    b.push(duration);
+    return b;
+  };
   const [overlays, setOverlays] = useState<ImageOverlay[]>([]);
   const [zoom, setZoom] = useState(1);
   const [panX, setPanX] = useState(0);
@@ -298,6 +324,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     }
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    doneIdx.current = curPart;
     setBusy(true);
     setErrorInfo(null);
     stageRef.current = 'start'; lapRef.current = { name: '', at: Date.now() };
@@ -317,7 +344,10 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       } else {
       // ---- 1. Listen (only for talking videos) ----------------------------------------------
       let cues: { start: number; end: number; text: string }[] = [];
-      if (mode === 'speech') {
+      const cueKey = `${file.name}|${file.size}|${spokenLang}`;
+      if (mode === 'speech' && splitActive && cuesRef.current && cuesRef.current.key === cueKey) {
+        cues = cuesRef.current.cues; // an earlier part already listened to the whole film
+      } else if (mode === 'speech') {
         const key = assemblyAiService.getStoredApiKey();
         if (!key) {
           showToast(isMm ? 'Settings ထဲမှာ AssemblyAI API Key အရင်ထည့်ပါ' : 'Add your AssemblyAI API key in Settings first', 'error');
@@ -346,24 +376,33 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           onProgress: (step, percent) => setProgress({ text: `${isMm ? '၁/၄ ' : '1/4 '}${step}`, percent: Math.min(25, Math.round((percent ?? 0) * 0.25)) }),
         });
         cues = parseSrtCues(tr.srt);
+        cuesRef.current = { key: cueKey, cues };
       }
+
+      // Which stretch of the film this run covers (the whole film unless it is split into parts).
+      const bounds = splitActive ? partBounds(cues) : null;
+      const pr = bounds ? { from: bounds[curPart], to: bounds[curPart + 1] } : { from: 0, to: duration };
+      prRef.current = pr;
+      const partLen = pr.to - pr.from;
+      const partCues = cues.filter(c => c.end > pr.from && c.start < pr.to).map(c => ({ ...c, start: Math.max(0, c.start - pr.from), end: Math.min(partLen, c.end - pr.from) }));
 
       // ---- 2. Watch + write ------------------------------------------------------------------
       stageRef.current = '2 watch/write (Gemini)'; lap('2 watch/write (Gemini)');
       const recap = await g.generateMovieRecap(
-        cues.map((c, i) => `[${i + 1}] ${c.text}`).join('\n'),
+        partCues.map((c, i) => `[${i + 1}] ${c.text}`).join('\n'),
         (s, msg) => setProgress(p => ({ text: `${msg} (${s}s)`, percent: p?.percent ?? 30 })),
         {
           style: 'Cinematic recap that follows the story itself: infer the genre and mood (drama, thriller, action, comedy, romance...) from what actually happens and let it shift scene by scene. Never impose a genre the footage does not show.',
           tone: 'Engaging, emotional, cinematic and captivating',
           targetMinutes: targetMin > 0 ? targetMin : length === 'short' ? 1.5 : length === 'full' ? 9 : 4,
-          sourceSeconds: duration,
+          sourceSeconds: partLen,
           targetLanguage: language,
-          cues,
+          cues: partCues,
           coverage,
+          part: splitActive ? { index: curPart, count: partCount, prevTail: partTails.current[curPart - 1] } : undefined,
           getFrames: async (a, b) => {
             const n = 5;
-            return captureVideoFrames(file, Array.from({ length: n }, (_, i) => a + ((b - a) * (i + 0.5)) / n), 448, 0.6);
+            return captureVideoFrames(file, Array.from({ length: n }, (_, i) => pr.from + a + ((b - a) * (i + 0.5)) / n), 448, 0.6);
           },
           onStage: st => {
             const t =
@@ -381,7 +420,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       );
 
       if (recap.segments?.length) {
-        segments = recap.segments;
+        segments = pr.from > 0 ? recap.segments.map(sg => ({ ...sg, start: sg.start + pr.from, end: sg.end + pr.from })) : recap.segments;
       } else {
         hasVideoTimes = false;
         segments = recap.text
@@ -392,6 +431,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       }
 
       draftRef.current = { segments, hasVideoTimes };
+      if (splitActive) partTails.current[curPart] = segments.map(sg => sg.text).join(' ').slice(-600);
       if (reviewScript) {
         // Pause here so the script can be edited before any voice is recorded.
         draftRef.current = { segments, hasVideoTimes };
@@ -410,7 +450,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       if (sceneAudios.length > segments.length) sceneAudios.length = segments.length;
       // The voiceover must fit the video: each scene gets the time of the part of the video it tells.
       const coverageFactor = coverage;
-      const totalTarget = duration > 0 ? duration * coverageFactor : 0;
+      const totalTarget = duration > 0 ? ((prRef.current ? prRef.current.to - prRef.current.from : duration)) * coverageFactor : 0;
       const totalChars = segments.reduce((n, sg) => n + sg.text.length, 0) || 1;
       const lang: 'mm' | 'en' = language === 'en' ? 'en' : 'mm';
       const durOf = async (blob: Blob) => {
@@ -531,7 +571,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     return () => URL.revokeObjectURL(u);
   }, [file]);
 
-  const baseName = (file?.name || 'recap').replace(/\.[^/.]+$/, '');
+  const baseName = (file?.name || 'recap').replace(/\.[^/.]+$/, '') + (splitActive ? `_part${(result ? doneIdx.current : curPart) + 1}` : '');
   const [dlBusy, setDlBusy] = useState(false);
   /** Applies the scene editor: skipped scenes are dropped, the rest are re-ordered / re-trimmed, and the voiceover + subtitles are rebuilt to match. */
   const applySceneEdits = async (plan: { idx: number; on: boolean; start: number; end: number; speed: number }[]) => {
@@ -807,6 +847,53 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           </div>
         )}
 
+        {/* Split a long film into several recap videos */}
+        {duration >= 600 && (
+          <div className="mt-5 rounded-2xl border border-white/10 bg-black/30 p-3.5">
+            <label className="flex items-center gap-2.5 cursor-pointer">
+              <input type="checkbox" checked={splitOn} onChange={e => { setSplitOn(e.target.checked); setPartIdx(0); }} className="accent-amber-400 w-4 h-4" />
+              <span className="text-[12.5px] font-bold text-white">{isMm ? '✂️ ပိုင်းခွဲပြီး လုပ်မယ် (API မကုန်အောင်၊ ပိုင်းလိုက် ထုတ်မယ်)' : '✂️ Split into parts (lighter on the API)'}</span>
+            </label>
+            {splitOn && (
+              <div className="mt-3 space-y-3">
+                <div>
+                  <Label>{isMm ? 'တစ်ပိုင်း Recap ကြာချိန်' : 'Recap length per part'}</Label>
+                  <div className="flex gap-1.5">
+                    {[3, 5, 7].map(m => (
+                      <button key={m} type="button" onClick={() => { setPartMin(m); setPartIdx(0); }} className={`px-3 py-2 rounded-xl text-[12px] font-bold border transition ${partMin === m ? 'bg-amber-400 text-black border-amber-400' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'}`}>
+                        {m} {isMm ? 'မိနစ်' : 'min'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {partCount > 1 ? (
+                  <div>
+                    <Label>{isMm ? `အပိုင်း ${partCount} ပိုင်း — ဘယ်ပိုင်းကို လုပ်မလဲ` : `${partCount} parts — which one now?`}</Label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {Array.from({ length: partCount }, (_, i) => {
+                        const b = partBounds(cuesRef.current?.cues);
+                        return (
+                          <button key={i} type="button" onClick={() => setPartIdx(i)} className={`px-2.5 py-2 rounded-xl text-left border transition ${curPart === i ? 'bg-white text-slate-900 border-white' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'}`}>
+                            <div className="text-[12px] font-extrabold">{isMm ? `အပိုင်း ${i + 1}` : `Part ${i + 1}`}{partTails.current[i] ? ' ✓' : ''}</div>
+                            <div className="text-[10.5px] font-mono opacity-70">{fmt(b[i])}–{fmt(b[i + 1])}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="mt-2 text-[11.5px] leading-relaxed text-slate-500">
+                      {isMm
+                        ? 'အပိုင်းတစ်ခုချင်းကို သီးခြား Recap ဗီဒီယိုအဖြစ် ထုတ်ပါတယ်။ အပိုင်း ၁ ကနေ အစဉ်လိုက် လုပ်ပါ — နောက်အပိုင်းက အရင်အပိုင်းရဲ့ အဆုံးကို ဆက်ရေးပါလိမ့်မယ်။ ဇာတ်ကားတစ်ခုလုံးကို တစ်ခါပဲ နားထောင်ပါတယ်။'
+                        : 'Each part becomes its own recap video. Do them in order: every part continues where the last one ended. The whole film is listened to only once.'}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-[11.5px] text-slate-500">{isMm ? 'ဒီအရှည်အတွက် ပိုင်းခွဲစရာ မလိုပါဘူး (၁ ပိုင်းတည်း)။' : 'Nothing to split at this length (one part).'}</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         </Group>
 
         {/* Selects */}
@@ -905,7 +992,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           className="w-full h-14 rounded-2xl bg-gradient-to-r from-amber-300 via-amber-400 to-orange-500 text-black text-[15px] font-extrabold flex items-center justify-center gap-2.5 shadow-xl shadow-amber-500/25 transition active:scale-[0.99] disabled:opacity-40 disabled:shadow-none"
         >
           {busy ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
-          {busy ? (isMm ? 'လုပ်ဆောင်နေသည်…' : 'Working…') : isMm ? 'Auto Recap စတင်မည်' : 'Start Auto Recap'}
+          {busy ? (isMm ? 'လုပ်ဆောင်နေသည်…' : 'Working…') : splitActive ? (isMm ? `အပိုင်း ${curPart + 1}/${partCount} စတင်မည်` : `Start part ${curPart + 1} of ${partCount}`) : isMm ? 'Auto Recap စတင်မည်' : 'Start Auto Recap'}
         </button>
 
         <label className="mt-2 flex items-center gap-2.5 rounded-2xl bg-white/[0.04] border border-white/10 px-4 py-3 text-[12.5px] text-slate-200 cursor-pointer">
@@ -1051,6 +1138,11 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
               <div className="text-[15px] font-extrabold text-white">{isMm ? 'Recap ပြီးပါပြီ' : 'Your recap is ready'}</div>
               <div className="text-[12px] text-slate-400">{result.segments.length} {isMm ? 'ပိုင်း' : 'parts'} · {fmt(result.duration)}</div>
             </div>
+            {splitActive && curPart < partCount - 1 && (
+              <button type="button" onClick={() => { setPartIdx(curPart + 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="ml-auto px-3.5 py-2 rounded-xl bg-amber-400 text-black text-[12px] font-extrabold">
+                {isMm ? `နောက်အပိုင်း ${curPart + 2} →` : `Next: part ${curPart + 2} →`}
+              </button>
+            )}
           </div>
 
           <div className="2xl:grid 2xl:grid-cols-[minmax(340px,440px)_minmax(0,1fr)] 2xl:gap-8 items-start">
