@@ -43,6 +43,8 @@ export interface RecapScriptOptions {
   coverage?: number;
   /** This narration is one part of a long film's recap split into several videos */
   part?: { index: number; count: number; prevTail?: string };
+  /** How many Gemini calls may run at once (more when several API keys are set) */
+  concurrency?: number;
   onStage?: (s: RecapStage) => void;
 }
 
@@ -227,7 +229,7 @@ ${dialogue || '(none)'}`;
       }
     }
   };
-  await Promise.all([worker(), worker(), worker()]);
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(8, opts.concurrency || 3)) }, () => worker()));
 
   for (let i = 0; i < count; i++) {
     if (!bible.setting && settings[i]) bible.setting = settings[i];
@@ -588,7 +590,7 @@ ${source.slice(0, 24000)}`,
   let nextBatch = 0;
   let writtenCount = 0;
   opts.onStage?.({ stage: 'write', done: 0, total: planned.length });
-  await Promise.all([0, 1, 2].map(async () => {
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(6, opts.concurrency || 3)) }, () => 0).map(async () => {
     while (nextBatch < batches.length) {
       const bi = nextBatch++;
       results[bi] = await writeBatch(llm, bible, batches[bi], planned.length, '', rules, language, partCtx);

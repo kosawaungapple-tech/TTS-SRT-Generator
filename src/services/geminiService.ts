@@ -413,6 +413,35 @@ ${text}`;
     return null;
   }
 
+  /**
+   * Splits a long film into `count` consecutive story chapters at natural turning points (scene / place / time changes,
+   * the end of an episode of the plot) using the transcript. Returns the start second of chapters 2..count, or null.
+   */
+  async planStoryChapters(cues: { start: number; end: number; text: string }[], count: number, onRetry?: (seconds: number, message: string) => void): Promise<number[] | null> {
+    if (count < 2 || cues.length < count * 3) return null;
+    const mmss = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+    // keep the prompt small: long films are sampled so the listing stays around 60k characters
+    const step = Math.max(1, Math.ceil(cues.reduce((n, c) => n + Math.min(90, c.text.length) + 12, 0) / 60000));
+    const listing = cues.map((c, i) => ({ c, i })).filter(({ i }) => i % step === 0).map(({ c, i }) => `[${i + 1}] ${mmss(c.start)} ${c.text.slice(0, 90)}`).join('\n');
+    const prompt = `Below is the timed transcript of a long film (${cues.length} lines, ${mmss(cues[cues.length - 1].end)} long).
+Split the story into exactly ${count} consecutive chapters that are each about the same length in running time, so each chapter can be recapped as its own part. Put every chapter break at a natural STORY turning point (a scene, place or time change, the end of an episode of the plot, a revelation or cliffhanger), never in the middle of a conversation or action.
+Return JSON only: {"starts":[<the line number where each of chapters 2..${count} begins>]} - exactly ${count - 1} ascending numbers taken from the line numbers shown.
+
+${listing}`;
+    for (const model of [GEMINI_MODELS.SCRIPT, GEMINI_MODELS.REWRITE]) {
+      try {
+        const data = await this.geminiRequest(model, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, responseMimeType: 'application/json' } }, 0, onRetry);
+        const raw = (data.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || '').join('') || '').trim();
+        const arr = (JSON.parse(raw.replace(/^```[a-z]*\n?|```$/g, '')) as { starts?: unknown }).starts;
+        if (!Array.isArray(arr) || arr.length !== count - 1) continue;
+        const idx = arr.map(Number);
+        if (idx.some((n, k) => !Number.isFinite(n) || n < 1 || n > cues.length || (k > 0 && n <= idx[k - 1]))) continue;
+        return idx.map(n => cues[n - 1].start);
+      } catch { /* try next model */ }
+    }
+    return null;
+  }
+
   // ---- Gemini custom voices (voice replication, Gemini 3.8 Flash TTS) -----------------------------
   private async voicesRequest(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
     const token = await getIdToken();
@@ -1204,6 +1233,7 @@ ${list.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.te
       getFrames?: (startSec: number, endSec: number) => Promise<string[]>;
       coverage?: number;
       part?: { index: number; count: number; prevTail?: string };
+      concurrency?: number;
       onStage?: (s: RecapStage) => void;
     }
   ): Promise<{ text: string; segments?: RecapSegment[] }> {
@@ -1259,6 +1289,7 @@ ${list.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.te
       getFrames: options?.getFrames,
       coverage: options?.coverage,
       part: options?.part,
+      concurrency: options?.concurrency,
       onStage: options?.onStage,
     });
   }
