@@ -51,9 +51,18 @@ function isFree(key: string, model: string): boolean {
 }
 
 /** Primary key first, then the extras; keys that are cooling for this model are skipped. */
+let rotation = 0;
 export function pickKey(primary: string, model: string, tried: Set<string>): string | null {
   const all = Array.from(new Set([primary, ...getExtraKeys()].filter(k => !!k)));
-  return all.find(k => !tried.has(k) && isFree(k, model)) || null;
+  if (!all.length) return null;
+  // Round-robin: every request starts from the next key, so a per-minute limit is spread over all your keys
+  // instead of hammering the first one. Keys that are cooling for this model (or already tried) are skipped.
+  const start = rotation++ % all.length;
+  for (let i = 0; i < all.length; i++) {
+    const k = all[(start + i) % all.length];
+    if (!tried.has(k) && isFree(k, model)) return k;
+  }
+  return null;
 }
 
 export function hasOtherFreeKey(current: string, primary: string, model: string): boolean {
@@ -63,4 +72,12 @@ export function hasOtherFreeKey(current: string, primary: string, model: string)
 
 export function keyCount(primary: string): number {
   return new Set([primary, ...getExtraKeys()].filter(k => !!k)).size;
+}
+
+/** Seconds until the first limited key is usable again (null when nothing is cooling). */
+export function soonestFreeSeconds(): number | null {
+  const now = Date.now();
+  let best: number | null = null;
+  coolingUntil.forEach(t => { if (t > now && (best === null || t < best)) best = t; });
+  return best === null ? null : Math.ceil((best - now) / 1000);
 }

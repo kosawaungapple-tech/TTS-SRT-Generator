@@ -20,7 +20,7 @@ import { SceneEditor } from './SceneEditor';
 import { renderTextLayerPng, type TextLayer } from '../utils/recapTextLayers';
 import { EditToolsPanel } from './EditToolsPanel';
 import { defaultFx, renderCardPng, renderImageOverlayPng, FILTER_CSS, type ImageOverlay, type RecapFx } from '../utils/recapFx';
-import { getExtraKeys } from '../services/geminiKeyPool';
+import { getExtraKeys, soonestFreeSeconds } from '../services/geminiKeyPool';
 import { authHeader } from '../services/serverAuth';
 import { loadLogoImage, renderLogoPng, type LogoPosition } from '../utils/recapLogo';
 import { SUBTITLE_PRESETS, getSubtitleStyle } from '../utils/subtitlePresets';
@@ -291,7 +291,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
 
   const pickFile = async (f: File | null) => {
     setFile(f);
-    partResults.current = {}; partTails.current = {}; cuesRef.current = null; setPartsVer(v => v + 1); setIsCombined(false); setPartIdx(0);
+    partResults.current = {}; partTails.current = {}; cuesRef.current = null; boundsRef.current = null; setPartsVer(v => v + 1); setIsCombined(false); setPartIdx(0);
     setResult(null);
     setVideoUrl(null);
     setThumb(null);
@@ -315,22 +315,50 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     return r.videoId;
   };
 
-  const run = async (resume = false) => {
+  const boundsRef = useRef<{ key: string; b: number[] } | null>(null);
+  const lastErrRef = useRef('');
+  const [autoAll, setAutoAll] = useState(false);
+  const autoAbort = useRef(false);
+  /** Part boundaries at story turning points (one extra Gemini call for the whole film); falls back to the quietest gaps. */
+  const ensureBounds = async (cues: { start: number; end: number; text: string }[], cueKey: string): Promise<number[]> => {
+    const key = `${cueKey}|${partCount}|${Math.round(duration)}`;
+    if (boundsRef.current?.key === key) return boundsRef.current.b;
+    let b: number[] | null = null;
+    if (cues.length >= partCount * 3) {
+      setProgress({ text: isMm ? 'ဇာတ်လမ်းကို အပိုင်းခွဲနေသည် (ဇာတ်ကွက်ပြောင်းတဲ့နေရာတွေမှာ)…' : 'Planning the parts at story turning points…', percent: 26 });
+      try {
+        const starts = await gemini().planStoryChapters(cues, partCount);
+        if (starts) {
+          const cand = [0, ...starts, duration];
+          const even = duration / partCount;
+          // reject a plan whose parts are far from equal (a part of 0.5x-1.7x the even length is fine)
+          if (cand.every((t, i) => i === 0 || (t - cand[i - 1] > even * 0.5 && t - cand[i - 1] < even * 1.7))) b = cand;
+        }
+      } catch { /* fall back */ }
+    }
+    if (!b) b = partBounds(cues);
+    boundsRef.current = { key, b };
+    setPartsVer(v => v + 1);
+    return b;
+  };
+
+  const run = async (resume = false, forcePart?: number, quiet = false): Promise<boolean> => {
+    const part = forcePart ?? curPart;
     if (!file) {
       showToast(isMm ? 'ဗီဒီယိုဖိုင် အရင်တင်ပါ' : 'Please upload a video first', 'error');
-      return;
+      return false;
     }
     if (!duration) {
       showToast(isMm ? 'ဗီဒီယိုအရှည်ကို ဖတ်မရပါ — mp4 ဖိုင်ကို စမ်းပါ' : 'Could not read the video length', 'error');
-      return;
+      return false;
     }
     if (!isAdmin && file.size > 190 * 1048576) {
       showToast(isMm ? 'ဒီဗီဒီယိုက ကြီးလွန်းပါတယ် (190 MB ထက်ကျော်) — ရှည်တဲ့ ဇာတ်ကားကို Admin ရဲ့ PC Worker နဲ့ပဲ လုပ်လို့ရပါတယ်' : 'This video is too large for the shared server (over 190 MB). Long films can only be recapped with the admin PC worker.', 'error');
-      return;
+      return false;
     }
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    doneIdx.current = curPart;
+    doneIdx.current = part;
     setIsCombined(false);
     setBusy(true);
     setErrorInfo(null);
@@ -340,6 +368,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     setDraft(null);
     setCanResume(false);
     if (!resume) draftRef.current = null;
+    let completed = false;
     try {
       const g = gemini();
       let segments: Segment[] = [];
@@ -359,7 +388,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         if (!key) {
           showToast(isMm ? 'Settings ထဲမှာ AssemblyAI API Key အရင်ထည့်ပါ' : 'Add your AssemblyAI API key in Settings first', 'error');
           onNavigateToSettings?.();
-          return;
+          return false;
         }
         stageRef.current = '1 listen (AssemblyAI)'; lap('1 listen (AssemblyAI)');
         setProgress({ text: isMm ? '၁/၄ စကားပြောကို နားထောင်နေသည်…' : '1/4 Listening to the speech…', percent: 3 });
@@ -387,8 +416,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       }
 
       // Which stretch of the film this run covers (the whole film unless it is split into parts).
-      const bounds = splitActive ? partBounds(cues) : null;
-      const pr = bounds ? { from: bounds[curPart], to: bounds[curPart + 1] } : { from: 0, to: duration };
+      const bounds = splitActive ? await ensureBounds(cues, cueKey) : null;
+      const pr = bounds ? { from: bounds[part], to: bounds[part + 1] } : { from: 0, to: duration };
       prRef.current = pr;
       const partLen = pr.to - pr.from;
       const partCues = cues.filter(c => c.end > pr.from && c.start < pr.to).map(c => ({ ...c, start: Math.max(0, c.start - pr.from), end: Math.min(partLen, c.end - pr.from) }));
@@ -406,7 +435,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           targetLanguage: language,
           cues: partCues,
           coverage,
-          part: splitActive ? { index: curPart, count: partCount, prevTail: partTails.current[curPart - 1] } : undefined,
+          part: splitActive ? { index: part, count: partCount, prevTail: partTails.current[part - 1] } : undefined,
+          concurrency: Math.min(6, getExtraKeys().length + 2),
           getFrames: async (a, b) => {
             const n = 5;
             return captureVideoFrames(file, Array.from({ length: n }, (_, i) => pr.from + a + ((b - a) * (i + 0.5)) / n), 448, 0.6);
@@ -438,14 +468,14 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       }
 
       draftRef.current = { segments, hasVideoTimes };
-      if (splitActive) partTails.current[curPart] = segments.map(sg => sg.text).join(' ').slice(-600);
-      if (reviewScript) {
+      if (splitActive) partTails.current[part] = segments.map(sg => sg.text).join(' ').slice(-600);
+      if (reviewScript && !quiet) {
         // Pause here so the script can be edited before any voice is recorded.
         draftRef.current = { segments, hasVideoTimes };
         setDraft({ segments, hasVideoTimes });
         setProgress(null);
         showToast(isMm ? 'ဇာတ်ညွှန်း ရပါပြီ — ပြင်ချင်ရင် ပြင်ပြီး "အသံသွင်းမည်" ကို နှိပ်ပါ' : 'Script ready — edit it if you like, then press "Record voiceover"', 'success');
-        return;
+        return false;
       }
       }
 
@@ -477,7 +507,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       const voiced: (Blob | undefined)[] = segments.map((_, i) => sceneAudios[i]);
       let finished = voiced.filter(Boolean).length;
       const pending = voiced.map((v, i) => (v ? -1 : i)).filter(i => i >= 0);
-      const CONC = getExtraKeys().length > 0 ? 3 : 2;
+      const nKeys = getExtraKeys().length + 1;
+      const CONC = nKeys >= 8 ? 5 : nKeys >= 4 ? 4 : nKeys >= 2 ? 3 : 2;
       let failure: unknown = null;
       const worker = async () => {
         while (pending.length && !failure) {
@@ -547,9 +578,10 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       });
       baseRef.current = { segments: segments.map(sg => ({ ...sg })), sceneAudios: joined.sceneAudios };
       baseVer.current++;
-      if (splitActive) { partResults.current[curPart] = { segments: segments.map(sg => ({ ...sg })), sceneAudios: joined.sceneAudios }; setPartsVer(v => v + 1); }
+      if (splitActive) { partResults.current[part] = { segments: segments.map(sg => ({ ...sg })), sceneAudios: joined.sceneAudios }; setPartsVer(v => v + 1); }
       draftRef.current = null;
       setProgress({ text: isMm ? 'ပြီးပါပြီ ✅' : 'Done ✅', percent: 100 });
+      completed = true;
       showToast(isMm ? '🎉 Auto Recap ပြီးပါပြီ — Voiceover နဲ့ SRT ကို ဒေါင်းလို့ရပါပြီ' : '🎉 Recap ready — download the voiceover and SRT', 'success');
     } catch (e) {
       console.error('[AutoRecap]', e);
@@ -559,6 +591,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           ? ' — Gemini API Key မှားနေသည်။ Settings ထဲက Gemini API Key ကို စစ်ပြီး (AI Studio က key အသစ်ကို အပြည့်ကူးထည့်ပါ) ပြန်သိမ်းပါ။'
           : ' — The Gemini API key is invalid. Check the key in Settings (paste the full key from AI Studio) and save it again.';
       }
+      lastErrRef.current = msg;
       setErrorInfo(`[${stageRef.current}] ${msg}`);
       showToast(msg, 'error');
       setProgress(null);
@@ -566,6 +599,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     } finally {
       setBusy(false);
     }
+    return completed;
   };
 
   useEffect(() => {
@@ -613,6 +647,42 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       showToast(e instanceof Error ? e.message : 'Could not join the parts', 'error');
     } finally {
       setCombining(false);
+    }
+  };
+
+  /** Does every part that is not done yet, one after another (no stops for script review), then joins them all. Waits when every API key is at its limit. */
+  const runAllParts = async () => {
+    if (autoAll) { autoAbort.current = true; abortRef.current?.abort(); return; }
+    if (!file || !splitActive) return;
+    autoAbort.current = false;
+    setAutoAll(true);
+    const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+    try {
+      for (let p = 0; p < partCount; p++) {
+        if (autoAbort.current) break;
+        if (partResults.current[p]) continue;
+        setPartIdx(p);
+        let ok = false, resume = false;
+        for (let attempt = 0; attempt < 40 && !autoAbort.current; attempt++) {
+          ok = await run(resume, p, true);
+          if (ok || autoAbort.current) break;
+          if (!/limit|quota|429|exhaust|RESOURCE|overload|503|unavailable/i.test(lastErrRef.current)) break;
+          resume = !!draftRef.current;
+          const wait = Math.min(900, Math.max(30, soonestFreeSeconds() ?? 60));
+          for (let s2 = wait; s2 > 0 && !autoAbort.current; s2--) {
+            setProgress({ text: isMm ? `API key အားလုံး limit ထိနေပါတယ် — ${s2} စက္ကန့်စောင့်ပြီး အပိုင်း ${p + 1} ကို ဆက်လုပ်မယ်` : `Every API key is at its limit — continuing part ${p + 1} in ${s2}s`, percent: 50 });
+            await sleep(1000);
+          }
+        }
+        if (!ok) {
+          if (!autoAbort.current) showToast(isMm ? `အပိုင်း ${p + 1} မှာ ရပ်သွားပါတယ် — အပေါ်က Error ကိုကြည့်ပြီး "စတင်မည်" နဲ့ ပြန်လုပ်ပါ (ပြီးသားအပိုင်းတွေ မပျောက်ပါဘူး)` : `Stopped at part ${p + 1} — see the error, then press Start to retry (finished parts are kept)`, 'error');
+          return;
+        }
+      }
+      if (!autoAbort.current) await combineParts();
+    } finally {
+      setAutoAll(false);
+      autoAbort.current = false;
     }
   };
 
@@ -917,7 +987,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                     <Label>{isMm ? `အပိုင်း ${partCount} ပိုင်း — ဘယ်ပိုင်းကို လုပ်မလဲ` : `${partCount} parts — which one now?`}</Label>
                     <div className="grid grid-cols-2 gap-1.5">
                       {Array.from({ length: partCount }, (_, i) => {
-                        const b = partBounds(cuesRef.current?.cues);
+                        const b = boundsRef.current && boundsRef.current.b.length === partCount + 1 ? boundsRef.current.b : partBounds(cuesRef.current?.cues);
                         return (
                           <button key={i} type="button" onClick={() => setPartIdx(i)} className={`px-2.5 py-2 rounded-xl text-left border transition ${curPart === i ? 'bg-white text-slate-900 border-white' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'}`}>
                             <div className="text-[12px] font-extrabold">{isMm ? `အပိုင်း ${i + 1}` : `Part ${i + 1}`}{partResults.current[i] ? ' ✓' : ''}</div>
@@ -931,6 +1001,16 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                         ? 'အပိုင်းတစ်ခုချင်းကို အစဉ်လိုက် ဇာတ်ညွှန်း + အသံသွင်းပါ (အပိုင်း ၁ ကနေ)။ အားလုံးပြီးရင် အောက်က "ပေါင်းမယ်" ကို နှိပ်ပြီး Recap တစ်ပုဒ်တည်း ဖြစ်အောင် ပေါင်းကာ တစ်ခါတည်း Render လုပ်ပါ။ ဇာတ်ကားတစ်ခုလုံးကို တစ်ခါပဲ နားထောင်ပါတယ်။'
                         : 'Script + voice each part in order (from part 1). When they are all done, press "Combine" to join them into ONE recap and render it once. The film is listened to only once.'}
                     </p>
+                    <button
+                      type="button"
+                      onClick={() => void runAllParts()}
+                      disabled={(busy && !autoAll) || combining}
+                      className={`mt-3 w-full h-12 rounded-xl text-[13px] font-extrabold flex items-center justify-center gap-2 disabled:opacity-40 ${autoAll ? 'bg-rose-500 text-white' : 'bg-gradient-to-r from-amber-300 to-orange-500 text-black'}`}
+                    >
+                      {autoAll ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                      {autoAll ? (isMm ? 'ရပ်မည် (အလိုအလျောက် လုပ်နေသည်)' : 'Stop (running all parts)') : (isMm ? '⚡ အပိုင်းအားလုံး အလိုအလျောက်လုပ် + ပေါင်း' : '⚡ Do all parts automatically, then join')}
+                    </button>
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">{isMm ? 'ဇာတ်ညွှန်းပြင်ခွင့်မပေးဘဲ အပိုင်း ၁ ကနေ အဆုံးထိ ဆက်တိုက်လုပ်ပါတယ်။ API key (အပိုထည့်ထားတာတွေပါ) ကုန်သွားရင် အားတဲ့ key ကို အလိုအလျောက်ပြောင်းသုံးပြီး အကုန်လုံး limit ထိရင် စောင့်ပြီး ဆက်လုပ်ပါတယ်။' : 'Runs part 1 to the end without pausing for script review. When a key hits its limit it switches to a free key by itself; if all are at the limit it waits and continues.'}</p>
                     <div className="mt-3 flex items-center justify-between gap-2 text-[11.5px] text-slate-400">
                       <span>{isMm ? `ပြီးပြီ: ${doneParts.length}/${partCount} ပိုင်း` : `Done: ${doneParts.length} of ${partCount} parts`}</span>
                       {isCombined && <span className="text-emerald-300 font-bold">{isMm ? 'ပေါင်းပြီး ✓' : 'Combined ✓'}</span>}
