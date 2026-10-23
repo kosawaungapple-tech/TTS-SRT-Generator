@@ -6,7 +6,7 @@ export const translations = {
     nav: {
       generate: { en: "Generate Voice", mm: "အသံထုတ်ယူခြင်း" },
       translator: { en: "AI Translator", mm: "ဘာသာပြန်" },
-      transcriber: { en: "AI Subtitles", mm: "SRT စာတန်းထိုး" },
+      transcriber: { en: "Video AI", mm: "ဗီဒီယို AI" },
       videoEditor: { en: "Video Editor", mm: "ဗီဒီယို ပြင်ဆင်ရန်" },
       thumbnail: { en: "Story Audiobook", mm: "အသံစာအုပ်" },
       history: { en: "History", mm: "မှတ်တမ်း" },
