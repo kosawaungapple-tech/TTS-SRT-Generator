@@ -1,3 +1,8 @@
+import dotenv from "dotenv";
+dotenv.config();
+if (fs.existsSync(".server_env")) {
+  dotenv.config({ path: ".server_env", override: true });
+}
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
@@ -861,13 +866,22 @@ async function startServer() {
                 config: updatedConfig
               });
             }
-            if (isTts && targetModel === 'gemini-3.8-flash-tts') {
-              console.warn(`[Proxy] Quota exceeded on gemini-3.8-flash-tts, falling back to gemini-3.8-flash-lite-tts`);
-              return await ai.models.generateContent({
-                model: 'gemini-3.8-flash-lite-tts',
-                contents,
-                config: updatedConfig
-              });
+            if (isTts) {
+              if (targetModel === 'gemini-3.8-flash-lite-tts') {
+                console.warn(`[Proxy] Quota exceeded on gemini-3.8-flash-lite-tts, falling back to gemini-3.8-flash-tts`);
+                return await ai.models.generateContent({
+                  model: 'gemini-3.8-flash-tts',
+                  contents,
+                  config: updatedConfig
+                });
+              } else if (targetModel === 'gemini-3.8-flash-tts') {
+                console.warn(`[Proxy] Quota exceeded on gemini-3.8-flash-tts, falling back to gemini-3.8-flash-lite-tts`);
+                return await ai.models.generateContent({
+                  model: 'gemini-3.8-flash-lite-tts',
+                  contents,
+                  config: updatedConfig
+                });
+              }
             }
           }
           throw directErr;
@@ -875,11 +889,22 @@ async function startServer() {
       }
     };
 
+    const createAiClient = (key: string): GoogleGenAI => {
+      return new GoogleGenAI({
+        apiKey: key,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+    };
+
     try {
       // 1. If personalKey is provided and plausible, try it first
       if (personalKey) {
         try {
-          const ai = new GoogleGenAI({ apiKey: personalKey });
+          const ai = createAiClient(personalKey);
           console.log(`[Proxy] Requesting model: ${targetModel} with Personal Key: ${personalKey.substring(0, 4)}...`);
           const result = await executeWithClient(ai);
           return res.json(convertBuffersToBase64(result));
@@ -892,24 +917,27 @@ async function startServer() {
 
       // 2. System / Admin Pool Fallback
       const poolKeys: string[] = [];
-      if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim()) {
-        poolKeys.push(process.env.GEMINI_API_KEY.trim());
+      const envKey = process.env.GEMINI_API_KEY?.trim();
+      if (envKey && !envKey.startsWith('MY_') && !envKey.startsWith('my_') && !envKey.includes('placeholder')) {
+        poolKeys.push(envKey);
       }
 
       try {
-        const adminChannelsSnapshot = await db.collection('admin_channels').get();
-        adminChannelsSnapshot.docs.forEach(doc => {
-          const k = doc.data()?.key;
-          if (k && typeof k === 'string') {
-            const tk = k.trim();
-            const lk = tk.toLowerCase();
-            if (tk.length >= 25 && !lk.startsWith('my_') && !lk.startsWith('my ') && !lk.includes('placeholder') && !poolKeys.includes(tk)) {
-              poolKeys.push(tk);
+        if (db) {
+          const adminChannelsSnapshot = await db.collection('admin_channels').get();
+          adminChannelsSnapshot.docs.forEach(doc => {
+            const k = doc.data()?.key;
+            if (k && typeof k === 'string') {
+              const tk = k.trim();
+              const lk = tk.toLowerCase();
+              if (tk.length >= 25 && !lk.startsWith('my_') && !lk.startsWith('my ') && !lk.includes('placeholder') && !poolKeys.includes(tk)) {
+                poolKeys.push(tk);
+              }
             }
-          }
-        });
-      } catch (fsErr: unknown) {
-        console.warn("[Proxy] Firestore admin_channels fetch skipped/failed, proceeding with env keys:", (fsErr as Error)?.message || fsErr);
+          });
+        }
+      } catch {
+        // Firestore admin_channels is optional, silent fallback to system pool
       }
 
       fs.appendFileSync('/tmp/proxy_debug.log', `[Proxy Call] targetModel: ${targetModel}, poolKeys length: ${poolKeys.length}, env key present: ${!!process.env.GEMINI_API_KEY}\n`);
@@ -922,7 +950,7 @@ async function startServer() {
       for (let i = 0; i < poolKeys.length; i++) {
         const currentKey = poolKeys[i];
         try {
-          const ai = new GoogleGenAI({ apiKey: currentKey });
+          const ai = createAiClient(currentKey);
           console.log(`[Proxy] Requesting model: ${targetModel} with System/Admin Pool Key (${i + 1}/${poolKeys.length})`);
           
           const result = await executeWithClient(ai);
