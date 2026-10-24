@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Layers, Palette, Type, Image as ImageIcon, Volume2, Film, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Layers, Palette, Type, Image as ImageIcon, Volume2, Film, Plus, Trash2 } from 'lucide-react';
 import { TextLayersEditor } from './TextLayersEditor';
 import type { TextLayer } from '../utils/recapTextLayers';
 import {
@@ -75,7 +75,7 @@ const CardEditor: React.FC<{ title: string; card: CardCfg; onChange: (c: CardCfg
 
 /** The recap's edit tools, grouped in tabs: transitions & fades, colour looks, text & stickers, intro/outro cards, audio. */
 export const EditToolsPanel: React.FC<Props> = ({ fx, onFx, textLayers, onTextLayers, overlays, onOverlays, duration, hasBgm, thumb, isMm }) => {
-  const [tab, setTab] = useState<Tab>('trans');
+  const [tab, setTab] = useState<Tab | null>(null);
   const setF = (p: Partial<RecapFx>) => onFx({ ...fx, ...p });
   const maxT = Math.max(1, Math.floor(duration));
   const patchOv = (id: number, p: Partial<ImageOverlay>) => onOverlays(overlays.map(o => (o.id === id ? { ...o, ...p } : o)));
@@ -91,19 +91,27 @@ export const EditToolsPanel: React.FC<Props> = ({ fx, onFx, textLayers, onTextLa
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
       <div className="text-[13px] font-extrabold text-white mb-3">{isMm ? '✂️ Edit Tools' : '✂️ Edit tools'}</div>
-      <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-2 -mx-1 px-1">
-        {tabs.map(t => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => setTab(t.id)}
-            className={`relative shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-[11.5px] font-bold border transition ${tab === t.id ? 'bg-white text-slate-900 border-white' : 'bg-black/40 text-slate-300 border-white/10 hover:bg-white/10'}`}
-          >
-            {t.icon}{t.label}
-            {t.dot && <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />}
-          </button>
-        ))}
-      </div>
+      {tab === null ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+          {tabs.map(t => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setTab(t.id)}
+              className="relative text-left rounded-2xl border border-white/10 bg-black/30 hover:bg-white/[0.07] hover:border-amber-400/40 p-3.5 transition"
+            >
+              <span className="w-9 h-9 rounded-xl bg-white/10 grid place-items-center text-slate-200 mb-2">{t.icon}</span>
+              <span className="block text-[12.5px] font-bold text-white leading-tight">{t.label}</span>
+              {t.dot && <span className="absolute top-3 right-3 w-2 h-2 rounded-full bg-amber-400" />}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="flex items-center gap-3">
+          <button type="button" onClick={() => setTab(null)} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-[12px] font-bold flex items-center gap-1.5"><ArrowLeft size={14} />{isMm ? 'နောက်သို့' : 'Back'}</button>
+          <span className="text-[13px] font-extrabold text-white flex items-center gap-1.5">{tabs.find(t => t.id === tab)?.icon}{tabs.find(t => t.id === tab)?.label}</span>
+        </div>
+      )}
 
       <div className="mt-3 space-y-4">
         {tab === 'trans' && (
