@@ -26,7 +26,6 @@ interface Para { start: number; end: number; text: string }
 const panel = 'min-w-0 w-full rounded-3xl sm:rounded-[28px] border border-white/10 bg-gradient-to-b from-slate-900/90 to-black/90 p-4 sm:p-6 shadow-2xl shadow-black/50';
 const MAX_MIN_USER = 40; // the shared Gemini key is protected: normal users can recap up to 40 minutes at a time
 
-const GAP = 0.25;
 const secToSrt = (sec: number) => {
   const v = Math.max(0, sec);
   const p = (n: number, l = 2) => String(n).padStart(l, '0');
@@ -103,6 +102,16 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioSrt, setAudioSrt] = useState('');
   const [audioDur, setAudioDur] = useState(0);
+  const [overCount, setOverCount] = useState(0);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const vidRef = useRef<HTMLVideoElement>(null);
+  const audRef = useRef<HTMLAudioElement>(null);
+  useEffect(() => {
+    if (!file) { setVideoUrl(null); return; }
+    const u = URL.createObjectURL(file);
+    setVideoUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [file]);
 
   const gemini = useCallback(() => new GeminiTTSService(apiChannelManager.getActiveKey(false, isAdmin) || '', isAdmin), [isAdmin]);
 
@@ -288,7 +297,9 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
           try {
             let blob = await speak(texts[i], i);
             // The voiceover must fit the video: this paragraph gets the time of the scene it tells.
-            const budget = Math.max(2, slotOf(paras[i]) - GAP);
+            // The voice starts exactly where its scene starts in the video, so it must also end inside that scene.
+            const hard = Math.max(1, paras[i].end - paras[i].start - 0.15);
+            const budget = Math.max(1, Math.min(slotOf(paras[i]), hard));
             let dur = await durOf(blob);
             if (dur > budget * 1.02) {
               setVoiceProg(`${isMm ? 'ဗီဒီယိုအချိန်နဲ့ ကိုက်အောင် ညှိနေသည်' : 'Fitting to the video'} (${i + 1}/${paras.length})`);
@@ -304,7 +315,11 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
               }
               const rate = Math.min(MAX_FAST, dur / budget);
               if (rate > 1.03) {
-                try { blob = (await renderProcessedAudio(blob, { speed: rate })).blob; } catch { /* keep as is */ }
+                try { blob = (await renderProcessedAudio(blob, { speed: rate })).blob; dur = await durOf(blob); } catch { /* keep as is */ }
+              }
+              // last resort: still longer than its scene -> a little faster (never past 1.45x) so it ends with the scene
+              if (dur > hard * 1.01) {
+                try { blob = (await renderProcessedAudio(blob, { speed: Math.min(1.45, dur / hard) })).blob; } catch { /* keep as is */ }
               }
             }
             blobs[i] = blob;
@@ -321,16 +336,25 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
       const bufs: AudioBuffer[] = [];
       try { for (const b of blobs) bufs.push(await ctx.decodeAudioData(await (b as Blob).arrayBuffer())); } finally { void ctx.close(); }
       const rate = bufs[0].sampleRate;
-      const total = bufs.reduce((n, b) => n + b.duration, 0) + GAP * (bufs.length - 1);
+      // ONE timeline: every paragraph's voice sits at the start time of its scene in the ORIGINAL video,
+      // so voiceover, subtitles and picture stay together when you edit the video.
+      const total = Math.max(duration, paras[paras.length - 1].end);
       const out = new AudioBuffer({ length: Math.ceil(total * rate), numberOfChannels: 1, sampleRate: rate });
       const ch = out.getChannelData(0);
       const subs: SRTSubtitle[] = [];
-      let t = 0;
+      let over = 0;
       bufs.forEach((b, i) => {
-        ch.set(b.getChannelData(0), Math.round(t * rate));
-        subs.push(...subsFor(texts[i], t, t + b.duration, subs.length));
-        t += b.duration + GAP;
+        const t0 = paras[i].start;
+        const limit = Math.max(0.5, paras[i].end - t0 - 0.05); // never spill into the next scene
+        const len = Math.min(b.duration, limit);
+        if (b.duration > limit * 1.02) over++;
+        const src = b.getChannelData(0);
+        const n = Math.min(src.length, Math.floor(len * rate));
+        const off = Math.round(t0 * rate);
+        for (let k = 0; k < n && off + k < ch.length; k++) ch[off + k] = src[k];
+        subs.push(...subsFor(texts[i], t0, t0 + len, subs.length));
       });
+      setOverCount(over);
       if (texts.some((x, i) => x !== paras[i].text)) setParas(cur => cur ? cur.map((x, i) => ({ ...x, text: texts[i] })) : cur);
       setAudioUrl(URL.createObjectURL(audioBufferToWav(out)));
       setAudioSrt(generateSRT(subs));
@@ -544,7 +568,24 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
               <p className="mt-2 text-[11.5px] leading-relaxed text-slate-400">{isMm ? 'အသံကို ပုံမှန်ပြောနှုန်းအတိုင်း ထုတ်ပြီး SRT ကို အသံအချိန်နဲ့ ကိုက်အောင် ညှိပေးပါတယ်။ စာသားကို အရင်ပြင်ပြီးမှ ထုတ်ပါ။' : 'The voice is made at normal pace and the SRT is timed to it. Finish editing the text first.'}</p>
               {audioUrl && (
                 <div className="mt-3 rounded-xl bg-black/40 border border-white/10 p-3">
-                  <div className="text-[11.5px] text-slate-400 mb-2">{isMm ? 'အသံ' : 'Voiceover'} · {fmt(audioDur)} / {isMm ? 'ဗီဒီယို' : 'video'} {fmt(duration)}{audioDur > duration + 1 ? (isMm ? ' ⚠ ကျော်နေ' : ' ⚠ longer than the video') : ' ✓'}</div>
+                  <div className="text-[11.5px] text-slate-400 mb-2">{isMm ? 'အသံ' : 'Voiceover'} · {fmt(audioDur)} / {isMm ? 'ဗီဒီယို' : 'video'} {fmt(duration)}{audioDur > duration + 1 ? (isMm ? ' ⚠ ကျော်နေ' : ' ⚠ longer than the video') : ' ✓'}{overCount > 0 ? (isMm ? ` · ⚠ ${overCount} ပိုဒ်ကို ဇာတ်ကွက်ထဲ ဆန့်အောင် ဖြတ်ထား` : ` · ⚠ ${overCount} paragraph(s) clipped to their scene`) : ''}</div>
+                  {videoUrl && (
+                    <div className="mb-3">
+                      <video
+                        ref={vidRef}
+                        src={videoUrl}
+                        muted
+                        playsInline
+                        controls
+                        className="w-full max-h-64 rounded-xl bg-black"
+                        onPlay={() => { const a = audRef.current; const v = vidRef.current; if (a && v) { a.currentTime = v.currentTime; void a.play(); } }}
+                        onPause={() => audRef.current?.pause()}
+                        onSeeked={() => { const a = audRef.current; const v = vidRef.current; if (a && v) a.currentTime = v.currentTime; }}
+                      />
+                      <audio ref={audRef} src={audioUrl} preload="auto" />
+                      <div className="text-[11px] text-slate-500 mt-1.5">{isMm ? '▶ ဗီဒီယိုနဲ့ အသံကို တစ်ပြိုင်တည်း စစ်ကြည့်နိုင်ပါတယ်' : '▶ Preview: the video and the voiceover play in sync'}</div>
+                    </div>
+                  )}
                   <audio src={audioUrl} controls className="w-full" />
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
                     <a href={audioUrl} download={`${baseName}_voiceover.wav`} className="h-11 rounded-xl bg-emerald-400 text-black text-[12.5px] font-extrabold flex items-center justify-center gap-2"><Download size={15} />{isMm ? 'အသံ ဒေါင်းမည် (WAV)' : 'Download WAV'}</a>
