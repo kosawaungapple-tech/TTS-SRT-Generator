@@ -2117,7 +2117,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white selection:bg-amber-400/30 transition-colors duration-500 relative overflow-hidden font-sans">
+    <div className="min-h-screen bg-black text-white selection:bg-amber-400/30 transition-colors duration-500 relative overflow-x-clip font-sans">
       {/* Premium Background Elements */}
       <div className="fixed inset-0 -z-10 bg-black overflow-hidden pointer-events-none">
         <div className="noise-overlay absolute inset-0 mix-blend-overlay" />
@@ -2185,7 +2185,7 @@ export default function App() {
           <AnnouncementPanel announcements={globalSettings.announcements} />
         )}
 
-        <main className="flex-1 w-full max-w-[1760px] mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 overflow-x-hidden">
+        <main className="flex-1 w-full max-w-[1760px] mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 overflow-x-clip">
           {isConfigLoading ? (
           <div className="flex flex-col items-center justify-center py-40">
             <div className="flex items-center justify-center gap-1.5 h-12 mb-6">
