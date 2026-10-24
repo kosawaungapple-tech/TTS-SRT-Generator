@@ -45,6 +45,8 @@ export interface RecapScriptOptions {
   part?: { index: number; count: number; prevTail?: string };
   /** How many Gemini calls may run at once (more when several API keys are set) */
   concurrency?: number;
+  /** Connective flow between paragraphs (default on); false = off */
+  flow?: boolean;
   /** Dub style: key lines are spoken by the characters (tagged `[Name|♂] line` / `[Name|♀] line`), the rest is narration */
   dub?: boolean;
   onStage?: (s: RecapStage) => void;
@@ -156,6 +158,14 @@ function partRule(part: RecapScriptOptions['part'], language: 'mm' | 'en'): stri
     (part.prevTail ? `The previous part ended with: "${part.prevTail.slice(-500)}" — keep every character named exactly as in that text. ` : '') +
     (last ? 'This is the final part: land the ending. ' : 'Do NOT wrap the story up or reveal an ending: finish on a cliffhanger that pulls into the next part. ') +
     (language === 'mm' ? '' : '');
+}
+
+function flowRule(flow: boolean | undefined, language: 'mm' | 'en'): string {
+  if (flow === false) return '';
+  const examples = language === 'mm'
+    ? 'Burmese connectives to use (vary them): ဒီလိုနဲ့၊ အဲဒီအချိန်မှာပဲ၊ ဒါပေမယ့်၊ ဒါကြောင့်၊ နောက်တော့၊ တစ်ဖက်မှာတော့၊ ထိုအခိုက်မှာ၊ ဒီတော့မှ၊ အဲဒါနဲ့၊ ကံဆိုးချင်တော့၊ နောက်ဆုံးမှာတော့၊ ဘယ်လိုပဲဖြစ်ဖြစ်၊ ဒါကိုကြည့်ပြီး၊ ဒီအချိန်မှာ'
+    : 'English connectives to use (vary them): "Meanwhile", "But then", "Because of that", "By the time", "Little did he know", "Just as", "From that moment"';
+  return `\nCONNECTIVE FLOW (very important): the narration must sound like ONE continuous story told aloud, not a list of facts. Every paragraph after the first must OPEN with a natural spoken connective that ties it to the last beat of the previous paragraph (time, cause→effect, contrast or reaction), and sentences inside a paragraph must be joined with connectives too instead of standing alone. Never use the same opening connective in two paragraphs in a row. End each paragraph so that it hands over to the next one (a consequence, a question, or a hint of what comes). ${examples}.`;
 }
 
 function dubRule(dub: boolean | undefined): string {
@@ -531,7 +541,7 @@ export async function generateGroundedRecap(
   const style = opts.style || 'Cinematic movie recap';
   const tone = opts.tone || 'Engaging, dramatic';
   const minutes = opts.targetMinutes ?? 4;
-  const rules = voiceRules(language, style, tone) + partRule(opts.part, language) + dubRule(opts.dub);
+  const rules = voiceRules(language, style, tone) + partRule(opts.part, language) + dubRule(opts.dub) + flowRule(opts.flow, language);
   const partCtx = opts.part && opts.part.count > 1 ? { first: opts.part.index === 0, last: opts.part.index >= opts.part.count - 1 } : undefined;
 
   if (opts.mode === 'quick') {
