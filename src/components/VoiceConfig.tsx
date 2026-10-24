@@ -86,7 +86,7 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
   return (
     <div className="bg-white/5 backdrop-blur-xl rounded-2xl sm:rounded-3xl p-4 sm:p-8 border border-white/10 shadow-2xl relative overflow-hidden group">
       <div className="absolute top-0 left-0 w-64 h-64 bg-amber-400/5 blur-[100px] -z-10 group-hover:bg-amber-400/10 transition-colors duration-1000" />
-      <div className="space-y-8 sm:space-y-10">
+      <div className="space-y-6 sm:space-y-7">
         {/* AI Model Server Selection */}
         <div className="group/item">
           <label className="flex items-center gap-3 text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 sm:mb-4 group-hover/item:text-amber-500 transition-colors">
@@ -143,6 +143,90 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
           </div>
         </div>
 
+        <div className="space-y-10 pt-4">
+          <div className="space-y-4">
+            <Slider
+              label={t('voiceConfig.speed')}
+              value={config.speed}
+              min={0.5}
+              max={2.0}
+              step={0.1}
+              suffix="x"
+              onChange={(v) => handleChange('speed', v)}
+            />
+            {estimatedDisplay && (
+              <div className="flex justify-end px-2">
+                <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest italic bg-white/5 px-3 py-1 rounded-full">
+                  {estimatedDisplay}
+                </span>
+              </div>
+            )}
+          </div>
+          <Slider
+            label={t('voiceConfig.pitch')}
+            value={config.pitch}
+            min={-10.0}
+            max={10.0}
+            step={1}
+            suffix=""
+            onChange={(v) => handleChange('pitch', v)}
+          />
+          <div className="space-y-1">
+            <Slider
+              label={t('voiceConfig.volume')}
+              value={config.volume ?? 0}
+              min={0}
+              max={10}
+              step={1}
+              suffix=" dB"
+              onChange={(v) => handleChange('volume', v)}
+            />
+            <div className="flex justify-between items-center px-1 text-[9px] sm:text-[10px] text-slate-500 font-medium">
+              <span>0 dB (Unity Gain)</span>
+              <span>+10 dB (Max Gain Boost)</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Style Instructions */}
+        <div className="group/item">
+          <label className="flex items-center gap-3 text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 sm:mb-4 group-hover/item:text-amber-500 transition-colors">
+            <div className="p-1.5 sm:p-2 bg-amber-400/10 rounded-lg text-amber-500">
+              <Wand2 size={14} className="sm:w-4 sm:h-4" />
+            </div>
+            {t('voiceConfig.style')}
+          </label>
+          <div className="space-y-4">
+            <input
+              type="text"
+              value={config.styleInstruction || ''}
+              onChange={(e) => handleChange('styleInstruction', e.target.value)}
+              placeholder={t('voiceConfig.stylePlaceholder')}
+              className="w-full bg-black/40 border border-white/5 rounded-xl px-4 sm:px-5 py-3.5 sm:py-4 text-sm sm:text-base text-white focus:outline-none focus:ring-1 focus:ring-amber-400/30 focus:border-amber-400/50 transition-all font-medium placeholder:text-slate-600"
+            />
+            <div className="flex flex-wrap gap-1.5 sm:gap-2">
+              {QUICK_STYLES.map((style) => (
+                <button
+                  type="button"
+                  key={style.label}
+                  onClick={() => toggleStyle(style.value)}
+                  className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-[8px] sm:text-[9px] font-bold uppercase tracking-widest transition-all border ${
+                    isStyleActive(style.value)
+                      ? 'bg-amber-400 text-black border-amber-400 shadow-lg shadow-amber-400/20'
+                      : 'bg-white/5 text-slate-500 border-white/5 hover:border-amber-400/30 hover:text-amber-500'
+                  }`}
+                >
+                  {style.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+
+        <details className="group/det rounded-2xl border border-white/10 bg-black/20 open:bg-black/30">
+          <summary className="cursor-pointer select-none list-none flex items-center justify-between px-4 py-3 text-[12px] font-bold text-slate-300 hover:text-amber-400">🎙 Custom voice cloning / အသံပုံတူ<ChevronDown size={16} className="transition group-open/det:rotate-180" /></summary>
+          <div className="px-4 pb-4 pt-1 space-y-8">
         {/* Custom Voice Profile Section */}
         <div className="group/item">
           <label className="flex items-center gap-3 text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 sm:mb-4 group-hover/item:text-amber-500 transition-colors">
@@ -159,6 +243,12 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
           </div>
         </div>
 
+          </div>
+        </details>
+
+        <details className="group/det rounded-2xl border border-white/10 bg-black/20 open:bg-black/30">
+          <summary className="cursor-pointer select-none list-none flex items-center justify-between px-4 py-3 text-[12px] font-bold text-slate-300 hover:text-amber-400">📁 File name &amp; format / ဖိုင်အမည်နှင့် ဖော်မတ်<ChevronDown size={16} className="transition group-open/det:rotate-180" /></summary>
+          <div className="px-4 pb-4 pt-1 space-y-8">
         {/* Custom File Name */}
         <div className="group/item">
           <label className="flex items-center gap-3 text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 sm:mb-4 group-hover/item:text-amber-500 transition-colors">
@@ -261,85 +351,9 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
           </div>
         </div>
 
-        {/* Style Instructions */}
-        <div className="group/item">
-          <label className="flex items-center gap-3 text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 sm:mb-4 group-hover/item:text-amber-500 transition-colors">
-            <div className="p-1.5 sm:p-2 bg-amber-400/10 rounded-lg text-amber-500">
-              <Wand2 size={14} className="sm:w-4 sm:h-4" />
-            </div>
-            {t('voiceConfig.style')}
-          </label>
-          <div className="space-y-4">
-            <input
-              type="text"
-              value={config.styleInstruction || ''}
-              onChange={(e) => handleChange('styleInstruction', e.target.value)}
-              placeholder={t('voiceConfig.stylePlaceholder')}
-              className="w-full bg-black/40 border border-white/5 rounded-xl px-4 sm:px-5 py-3.5 sm:py-4 text-sm sm:text-base text-white focus:outline-none focus:ring-1 focus:ring-amber-400/30 focus:border-amber-400/50 transition-all font-medium placeholder:text-slate-600"
-            />
-            <div className="flex flex-wrap gap-1.5 sm:gap-2">
-              {QUICK_STYLES.map((style) => (
-                <button
-                  type="button"
-                  key={style.label}
-                  onClick={() => toggleStyle(style.value)}
-                  className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-[8px] sm:text-[9px] font-bold uppercase tracking-widest transition-all border ${
-                    isStyleActive(style.value)
-                      ? 'bg-amber-400 text-black border-amber-400 shadow-lg shadow-amber-400/20'
-                      : 'bg-white/5 text-slate-500 border-white/5 hover:border-amber-400/30 hover:text-amber-500'
-                  }`}
-                >
-                  {style.label}
-                </button>
-              ))}
-            </div>
           </div>
-        </div>
+        </details>
 
-        <div className="space-y-10 pt-4">
-          <div className="space-y-4">
-            <Slider
-              label={t('voiceConfig.speed')}
-              value={config.speed}
-              min={0.5}
-              max={2.0}
-              step={0.1}
-              suffix="x"
-              onChange={(v) => handleChange('speed', v)}
-            />
-            {estimatedDisplay && (
-              <div className="flex justify-end px-2">
-                <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest italic bg-white/5 px-3 py-1 rounded-full">
-                  {estimatedDisplay}
-                </span>
-              </div>
-            )}
-          </div>
-          <Slider
-            label={t('voiceConfig.pitch')}
-            value={config.pitch}
-            min={-10.0}
-            max={10.0}
-            step={1}
-            suffix=""
-            onChange={(v) => handleChange('pitch', v)}
-          />
-          <div className="space-y-1">
-            <Slider
-              label={t('voiceConfig.volume')}
-              value={config.volume ?? 0}
-              min={0}
-              max={10}
-              step={1}
-              suffix=" dB"
-              onChange={(v) => handleChange('volume', v)}
-            />
-            <div className="flex justify-between items-center px-1 text-[9px] sm:text-[10px] text-slate-500 font-medium">
-              <span>0 dB (Unity Gain)</span>
-              <span>+10 dB (Max Gain Boost)</span>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );

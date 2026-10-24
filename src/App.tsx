@@ -2500,7 +2500,7 @@ export default function App() {
                   </div>
 
                   {/* Right Column - Config */}
-                  <div className="lg:col-span-5 space-y-8">
+                  <div className="lg:col-span-5 space-y-8 lg:sticky lg:top-24 lg:self-start lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:pr-1 [scrollbar-width:thin]">
                     <VoiceConfig 
                       config={config} 
                       setConfig={setConfig} 
