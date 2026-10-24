@@ -1,11 +1,5 @@
 apply plugin: 'com.android.application'
 
-// Release signing: create android/keystore.properties (git-ignored) with
-// storeFile, storePassword, keyAlias, keyPassword. See docs/GOOGLE_PLAY.md.
-def keystoreProps = new Properties()
-def keystoreFile = rootProject.file('keystore.properties')
-if (keystoreFile.exists()) { keystoreProps.load(new FileInputStream(keystoreFile)) }
-
 android {
     namespace = "com.vlogsbysaw.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -22,19 +16,8 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
-    signingConfigs {
-        release {
-            if (keystoreProps['storeFile']) {
-                storeFile rootProject.file(keystoreProps['storeFile'])
-                storePassword keystoreProps['storePassword']
-                keyAlias keystoreProps['keyAlias']
-                keyPassword keystoreProps['keyPassword']
-            }
-        }
-    }
     buildTypes {
         release {
-            if (keystoreProps['storeFile']) { signingConfig signingConfigs.release }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
