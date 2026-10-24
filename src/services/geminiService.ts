@@ -155,9 +155,11 @@ export class GeminiTTSService {
           console.error(`Gemini Proxy Error Response [${modelName}] (${status}):`, data);
 
           // Limit reached on this key: remember it and move to the next key instead of waiting.
-          if (status === 429 && key && this.apiKey && /quota|exhaust|rate/i.test(errorMsg)) {
+          // A dead key (leaked, expired, revoked, no access) is skipped the same way as a spent one.
+          const deadKey = (status === 400 || status === 401 || status === 403) && /api key|leaked|expired|revoked|permission|denied|billing/i.test(errorMsg);
+          if (key && this.apiKey && ((status === 429 && /quota|exhaust|rate|limit/i.test(errorMsg)) || deadKey)) {
             const other = hasOtherFreeKey(key, this.apiKey, modelName);
-            markLimited(key, modelName, errorMsg);
+            markLimited(key, modelName, deadKey ? 'retry in 3600s' : errorMsg);
             if (other) throw new KeyLimitError(errorMsg);
           }
 
@@ -250,7 +252,7 @@ export class GeminiTTSService {
 
     if (this.apiKey) {
       const tried = new Set<string>();
-      let key = pickKey(this.apiKey, modelName, tried) || this.apiKey;
+      let key = pickKey(this.apiKey, modelName, tried) || this.apiKey.split(/[\s,]+/)[0];
       for (;;) {
         try {
           return await executeRequest(key);
