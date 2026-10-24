@@ -7,7 +7,7 @@ import { estimateNarrationSeconds } from '../services/recapScriptPipeline';
 import { getExtraKeys } from '../services/geminiKeyPool';
 import { captureVideoFrames } from '../utils/videoFrames';
 import { extractSpeechWav } from '../utils/voiceAudio';
-import { audioBufferToWav } from '../utils/audioUtils';
+import { audioBufferToWav, renderProcessedAudio } from '../utils/audioUtils';
 import { generateSRT, downloadSrtFile, splitSentenceIntoCueBlocks } from '../utils/subtitleUtils';
 import { planSubtitlePieces } from '../utils/recapGeometry';
 import { VOICE_OPTIONS } from '../constants';
@@ -266,16 +266,47 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
     try {
       const g = gemini();
       const blobs: (Blob | undefined)[] = paras.map(() => undefined);
+      const texts = paras.map(p => p.text);
       let done = 0;
       const queue = paras.map((_, i) => i);
       let failure: unknown = null;
+      const Ctx0 = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const durOf = async (b: Blob) => {
+        const c = new Ctx0();
+        try { return (await c.decodeAudioData(await b.arrayBuffer())).duration; } finally { void c.close(); }
+      };
+      const speak = async (text: string, i: number) => {
+        const r = await g.generateTTS(text.replace(/\s+/g, ' ').trim(), { voiceId: voice, speed: 1, pitch: 0, volume: 100, vocalStyle: 'Expressive', styleInstruction: 'Read as a gripping storyteller, natural and clear, at a normal speaking pace.' }, undefined, undefined, (sec, msg) => setVoiceProg(`${msg} (${sec}s)`));
+        if (!r?.audioUrl) throw new Error(`No audio for paragraph ${i + 1}`);
+        return await (await fetch(r.audioUrl)).blob();
+      };
+      const MAX_FAST = 1.25; // never faster than this: the voice must stay natural
       const worker = async () => {
         while (queue.length && !failure) {
           const i = queue.shift() as number;
           try {
-            const r = await g.generateTTS(paras[i].text.replace(/\s+/g, ' ').trim(), { voiceId: voice, speed: 1, pitch: 0, volume: 100, vocalStyle: 'Expressive', styleInstruction: 'Read as a gripping storyteller, natural and clear, at a normal speaking pace.' }, undefined, undefined, (sec, msg) => setVoiceProg(`${msg} (${sec}s)`));
-            if (!r?.audioUrl) throw new Error(`No audio for paragraph ${i + 1}`);
-            blobs[i] = await (await fetch(r.audioUrl)).blob();
+            let blob = await speak(texts[i], i);
+            // The voiceover must fit the video: this paragraph gets the time of the scene it tells.
+            const budget = Math.max(2, slotOf(paras[i]) - GAP);
+            let dur = await durOf(blob);
+            if (dur > budget * 1.02) {
+              setVoiceProg(`${isMm ? 'ဗီဒီယိုအချိန်နဲ့ ကိုက်အောင် ညှိနေသည်' : 'Fitting to the video'} (${i + 1}/${paras.length})`);
+              if (dur / budget > MAX_FAST) {
+                // far too long: shorten the paragraph and voice it again
+                const target = Math.max(20, Math.round(texts[i].length * ((budget * MAX_FAST) / dur) * 0.97));
+                const shorter = await g.condenseNarration(texts[i], target, lang);
+                if (shorter) {
+                  const b2 = await speak(shorter, i);
+                  const d2 = await durOf(b2);
+                  if (d2 < dur) { texts[i] = shorter; blob = b2; dur = d2; }
+                }
+              }
+              const rate = Math.min(MAX_FAST, dur / budget);
+              if (rate > 1.03) {
+                try { blob = (await renderProcessedAudio(blob, { speed: rate })).blob; } catch { /* keep as is */ }
+              }
+            }
+            blobs[i] = blob;
             done++;
             setVoiceProg(`${isMm ? 'အသံထုတ်နေသည်' : 'Voicing'} ${done}/${paras.length}`);
           } catch (e) { failure = e; }
@@ -296,9 +327,10 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
       let t = 0;
       bufs.forEach((b, i) => {
         ch.set(b.getChannelData(0), Math.round(t * rate));
-        subs.push(...subsFor(paras[i].text, t, t + b.duration, subs.length));
+        subs.push(...subsFor(texts[i], t, t + b.duration, subs.length));
         t += b.duration + GAP;
       });
+      if (texts.some((x, i) => x !== paras[i].text)) setParas(cur => cur ? cur.map((x, i) => ({ ...x, text: texts[i] })) : cur);
       setAudioUrl(URL.createObjectURL(audioBufferToWav(out)));
       setAudioSrt(generateSRT(subs));
       setAudioDur(total);
@@ -511,7 +543,7 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
               <p className="mt-2 text-[11.5px] leading-relaxed text-slate-400">{isMm ? 'အသံကို ပုံမှန်ပြောနှုန်းအတိုင်း ထုတ်ပြီး SRT ကို အသံအချိန်နဲ့ ကိုက်အောင် ညှိပေးပါတယ်။ စာသားကို အရင်ပြင်ပြီးမှ ထုတ်ပါ။' : 'The voice is made at normal pace and the SRT is timed to it. Finish editing the text first.'}</p>
               {audioUrl && (
                 <div className="mt-3 rounded-xl bg-black/40 border border-white/10 p-3">
-                  <div className="text-[11.5px] text-slate-400 mb-2">{isMm ? 'အသံ' : 'Voiceover'} · {fmt(audioDur)}</div>
+                  <div className="text-[11.5px] text-slate-400 mb-2">{isMm ? 'အသံ' : 'Voiceover'} · {fmt(audioDur)} / {isMm ? 'ဗီဒီယို' : 'video'} {fmt(duration)}{audioDur > duration + 1 ? (isMm ? ' ⚠ ကျော်နေ' : ' ⚠ longer than the video') : ' ✓'}</div>
                   <audio src={audioUrl} controls className="w-full" />
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
                     <a href={audioUrl} download={`${baseName}_voiceover.wav`} className="h-11 rounded-xl bg-emerald-400 text-black text-[12.5px] font-extrabold flex items-center justify-center gap-2"><Download size={15} />{isMm ? 'အသံ ဒေါင်းမည် (WAV)' : 'Download WAV'}</a>
