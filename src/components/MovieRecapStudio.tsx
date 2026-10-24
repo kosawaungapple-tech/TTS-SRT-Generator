@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { BookOpen, Upload, Loader2, Sparkles, Copy, Download, RefreshCw, Film, Mic, Globe2, Wand2, CheckCircle2 } from 'lucide-react';
+import { BookOpen, Upload, Loader2, Sparkles, Copy, Download, RefreshCw, Film, Mic, Globe2, Wand2, CheckCircle2, Volume2, FileText } from 'lucide-react';
 import { GeminiTTSService } from '../services/geminiService';
 import { assemblyAiService } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
@@ -7,6 +7,11 @@ import { estimateNarrationSeconds } from '../services/recapScriptPipeline';
 import { getExtraKeys } from '../services/geminiKeyPool';
 import { captureVideoFrames } from '../utils/videoFrames';
 import { extractSpeechWav } from '../utils/voiceAudio';
+import { audioBufferToWav } from '../utils/audioUtils';
+import { generateSRT, downloadSrtFile, splitSentenceIntoCueBlocks } from '../utils/subtitleUtils';
+import { planSubtitlePieces } from '../utils/recapGeometry';
+import { VOICE_OPTIONS } from '../constants';
+import type { SRTSubtitle } from '../types';
 
 interface Props {
   showToast: (message: string, type: 'success' | 'error') => void;
@@ -20,6 +25,23 @@ interface Para { start: number; end: number; text: string }
 
 const panel = 'min-w-0 w-full rounded-3xl sm:rounded-[28px] border border-white/10 bg-gradient-to-b from-slate-900/90 to-black/90 p-4 sm:p-6 shadow-2xl shadow-black/50';
 const MAX_MIN_USER = 40; // the shared Gemini key is protected: normal users can recap up to 40 minutes at a time
+
+const GAP = 0.25;
+const secToSrt = (sec: number) => {
+  const v = Math.max(0, sec);
+  const p = (n: number, l = 2) => String(n).padStart(l, '0');
+  const ms = Math.min(999, Math.round((v - Math.floor(v)) * 1000));
+  return `${p(Math.floor(v / 3600))}:${p(Math.floor((v % 3600) / 60))}:${p(Math.floor(v % 60))},${p(ms, 3)}`;
+};
+/** Subtitle lines for one paragraph spread across [t0, t1]. */
+function subsFor(text: string, t0: number, t1: number, from: number): SRTSubtitle[] {
+  return planSubtitlePieces(text, splitSentenceIntoCueBlocks).map((pc, i) => ({
+    index: from + i + 1,
+    startTime: secToSrt(t0 + pc.from * (t1 - t0)),
+    endTime: secToSrt(t0 + pc.to * (t1 - t0)),
+    text: pc.text,
+  }));
+}
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
@@ -75,6 +97,12 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
   const [timed, setTimed] = useState(true);
   const [fitting, setFitting] = useState<number | 'all' | null>(null);
   const abortRef = useRef(false);
+  const [voice, setVoice] = useState(VOICE_OPTIONS.find(v => v.id === 'aoede')?.id || VOICE_OPTIONS[0].id);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceProg, setVoiceProg] = useState('');
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioSrt, setAudioSrt] = useState('');
+  const [audioDur, setAudioDur] = useState(0);
 
   const gemini = useCallback(() => new GeminiTTSService(apiChannelManager.getActiveKey(false, isAdmin) || '', isAdmin), [isAdmin]);
 
@@ -176,6 +204,8 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
             text,
           }));
       setParas(out);
+      setAudioUrl(null);
+      setAudioSrt('');
       setProgress({ text: isMm ? 'ပြီးပါပြီ ✅' : 'Done ✅', percent: 100 });
       showToast(isMm ? '🎉 Recap စာသား ရပါပြီ' : '🎉 Recap script ready', 'success');
     } catch (e) {
@@ -224,6 +254,67 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
     setFitting(null);
     showToast(isMm ? `${n} ပိုဒ် ညှိပြီးပါပြီ` : `${n} paragraphs adjusted`, 'success');
   };
+
+  const baseName = (file?.name || 'recap').replace(/\.[^/.]+$/, '');
+
+  /** Voices every paragraph at the voice's normal pace, joins them into one WAV and times an SRT to that audio. */
+  const makeVoice = async () => {
+    if (!paras?.length) return;
+    setVoiceBusy(true);
+    setAudioUrl(null);
+    setAudioSrt('');
+    try {
+      const g = gemini();
+      const blobs: (Blob | undefined)[] = paras.map(() => undefined);
+      let done = 0;
+      const queue = paras.map((_, i) => i);
+      let failure: unknown = null;
+      const worker = async () => {
+        while (queue.length && !failure) {
+          const i = queue.shift() as number;
+          try {
+            const r = await g.generateTTS(paras[i].text.replace(/\s+/g, ' ').trim(), { voiceId: voice, speed: 1, pitch: 0, volume: 100, vocalStyle: 'Expressive', styleInstruction: 'Read as a gripping storyteller, natural and clear, at a normal speaking pace.' }, undefined, undefined, (sec, msg) => setVoiceProg(`${msg} (${sec}s)`));
+            if (!r?.audioUrl) throw new Error(`No audio for paragraph ${i + 1}`);
+            blobs[i] = await (await fetch(r.audioUrl)).blob();
+            done++;
+            setVoiceProg(`${isMm ? 'အသံထုတ်နေသည်' : 'Voicing'} ${done}/${paras.length}`);
+          } catch (e) { failure = e; }
+        }
+      };
+      await Promise.all([worker(), worker()]);
+      if (failure) throw failure;
+
+      const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const ctx = new Ctx();
+      const bufs: AudioBuffer[] = [];
+      try { for (const b of blobs) bufs.push(await ctx.decodeAudioData(await (b as Blob).arrayBuffer())); } finally { void ctx.close(); }
+      const rate = bufs[0].sampleRate;
+      const total = bufs.reduce((n, b) => n + b.duration, 0) + GAP * (bufs.length - 1);
+      const out = new AudioBuffer({ length: Math.ceil(total * rate), numberOfChannels: 1, sampleRate: rate });
+      const ch = out.getChannelData(0);
+      const subs: SRTSubtitle[] = [];
+      let t = 0;
+      bufs.forEach((b, i) => {
+        ch.set(b.getChannelData(0), Math.round(t * rate));
+        subs.push(...subsFor(paras[i].text, t, t + b.duration, subs.length));
+        t += b.duration + GAP;
+      });
+      setAudioUrl(URL.createObjectURL(audioBufferToWav(out)));
+      setAudioSrt(generateSRT(subs));
+      setAudioDur(total);
+      setVoiceProg('');
+      showToast(isMm ? '🎙 အသံနဲ့ SRT ရပါပြီ' : '🎙 Voiceover and SRT ready', 'success');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setVoiceProg('');
+      showToast(msg, 'error');
+    } finally {
+      setVoiceBusy(false);
+    }
+  };
+
+  /** SRT laid on the VIDEO's own timeline (each paragraph over the scene it tells) - no voice needed. */
+  const videoTimedSrt = () => generateSRT((paras || []).reduce<SRTSubtitle[]>((acc, p) => acc.concat(subsFor(p.text, p.start, p.end, acc.length)), []));
 
   const plain = (paras || []).map(p => p.text.trim()).join('\n\n');
   const withTimes = (paras || []).map(p => `[${fmt(p.start)} – ${fmt(p.end)}]\n${p.text.trim()}`).join('\n\n');
@@ -402,6 +493,32 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
               </label>
               <button type="button" onClick={() => void copy()} className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-[12.5px] font-bold flex items-center gap-2"><Copy size={14} />{isMm ? 'ကူးမည်' : 'Copy'}</button>
               <button type="button" onClick={download} className="px-4 py-2.5 rounded-xl bg-emerald-400 text-black text-[12.5px] font-extrabold flex items-center gap-2"><Download size={14} />{isMm ? 'TXT ဒေါင်းမည်' : 'Download TXT'}</button>
+            </div>
+
+            <div className="mb-5 rounded-2xl border border-violet-400/25 bg-violet-400/[0.05] p-3.5 sm:p-4 min-w-0">
+              <div className="flex items-center gap-2 mb-3 text-[13px] font-extrabold text-white"><Volume2 size={16} className="text-violet-300" />{isMm ? 'အသံနဲ့ SRT ထုတ်ရန်' : 'Voiceover & subtitles'}</div>
+              <select value={voice} onChange={e => setVoice(e.target.value)} style={{ colorScheme: 'dark' }} className="w-full min-w-0 rounded-2xl bg-white/[0.06] border border-white/10 px-4 py-3 text-[13px] text-white focus:outline-none focus:border-violet-400/60">
+                {VOICE_OPTIONS.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+                <button type="button" onClick={() => void makeVoice()} disabled={voiceBusy} className="h-12 rounded-xl bg-violet-400 text-black text-[13px] font-extrabold flex items-center justify-center gap-2 disabled:opacity-50">
+                  {voiceBusy ? <Loader2 size={16} className="animate-spin" /> : <Mic size={16} />}{voiceBusy ? (voiceProg || '…') : (isMm ? 'အသံ + SRT ထုတ်မည်' : 'Make voice + SRT')}
+                </button>
+                <button type="button" onClick={() => downloadSrtFile(videoTimedSrt(), `${baseName}_video_timed.srt`)} className="h-12 rounded-xl bg-white/10 hover:bg-white/15 text-white text-[13px] font-bold flex items-center justify-center gap-2">
+                  <FileText size={16} />{isMm ? 'SRT သီးသန့် (ဗီဒီယိုအချိန်)' : 'SRT only (video timing)'}
+                </button>
+              </div>
+              <p className="mt-2 text-[11.5px] leading-relaxed text-slate-400">{isMm ? 'အသံကို ပုံမှန်ပြောနှုန်းအတိုင်း ထုတ်ပြီး SRT ကို အသံအချိန်နဲ့ ကိုက်အောင် ညှိပေးပါတယ်။ စာသားကို အရင်ပြင်ပြီးမှ ထုတ်ပါ။' : 'The voice is made at normal pace and the SRT is timed to it. Finish editing the text first.'}</p>
+              {audioUrl && (
+                <div className="mt-3 rounded-xl bg-black/40 border border-white/10 p-3">
+                  <div className="text-[11.5px] text-slate-400 mb-2">{isMm ? 'အသံ' : 'Voiceover'} · {fmt(audioDur)}</div>
+                  <audio src={audioUrl} controls className="w-full" />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+                    <a href={audioUrl} download={`${baseName}_voiceover.wav`} className="h-11 rounded-xl bg-emerald-400 text-black text-[12.5px] font-extrabold flex items-center justify-center gap-2"><Download size={15} />{isMm ? 'အသံ ဒေါင်းမည် (WAV)' : 'Download WAV'}</a>
+                    <button type="button" onClick={() => downloadSrtFile(audioSrt, `${baseName}_voiceover.srt`)} className="h-11 rounded-xl bg-amber-400 text-black text-[12.5px] font-extrabold flex items-center justify-center gap-2"><FileText size={15} />{isMm ? 'SRT ဒေါင်းမည်' : 'Download SRT'}</button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="space-y-3">
