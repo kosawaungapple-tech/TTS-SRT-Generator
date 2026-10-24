@@ -51,15 +51,15 @@ function isFree(key: string, model: string): boolean {
 }
 
 /** The primary key (it may be several keys joined by commas) followed by the saved extra keys, without duplicates. */
-function allKeys(primary: string): string[] {
+function allKeys(primary: string, more: string[] = []): string[] {
   const first = (primary || '').split(/[\s,]+/).map(k => k.trim()).filter(Boolean);
-  return Array.from(new Set([...first, ...getExtraKeys()]));
+  return Array.from(new Set([...first, ...more.map(k => (k || '').trim()).filter(Boolean), ...getExtraKeys()]));
 }
 
 /** Primary key first, then the extras; keys that are cooling for this model are skipped. */
 let rotation = 0;
-export function pickKey(primary: string, model: string, tried: Set<string>): string | null {
-  const all = allKeys(primary);
+export function pickKey(primary: string, model: string, tried: Set<string>, more: string[] = []): string | null {
+  const all = allKeys(primary, more);
   if (!all.length) return null;
   // Round-robin: every request starts from the next key, so a per-minute limit is spread over all your keys
   // instead of hammering the first one. Keys that are cooling for this model (or already tried) are skipped.
@@ -71,13 +71,13 @@ export function pickKey(primary: string, model: string, tried: Set<string>): str
   return null;
 }
 
-export function hasOtherFreeKey(current: string, primary: string, model: string): boolean {
-  const all = allKeys(primary);
+export function hasOtherFreeKey(current: string, primary: string, model: string, more: string[] = []): boolean {
+  const all = allKeys(primary, more);
   return all.some(k => k !== current && isFree(k, model));
 }
 
-export function keyCount(primary: string): number {
-  return allKeys(primary).length;
+export function keyCount(primary: string, more: string[] = []): number {
+  return allKeys(primary, more).length;
 }
 
 /** Seconds until the first limited key is usable again (null when nothing is cooling). */

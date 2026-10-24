@@ -382,6 +382,17 @@ class ApiChannelManager {
   // --- AUTO-SWITCH LOGIC ---
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  /** Every key this user may rotate through: their own key plus the shared admin pool when they are allowed to use it. */
+  getPoolKeys(isUserAdmin: boolean = false): string[] {
+    const keys: string[] = [];
+    const own = this.userChannel?.key;
+    if (isPlausibleApiKey(own)) keys.push(own!.trim());
+    if (this.settings.useAdminKeys && (this.settings.allowSharedKeys || isUserAdmin)) {
+      this.adminChannels.forEach(c => { if (isPlausibleApiKey(c.key)) keys.push(c.key.trim()); });
+    }
+    return Array.from(new Set(keys));
+  }
+
   private isRateLimit(err: any): boolean {
     return err?.status === 429 ||
       err?.message?.includes("429") ||
