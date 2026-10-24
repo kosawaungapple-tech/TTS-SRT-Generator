@@ -1,5 +1,5 @@
 import React, { useMemo, useEffect, useState } from 'react';
-import { ChevronDown, Volume2, Wand2, Server, FileText, Plus, Minus, UserCheck, Music } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Volume2, Wand2, Server, FileText, Plus, Minus, UserCheck, Music } from 'lucide-react';
 import { TTSConfig } from '../types';
 import { VOICE_OPTIONS } from '../constants';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -14,6 +14,7 @@ interface VoiceConfigProps {
 
 export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, baseDuration }) => {
   const { t } = useLanguage();
+  const [view, setView] = useState<null | 'tune' | 'style' | 'clone' | 'file'>(null);
   
   const estimatedDisplay = useMemo(() => {
     if (!baseDuration) return null;
@@ -143,6 +144,29 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
           </div>
         </div>
 
+        {!view && (
+          <div className="grid grid-cols-2 gap-3">
+            {([
+              { k: 'tune', icon: '🎚', t: 'အသံ ညှိရန်', s: 'Speed · Pitch · Gain' },
+              { k: 'style', icon: '🎭', t: 'ပုံစံ / Style', s: 'Warm, Horror, Suspense…' },
+              { k: 'clone', icon: '🎙', t: 'Custom voice', s: 'အသံပုံတူ' },
+              { k: 'file', icon: '📁', t: 'ဖိုင် / Format', s: 'WAV · MP3 · အမည်' },
+            ] as const).map(m => (
+              <button key={m.k} type="button" onClick={() => setView(m.k)} className="text-left rounded-2xl border border-white/10 bg-black/30 hover:bg-white/[0.07] hover:border-amber-400/40 p-3.5 transition">
+                <div className="text-xl mb-1">{m.icon}</div>
+                <div className="text-[13px] font-bold text-white leading-tight">{m.t}</div>
+                <div className="text-[10.5px] text-slate-500 mt-0.5">{m.s}</div>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {view === 'tune' && (
+          <div className="space-y-5">
+            <div className="flex items-center gap-3">
+              <button type="button" onClick={() => setView(null)} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-[12px] font-bold flex items-center gap-1.5"><ArrowLeft size={14} />{t('common.back') === 'common.back' ? 'Back' : t('common.back')}</button>
+              <span className="text-[13px] font-extrabold text-white">🎚 အသံ ညှိရန်</span>
+            </div>
         <div className="space-y-10 pt-4">
           <div className="space-y-4">
             <Slider
@@ -187,7 +211,15 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
             </div>
           </div>
         </div>
+          </div>
+        )}
 
+        {view === 'style' && (
+          <div className="space-y-5">
+            <div className="flex items-center gap-3">
+              <button type="button" onClick={() => setView(null)} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-[12px] font-bold flex items-center gap-1.5"><ArrowLeft size={14} />{t('common.back') === 'common.back' ? 'Back' : t('common.back')}</button>
+              <span className="text-[13px] font-extrabold text-white">🎭 ပုံစံ / Style</span>
+            </div>
         {/* Style Instructions */}
         <div className="group/item">
           <label className="flex items-center gap-3 text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 sm:mb-4 group-hover/item:text-amber-500 transition-colors">
@@ -222,11 +254,15 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
             </div>
           </div>
         </div>
+          </div>
+        )}
 
-
-        <details className="group/det rounded-2xl border border-white/10 bg-black/20 open:bg-black/30">
-          <summary className="cursor-pointer select-none list-none flex items-center justify-between px-4 py-3 text-[12px] font-bold text-slate-300 hover:text-amber-400">🎙 Custom voice cloning / အသံပုံတူ<ChevronDown size={16} className="transition group-open/det:rotate-180" /></summary>
-          <div className="px-4 pb-4 pt-1 space-y-8">
+        {view === 'clone' && (
+          <div className="space-y-5">
+            <div className="flex items-center gap-3">
+              <button type="button" onClick={() => setView(null)} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-[12px] font-bold flex items-center gap-1.5"><ArrowLeft size={14} />{t('common.back') === 'common.back' ? 'Back' : t('common.back')}</button>
+              <span className="text-[13px] font-extrabold text-white">🎙 Custom voice cloning</span>
+            </div>
         {/* Custom Voice Profile Section */}
         <div className="group/item">
           <label className="flex items-center gap-3 text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 sm:mb-4 group-hover/item:text-amber-500 transition-colors">
@@ -244,11 +280,14 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
         </div>
 
           </div>
-        </details>
+        )}
 
-        <details className="group/det rounded-2xl border border-white/10 bg-black/20 open:bg-black/30">
-          <summary className="cursor-pointer select-none list-none flex items-center justify-between px-4 py-3 text-[12px] font-bold text-slate-300 hover:text-amber-400">📁 File name &amp; format / ဖိုင်အမည်နှင့် ဖော်မတ်<ChevronDown size={16} className="transition group-open/det:rotate-180" /></summary>
-          <div className="px-4 pb-4 pt-1 space-y-8">
+        {view === 'file' && (
+          <div className="space-y-5">
+            <div className="flex items-center gap-3">
+              <button type="button" onClick={() => setView(null)} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-[12px] font-bold flex items-center gap-1.5"><ArrowLeft size={14} />{t('common.back') === 'common.back' ? 'Back' : t('common.back')}</button>
+              <span className="text-[13px] font-extrabold text-white">📁 ဖိုင်အမည် နှင့် Format</span>
+            </div>
         {/* Custom File Name */}
         <div className="group/item">
           <label className="flex items-center gap-3 text-[9px] sm:text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 sm:mb-4 group-hover/item:text-amber-500 transition-colors">
@@ -352,7 +391,7 @@ export const VoiceConfig: React.FC<VoiceConfigProps> = ({ config, setConfig, bas
         </div>
 
           </div>
-        </details>
+        )}
 
       </div>
     </div>
