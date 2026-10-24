@@ -264,6 +264,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [srcRatio, setSrcRatio] = useState(0);
   const [pron, setPron] = useState(getCustomPronunciation());
   const [reviewScript, setReviewScript] = useState(true);
+  const [resTab, setResTab] = useState<'scenes' | 'captions' | 'video' | 'brand' | 'export'>('export');
   const [draft, setDraft] = useState<{ segments: Segment[]; hasVideoTimes: boolean } | null>(null);
   const [blurSubOn, setBlurSubOn] = useState(false);
   const [blurSubY, setBlurSubY] = useState(78);
@@ -1412,6 +1413,20 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
 
             {/* Right: files and settings */}
             <div className="mt-6 2xl:mt-0">
+          <div className="mb-4 grid grid-cols-5 gap-1 rounded-2xl border border-white/10 bg-black/40 p-1">
+            {([
+              { id: 'scenes', icon: '🎞', mm: 'ဇာတ်ကွက်', en: 'Scenes' },
+              { id: 'captions', icon: '💬', mm: 'စာတန်း', en: 'Captions' },
+              { id: 'video', icon: '🎬', mm: 'ဗီဒီယို', en: 'Video' },
+              { id: 'brand', icon: '🏷', mm: 'Logo/BGM', en: 'Brand' },
+              { id: 'export', icon: '⬇', mm: 'ထုတ်ရန်', en: 'Export' },
+            ] as const).map(t => (
+              <button key={t.id} type="button" onClick={() => setResTab(t.id)} className={`rounded-xl py-2.5 flex flex-col items-center gap-0.5 text-[11px] font-bold transition ${resTab === t.id ? 'bg-white text-slate-900' : 'text-slate-300 hover:bg-white/10'}`}>
+                <span className="text-[15px] leading-none">{t.icon}</span>{isMm ? t.mm : t.en}
+              </button>
+            ))}
+          </div>
+          <div className={resTab === 'scenes' ? '' : 'hidden'}>
           {baseRef.current && result.hasVideoTimes && (
             <div className="mb-5 pb-5 border-b border-white/10">
               <SceneEditor
@@ -1424,48 +1439,62 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
               />
             </div>
           )}
-          <div className="mb-5 pb-5 border-b border-white/10">
-            <Label icon={<Film size={12} />}>{isAdmin ? (isMm ? 'Recap ဗီဒီယိုပါ လိုချင်ရင် (PC Worker လိုသည်)' : 'Recap video (needs PC worker)') : (isMm ? 'Recap ဗီဒီယိုပါ လိုချင်ရင် (Server မှာ render လုပ်မည်)' : 'Recap video (rendered on our server)')}</Label>
-            {isAdmin && (
-              <details className="mb-3 rounded-2xl border border-white/10 bg-white/5 p-3">
-                <summary className="cursor-pointer text-[12px] font-bold text-slate-300">
-                  {isMm ? 'PC Worker ချိတ်ဆက်မှု (ဖုန်းကနေ သုံးရင် Tunnel URL + password ထည့်ပါ)' : 'PC worker connection (on a phone: enter the tunnel URL + password)'}
-                </summary>
-                <div className="mt-3"><FfmpegWorkerManager /></div>
-              </details>
-            )}
-            <button type="button" onClick={buildVideo} disabled={!!rendering || !result.hasVideoTimes} className="w-full h-12 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 text-white text-[13px] font-bold flex items-center justify-center gap-2 disabled:opacity-50 transition">
-              {rendering ? <Loader2 size={16} className="animate-spin" /> : <Film size={16} />}
-              {rendering || (isMm ? 'Recap ဗီဒီယို ထုတ်မည်' : 'Render recap video')}
-            </button>
-            {videoUrl && (
-              <button type="button" onClick={downloadVideo} disabled={dlBusy} className="mt-3 w-full flex items-center justify-center gap-2 h-12 rounded-2xl bg-emerald-400 text-black text-[13px] font-extrabold disabled:opacity-60">
-                {dlBusy ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}{isMm ? 'Recap ဗီဒီယို ဒေါင်းမည် (.mp4)' : 'Download recap video (.mp4)'}
-              </button>
-            )}
-            {videoUrl && <RecapShare videoUrl={videoUrl} fileName={`${baseName}_recap.mp4`} defaultTitle={baseName} isMm={isMm} />}
           </div>
-          <div className="grid grid-cols-3 gap-3">
-            {[
-              { icon: <Mic size={18} />, name: 'Voiceover', ext: '.wav', tone: 'from-violet-500 to-purple-700 text-white', onClick: () => saveBlob(result.voiceoverBlob, `${baseName}_recap_voiceover.wav`) },
-              { icon: <FileText size={18} />, name: 'Subtitles', ext: '.srt', tone: 'from-amber-300 to-orange-500 text-black', onClick: () => downloadSrtFile(result.srt, `${baseName}_recap.srt`) },
-              { icon: <FileText size={18} />, name: 'Script', ext: '.txt', tone: 'from-slate-600 to-slate-800 text-white', onClick: () => saveBlob(new Blob(['﻿' + result.script], { type: 'text/plain;charset=utf-8' }), `${baseName}_recap_script.txt`) },
-            ].map(d => (
-              <button key={d.name} type="button" onClick={d.onClick} className={`rounded-2xl bg-gradient-to-br ${d.tone} p-3.5 text-left shadow-lg shadow-black/40 transition active:scale-[0.98]`}>
-                <div className="mb-3 opacity-90">{d.icon}</div>
-                <div className="text-[13px] font-extrabold leading-tight">{d.name}</div>
-                <div className="text-[11px] opacity-70 font-mono">{d.ext}</div>
-              </button>
-            ))}
-          </div>
-          <button type="button" onClick={downloadAll} className="mt-3 w-full h-12 rounded-2xl bg-emerald-400 text-black text-[14px] font-extrabold flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition active:scale-[0.99]">
-            <Download size={17} />
-            {isMm ? 'အားလုံး တစ်ခါတည်း ဒေါင်းမည်' : 'Download all'}
-          </button>
-          <p className="mt-3 text-[11.5px] leading-relaxed text-slate-500">
-            {isMm ? 'Voiceover နဲ့ SRT က အချိန်တူညီပါတယ် — CapCut Desktop/Web မှာ နှစ်ခုစလုံးကို 0:00 မှာ တင်လိုက်ရုံပါ။' : 'Voiceover and SRT share one timeline — drop both at 0:00 in CapCut Desktop / Web.'}
-          </p>
+          <div className={resTab === 'captions' ? '' : 'hidden'}>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 space-y-5">
+            <div>
+              <Label>{isMm ? 'စာတန်းပုံစံ' : 'Subtitle look'}</Label>
+              <div className="grid grid-cols-4 gap-2">
+                {SUBTITLE_PRESETS.map(p => (
+                  <button key={p.id} type="button" onClick={() => setSubPreset(p.id)} className={`rounded-2xl border px-2 py-3 flex flex-col items-center gap-1.5 transition ${subPreset === p.id ? 'border-emerald-400 bg-emerald-400/10' : 'border-white/10 bg-white/[0.04]'}`}>
+                    <span className="text-[20px] font-black leading-none" style={{ color: p.swatch.fill, WebkitTextStroke: `2px ${p.swatch.stroke}`, paintOrder: 'stroke fill' }}>Aa</span>
+                    <span className="text-[10.5px] text-slate-300 text-center leading-tight">{isMm ? p.name.mm : p.name.en}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
 
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <Label>{isMm ? 'စာတန်းနေရာ (အပေါ် ↔ အောက်)' : 'Subtitle position (top ↔ bottom)'}</Label>
+                <span className="mb-2 text-[11px] font-mono text-amber-300">{subY}%</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                {[[14, isMm ? 'အပေါ်' : 'Top'], [50, isMm ? 'အလယ်' : 'Middle'], [84, isMm ? 'အောက်' : 'Bottom']].map(([v, l]) => (
+                  <button key={String(v)} type="button" onClick={() => setSubY(Number(v))} className={`rounded-xl border py-2 text-[12px] font-bold transition ${subY === v ? 'border-emerald-400 bg-emerald-400/10 text-white' : 'border-white/10 bg-white/[0.04] text-slate-300'}`}>{l}</button>
+                ))}
+              </div>
+              <input type="range" min={8} max={94} step={1} value={subY} onChange={e => setSubY(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
+              <div className="flex items-center justify-between mt-3 mb-1.5">
+                <span className="text-[11.5px] text-slate-400">{isMm ? 'စာလုံးအရွယ်' : 'Text size'}</span>
+                <span className="text-[11px] font-mono text-amber-300">{Math.round(subScale * 100)}%</span>
+              </div>
+              <input type="range" min={0.6} max={1.5} step={0.05} value={subScale} onChange={e => setSubScale(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
+            </div>
+
+            <div>
+              <label className="flex items-center gap-2.5 text-[12.5px] text-slate-200 cursor-pointer">
+                <input type="checkbox" checked={blurSubOn} onChange={e => setBlurSubOn(e.target.checked)} className="accent-amber-400 w-4 h-4" />
+                {isMm ? '🙈 မူရင်းဗီဒီယိုထဲက စာတန်း/စာသားကို blur လုပ်မည်' : '🙈 Blur the original burned-in subtitles'}
+              </label>
+              {blurSubOn && (
+                <div className="mt-3 space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5"><span className="text-[11.5px] text-slate-400">{isMm ? 'နေရာ (မူရင်းဗီဒီယိုရဲ့ အပေါ်ကနေ)' : 'Position (from top of the original)'}</span><span className="text-[11px] font-mono text-amber-300">{blurSubY}%</span></div>
+                    <input type="range" min={0} max={95} step={1} value={blurSubY} onChange={e => setBlurSubY(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5"><span className="text-[11.5px] text-slate-400">{isMm ? 'အမြင့်' : 'Height'}</span><span className="text-[11px] font-mono text-amber-300">{blurSubH}%</span></div>
+                    <input type="range" min={5} max={40} step={1} value={blurSubH} onChange={e => setBlurSubH(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
+                  </div>
+                  <p className="text-[11px] text-slate-500">{isMm ? 'ကြိုကြည့်ထဲမှာ မှုန်ဝါးတဲ့ ဘားကို မူရင်းစာတန်းပေါ် ကျအောင် ချိန်ပါ။ Recap ဗီဒီယို (.mp4) ထုတ်တဲ့အခါ PC Worker မှာ လုပ်ပေးပါတယ်။' : 'Line the blurred bar up with the original text in the preview. It is applied when the Recap video (.mp4) is rendered on the PC worker.'}</p>
+                </div>
+              )}
+            </div>
+
+          </div>
+          </div>
+          <div className={resTab === 'video' ? '' : 'hidden'}>
           {result.hasVideoTimes && (
             <div className="mt-5">
               <EditToolsPanel
@@ -1484,8 +1513,6 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           )}
 
           <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.03] p-4 space-y-5">
-            <div className="text-[13px] font-extrabold text-white">{isMm ? '🎛️ ဗီဒီယို ပြင်ဆင်ချက်များ' : '🎛️ Video options'}</div>
-
             <div>
               <Label>{isMm ? 'ဗီဒီယိုအချိုး (Ratio)' : 'Video ratio'}</Label>
               <div className="grid grid-cols-5 gap-2">
@@ -1546,56 +1573,10 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
               )}
             </div>
 
-            <div>
-              <Label>{isMm ? 'စာတန်းပုံစံ' : 'Subtitle look'}</Label>
-              <div className="grid grid-cols-4 gap-2">
-                {SUBTITLE_PRESETS.map(p => (
-                  <button key={p.id} type="button" onClick={() => setSubPreset(p.id)} className={`rounded-2xl border px-2 py-3 flex flex-col items-center gap-1.5 transition ${subPreset === p.id ? 'border-emerald-400 bg-emerald-400/10' : 'border-white/10 bg-white/[0.04]'}`}>
-                    <span className="text-[20px] font-black leading-none" style={{ color: p.swatch.fill, WebkitTextStroke: `2px ${p.swatch.stroke}`, paintOrder: 'stroke fill' }}>Aa</span>
-                    <span className="text-[10.5px] text-slate-300 text-center leading-tight">{isMm ? p.name.mm : p.name.en}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <Label>{isMm ? 'စာတန်းနေရာ (အပေါ် ↔ အောက်)' : 'Subtitle position (top ↔ bottom)'}</Label>
-                <span className="mb-2 text-[11px] font-mono text-amber-300">{subY}%</span>
-              </div>
-              <div className="grid grid-cols-3 gap-2 mb-3">
-                {[[14, isMm ? 'အပေါ်' : 'Top'], [50, isMm ? 'အလယ်' : 'Middle'], [84, isMm ? 'အောက်' : 'Bottom']].map(([v, l]) => (
-                  <button key={String(v)} type="button" onClick={() => setSubY(Number(v))} className={`rounded-xl border py-2 text-[12px] font-bold transition ${subY === v ? 'border-emerald-400 bg-emerald-400/10 text-white' : 'border-white/10 bg-white/[0.04] text-slate-300'}`}>{l}</button>
-                ))}
-              </div>
-              <input type="range" min={8} max={94} step={1} value={subY} onChange={e => setSubY(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
-              <div className="flex items-center justify-between mt-3 mb-1.5">
-                <span className="text-[11.5px] text-slate-400">{isMm ? 'စာလုံးအရွယ်' : 'Text size'}</span>
-                <span className="text-[11px] font-mono text-amber-300">{Math.round(subScale * 100)}%</span>
-              </div>
-              <input type="range" min={0.6} max={1.5} step={0.05} value={subScale} onChange={e => setSubScale(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
-            </div>
-
-            <div>
-              <label className="flex items-center gap-2.5 text-[12.5px] text-slate-200 cursor-pointer">
-                <input type="checkbox" checked={blurSubOn} onChange={e => setBlurSubOn(e.target.checked)} className="accent-amber-400 w-4 h-4" />
-                {isMm ? '🙈 မူရင်းဗီဒီယိုထဲက စာတန်း/စာသားကို blur လုပ်မည်' : '🙈 Blur the original burned-in subtitles'}
-              </label>
-              {blurSubOn && (
-                <div className="mt-3 space-y-3">
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5"><span className="text-[11.5px] text-slate-400">{isMm ? 'နေရာ (မူရင်းဗီဒီယိုရဲ့ အပေါ်ကနေ)' : 'Position (from top of the original)'}</span><span className="text-[11px] font-mono text-amber-300">{blurSubY}%</span></div>
-                    <input type="range" min={0} max={95} step={1} value={blurSubY} onChange={e => setBlurSubY(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5"><span className="text-[11.5px] text-slate-400">{isMm ? 'အမြင့်' : 'Height'}</span><span className="text-[11px] font-mono text-amber-300">{blurSubH}%</span></div>
-                    <input type="range" min={5} max={40} step={1} value={blurSubH} onChange={e => setBlurSubH(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
-                  </div>
-                  <p className="text-[11px] text-slate-500">{isMm ? 'ကြိုကြည့်ထဲမှာ မှုန်ဝါးတဲ့ ဘားကို မူရင်းစာတန်းပေါ် ကျအောင် ချိန်ပါ။ Recap ဗီဒီယို (.mp4) ထုတ်တဲ့အခါ PC Worker မှာ လုပ်ပေးပါတယ်။' : 'Line the blurred bar up with the original text in the preview. It is applied when the Recap video (.mp4) is rendered on the PC worker.'}</p>
-                </div>
-              )}
-            </div>
-
+          </div>
+          </div>
+          <div className={resTab === 'brand' ? '' : 'hidden'}>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 space-y-5">
             <div>
               <Label>{isMm ? '🏷️ Logo / Logo စာသား (မထည့်လည်းရ)' : '🏷️ Logo / logo text (optional)'}</Label>
               <div className="grid grid-cols-2 gap-2">
@@ -1662,6 +1643,49 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
               )}
             </div>
           </div>
+          </div>
+          <div className={resTab === 'export' ? '' : 'hidden'}>
+          <div className="mb-5 pb-5 border-b border-white/10">
+            <Label icon={<Film size={12} />}>{isAdmin ? (isMm ? 'Recap ဗီဒီယိုပါ လိုချင်ရင် (PC Worker လိုသည်)' : 'Recap video (needs PC worker)') : (isMm ? 'Recap ဗီဒီယိုပါ လိုချင်ရင် (Server မှာ render လုပ်မည်)' : 'Recap video (rendered on our server)')}</Label>
+            {isAdmin && (
+              <details className="mb-3 rounded-2xl border border-white/10 bg-white/5 p-3">
+                <summary className="cursor-pointer text-[12px] font-bold text-slate-300">
+                  {isMm ? 'PC Worker ချိတ်ဆက်မှု (ဖုန်းကနေ သုံးရင် Tunnel URL + password ထည့်ပါ)' : 'PC worker connection (on a phone: enter the tunnel URL + password)'}
+                </summary>
+                <div className="mt-3"><FfmpegWorkerManager /></div>
+              </details>
+            )}
+            <button type="button" onClick={buildVideo} disabled={!!rendering || !result.hasVideoTimes} className="w-full h-12 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 text-white text-[13px] font-bold flex items-center justify-center gap-2 disabled:opacity-50 transition">
+              {rendering ? <Loader2 size={16} className="animate-spin" /> : <Film size={16} />}
+              {rendering || (isMm ? 'Recap ဗီဒီယို ထုတ်မည်' : 'Render recap video')}
+            </button>
+            {videoUrl && (
+              <button type="button" onClick={downloadVideo} disabled={dlBusy} className="mt-3 w-full flex items-center justify-center gap-2 h-12 rounded-2xl bg-emerald-400 text-black text-[13px] font-extrabold disabled:opacity-60">
+                {dlBusy ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}{isMm ? 'Recap ဗီဒီယို ဒေါင်းမည် (.mp4)' : 'Download recap video (.mp4)'}
+              </button>
+            )}
+            {videoUrl && <RecapShare videoUrl={videoUrl} fileName={`${baseName}_recap.mp4`} defaultTitle={baseName} isMm={isMm} />}
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              { icon: <Mic size={18} />, name: 'Voiceover', ext: '.wav', tone: 'from-violet-500 to-purple-700 text-white', onClick: () => saveBlob(result.voiceoverBlob, `${baseName}_recap_voiceover.wav`) },
+              { icon: <FileText size={18} />, name: 'Subtitles', ext: '.srt', tone: 'from-amber-300 to-orange-500 text-black', onClick: () => downloadSrtFile(result.srt, `${baseName}_recap.srt`) },
+              { icon: <FileText size={18} />, name: 'Script', ext: '.txt', tone: 'from-slate-600 to-slate-800 text-white', onClick: () => saveBlob(new Blob(['﻿' + result.script], { type: 'text/plain;charset=utf-8' }), `${baseName}_recap_script.txt`) },
+            ].map(d => (
+              <button key={d.name} type="button" onClick={d.onClick} className={`rounded-2xl bg-gradient-to-br ${d.tone} p-3.5 text-left shadow-lg shadow-black/40 transition active:scale-[0.98]`}>
+                <div className="mb-3 opacity-90">{d.icon}</div>
+                <div className="text-[13px] font-extrabold leading-tight">{d.name}</div>
+                <div className="text-[11px] opacity-70 font-mono">{d.ext}</div>
+              </button>
+            ))}
+          </div>
+          <button type="button" onClick={downloadAll} className="mt-3 w-full h-12 rounded-2xl bg-emerald-400 text-black text-[14px] font-extrabold flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition active:scale-[0.99]">
+            <Download size={17} />
+            {isMm ? 'အားလုံး တစ်ခါတည်း ဒေါင်းမည်' : 'Download all'}
+          </button>
+          <p className="mt-3 text-[11.5px] leading-relaxed text-slate-500">
+            {isMm ? 'Voiceover နဲ့ SRT က အချိန်တူညီပါတယ် — CapCut Desktop/Web မှာ နှစ်ခုစလုံးကို 0:00 မှာ တင်လိုက်ရုံပါ။' : 'Voiceover and SRT share one timeline — drop both at 0:00 in CapCut Desktop / Web.'}
+          </p>
 
           <details className="mt-5 group rounded-2xl border border-sky-400/25 bg-sky-400/[0.05]">
             <summary className="flex items-center gap-2 cursor-pointer list-none px-4 py-3.5 text-[13px] font-bold text-sky-300">
@@ -1703,6 +1727,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           <div className="mt-5">
             <Label>{isMm ? 'Recap ဇာတ်ညွှန်း' : 'Script'}</Label>
             <textarea readOnly value={result.script} className="w-full h-64 rounded-2xl bg-black/50 border border-white/10 p-4 text-[13px] leading-[1.9] text-slate-200 focus:outline-none" />
+          </div>
           </div>
 
             </div>
