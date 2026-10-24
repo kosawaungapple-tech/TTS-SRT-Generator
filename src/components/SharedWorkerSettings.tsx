@@ -47,6 +47,47 @@ export const SharedWorkerSettings: React.FC = () => {
     setCopied(false);
   };
 
+  /** One-time installer: puts the launcher in a fixed folder, registers vbsworker:// so a website button can start it, and (optionally) starts it at Windows login. */
+  const makeInstaller = () => {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    const sec = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    const site = window.location.origin;
+    const bat = [
+      '@echo off',
+      'title VBS - install PC worker',
+      'set "DIR=%LOCALAPPDATA%\\VBS"',
+      'if not exist "%DIR%" mkdir "%DIR%"',
+      `> "%DIR%\\worker.env.cmd" echo set "RENDER_SECRET=${sec}"`,
+      `>> "%DIR%\\worker.env.cmd" echo set "SITE_URL=${site}"`,
+      `curl -L -s -o "%DIR%\\vbs-run.bat" ${site}/worker/vbs-run.bat`,
+      'reg add "HKCU\\Software\\Classes\\vbsworker" /ve /d "URL:VBS Worker" /f >nul',
+      'reg add "HKCU\\Software\\Classes\\vbsworker" /v "URL Protocol" /d "" /f >nul',
+      'reg add "HKCU\\Software\\Classes\\vbsworker\\shell\\open\\command" /ve /d "\\"%DIR%\\vbs-run.bat\\"" /f >nul',
+      'choice /c YN /m "Start the PC worker automatically when Windows starts"',
+      'if errorlevel 2 goto skip',
+      '> "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\VBS-Worker.cmd" echo start "" /min "%DIR%\\vbs-run.bat"',
+      ':skip',
+      'echo.',
+      'echo Done. Put the same secret in Vercel as RENDER_SECRET (once), then use the Start button on the website.',
+      'start "" "%DIR%\\vbs-run.bat"',
+      'pause',
+      '',
+    ].join('\r\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([bat], { type: 'application/octet-stream' }));
+    a.download = 'VBS-Install-Worker.bat';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    setSecret(sec);
+    setCopied(false);
+  };
+
+  const startWorker = () => {
+    setMsg('Starting... (if nothing happens, run the installer once first)');
+    window.location.href = 'vbsworker://start';
+  };
+
   useEffect(() => {
     let stop = false;
     const check = () => getDoc(doc(db, 'settings', 'render_live'))
@@ -91,8 +132,19 @@ export const SharedWorkerSettings: React.FC = () => {
         It opens the tunnel and tells the website its address every minute - phones need nothing. Put the same secret in Vercel as <span className="font-mono">RENDER_SECRET</span> (once). Allow each user with the laptop button in the user list.<br />
         <b>Manual (fallback):</b> paste a fixed https address below; it is only used when no automatic worker is online.
       </p>
+      <div className="rounded-2xl bg-emerald-400/10 border border-emerald-400/30 p-4 space-y-3">
+        <div className="text-xs font-bold text-emerald-200">One-click start (Windows)</div>
+        <p className="text-[11px] text-slate-300 leading-relaxed">
+          Install once: press <b>Download installer</b>, double-click <b>VBS-Install-Worker.bat</b> and answer Y to start with Windows. Put the secret shown below into Vercel as <span className="font-mono">RENDER_SECRET</span> (once, then Redeploy).
+          After that this button opens the worker on your PC &mdash; your browser asks once whether to allow it (tick &ldquo;always allow&rdquo;).
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={startWorker} className="px-5 py-2 rounded-xl bg-emerald-400 text-black text-xs font-extrabold">&#9654; Start PC worker</button>
+          <button type="button" onClick={makeInstaller} className="px-5 py-2 rounded-xl bg-white/10 text-white text-xs font-bold">Download installer (once)</button>
+        </div>
+      </div>
       <div className="rounded-2xl bg-amber-400/10 border border-amber-400/30 p-4 space-y-3">
-        <div className="text-xs font-bold text-amber-200">Easiest setup (Windows)</div>
+        <div className="text-xs font-bold text-amber-200">Manual launcher (Windows)</div>
         <ol className="text-[11px] text-slate-300 leading-relaxed list-decimal pl-4 space-y-1">
           <li>Press the button below. It downloads <b>VBS-Phone-Render.bat</b> and shows a secret.</li>
           <li>Copy the secret into Vercel &rarr; Settings &rarr; Environment Variables as <span className="font-mono">RENDER_SECRET</span>, then Redeploy (once).</li>
