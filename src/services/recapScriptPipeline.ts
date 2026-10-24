@@ -640,7 +640,8 @@ ${source.slice(0, 24000)}`,
 
   const paragraphs: string[] = [];
   const paraEvents: number[][] = [];
-  const BATCH = opts.fast ? 4 : 3;
+  // enough parallel calls to use every worker: a call writing 3 sections is slow, 2 calls in parallel are not
+  const BATCH = Math.max(1, Math.min(opts.fast ? 4 : 3, Math.ceil(planned.length / Math.max(1, Math.min(opts.fast ? 8 : 6, opts.concurrency || 3)))));
   // Batches are written in parallel (3 at a time). Only the "continue from the previous ending" hint is given up;
   // the edit pass below smooths the joins.
   const batches: typeof planned[] = [];
