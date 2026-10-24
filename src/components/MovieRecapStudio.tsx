@@ -18,7 +18,7 @@ interface Props {
 type Source = 'speech' | 'recap';
 interface Para { start: number; end: number; text: string }
 
-const panel = 'rounded-[28px] border border-white/10 bg-gradient-to-b from-slate-900/90 to-black/90 p-5 sm:p-6 shadow-2xl shadow-black/50';
+const panel = 'min-w-0 w-full rounded-3xl sm:rounded-[28px] border border-white/10 bg-gradient-to-b from-slate-900/90 to-black/90 p-4 sm:p-6 shadow-2xl shadow-black/50';
 const MAX_MIN_USER = 40; // the shared Gemini key is protected: normal users can recap up to 40 minutes at a time
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
@@ -50,7 +50,7 @@ function getDuration(f: File): Promise<number> {
 }
 
 const Chip: React.FC<{ on: boolean; onClick: () => void; children: React.ReactNode }> = ({ on, onClick, children }) => (
-  <button type="button" onClick={onClick} className={`px-3.5 py-2.5 rounded-xl text-[12.5px] font-bold border transition ${on ? 'bg-amber-400 text-black border-amber-400' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'}`}>
+  <button type="button" onClick={onClick} className={`px-3 py-2 rounded-xl text-[12px] font-bold border transition text-left leading-snug ${on ? 'bg-amber-400 text-black border-amber-400' : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'}`}>
     {children}
   </button>
 );
@@ -253,7 +253,7 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
   };
 
   return (
-    <div className="max-w-5xl mx-auto grid gap-5 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)] items-start">
+    <div className="w-full max-w-5xl mx-auto grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)] items-start overflow-x-hidden">
       {/* Setup */}
       <div className={panel}>
         <div className="flex items-center gap-3.5 mb-5 pb-5 border-b border-white/10">
@@ -276,15 +276,15 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
             <div className="text-[12px] text-slate-500 mt-1">MP4 · MOV · WebM</div>
           </label>
         ) : (
-          <div className="flex items-center gap-3.5 rounded-3xl bg-white/[0.04] border border-white/10 p-3">
-            <div className="w-24 h-16 rounded-2xl overflow-hidden bg-black grid place-items-center shrink-0 border border-white/10">
+          <div className="flex items-center gap-3 rounded-3xl bg-white/[0.04] border border-white/10 p-2.5 sm:p-3 min-w-0">
+            <div className="w-20 h-14 sm:w-24 sm:h-16 rounded-2xl overflow-hidden bg-black grid place-items-center shrink-0 border border-white/10">
               {thumb ? <img src={thumb} alt="" className="w-full h-full object-cover" /> : <Film size={20} className="text-slate-600" />}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-bold text-white truncate">{file.name}</div>
-              <div className="flex items-center gap-2 mt-1.5 text-[11px] text-slate-400">
-                <span className="px-2 py-0.5 rounded-full bg-white/10">{duration > 0 ? fmt(duration) : '…'}</span>
-                <span className="px-2 py-0.5 rounded-full bg-white/10">{(file.size / 1048576).toFixed(1)} MB</span>
+              <div className="text-[13px] font-bold text-white truncate max-w-full">{file.name}</div>
+              <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[11px] text-slate-400">
+                <span className="px-2 py-0.5 rounded-full bg-white/10 whitespace-nowrap">{duration > 0 ? fmt(duration) : '…'}</span>
+                <span className="px-2 py-0.5 rounded-full bg-white/10 whitespace-nowrap">{(file.size / 1048576).toFixed(1)} MB</span>
               </div>
             </div>
             <label className="shrink-0 w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 grid place-items-center cursor-pointer transition" title={isMm ? 'ပြောင်းမည်' : 'Change'}>
@@ -297,11 +297,11 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
         <div className="mt-5">
           <div className="flex items-center gap-1.5 mb-2 text-[11.5px] font-semibold tracking-wide text-slate-400"><Film size={12} />{isMm ? 'ဘာကို Recap လုပ်မလဲ' : 'What are you recapping?'}</div>
           <div className="grid grid-cols-1 gap-2">
-            <button type="button" onClick={() => setSource('speech')} className={`text-left rounded-2xl border p-3.5 transition ${source === 'speech' ? 'border-violet-400 bg-violet-400/10' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'}`}>
+            <button type="button" onClick={() => setSource('speech')} className={`text-left w-full min-w-0 rounded-2xl border p-3 sm:p-3.5 transition ${source === 'speech' ? 'border-violet-400 bg-violet-400/10' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'}`}>
               <div className="text-[13px] font-extrabold text-white">{isMm ? '🎙 မူရင်း စကားပြော ဗီဒီယို' : '🎙 Original video with speech'}</div>
               <div className="text-[11.5px] text-slate-400 mt-0.5 leading-relaxed">{isMm ? 'ရုပ်ရှင်/ဗီဒီယိုထဲက စကားကို အရင်နားထောင် (AssemblyAI) ပြီး ပုံနဲ့တွဲကြည့်ကာ Recap စာသား ရေးမည်။' : 'Listens to the dialogue first (AssemblyAI), then watches the footage and writes the recap.'}</div>
             </button>
-            <button type="button" onClick={() => setSource('recap')} className={`text-left rounded-2xl border p-3.5 transition ${source === 'recap' ? 'border-violet-400 bg-violet-400/10' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'}`}>
+            <button type="button" onClick={() => setSource('recap')} className={`text-left w-full min-w-0 rounded-2xl border p-3 sm:p-3.5 transition ${source === 'recap' ? 'border-violet-400 bg-violet-400/10' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'}`}>
               <div className="text-[13px] font-extrabold text-white">{isMm ? '🔁 Recap ဗီဒီယိုကို ပြန် Recap' : '🔁 Re-recap a recap video'}</div>
               <div className="text-[11.5px] text-slate-400 mt-0.5 leading-relaxed">{isMm ? 'Recap လုပ်ပြီးသား ဗီဒီယိုအတွက် — စကားမနားထောင်ဘဲ ပုံကိုပဲကြည့်ပြီး ကိုယ့်စကားနဲ့ ပြန်ရေးမည် (AssemblyAI မလို)။' : 'For a video that is already a recap — watches the pictures only and retells it in your own words (no AssemblyAI needed).'}</div>
             </button>
@@ -389,7 +389,7 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
                   {paras.length} {isMm ? 'ပိုဒ်' : 'paragraphs'} · {isMm ? 'ပုံမှန်ပြောနှုန်းနဲ့ ဖတ်ရင်' : 'read at normal pace'} ≈ {fmt(totalEst)} / {isMm ? 'ဗီဒီယို' : 'video'} {fmt(totalSlot)}
                 </div>
               </div>
-              <button type="button" onClick={() => void fitAll()} disabled={fitting !== null} className="ml-auto px-3.5 py-2 rounded-xl bg-violet-400 text-black text-[12px] font-extrabold flex items-center gap-1.5 disabled:opacity-50">
+              <button type="button" onClick={() => void fitAll()} disabled={fitting !== null} className="w-full sm:w-auto sm:ml-auto justify-center px-3.5 py-2.5 rounded-xl bg-violet-400 text-black text-[12px] font-extrabold flex items-center gap-1.5 disabled:opacity-50">
                 {fitting === 'all' ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
                 {isMm ? 'အကုန် အချိန်ကိုက်ညှိမည်' : 'Fit all to time'}
               </button>
