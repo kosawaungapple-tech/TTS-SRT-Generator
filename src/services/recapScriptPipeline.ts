@@ -47,6 +47,8 @@ export interface RecapScriptOptions {
   concurrency?: number;
   /** Connective flow between paragraphs (default on); false = off */
   flow?: boolean;
+  /** Faster run: longer watch windows, fewer sections/calls and one polish pass instead of two (a little less detail). */
+  fast?: boolean;
   /** Dub style: key lines are spoken by the characters (tagged `[Name|♂] line` / `[Name|♀] line`), the rest is narration */
   dub?: boolean;
   onStage?: (s: RecapStage) => void;
@@ -190,7 +192,7 @@ async function watchVideo(
   const dur = opts.sourceSeconds as number;
   // Talky videos: the dialogue already carries the story, so look at fewer, longer windows (half the calls).
   const spoken = (opts.cues || []).reduce((n, c) => n + c.text.replace(/\s+/g, '').length, 0);
-  const winSec = spoken / Math.max(1, dur) >= 4 ? 40 : 20;
+  const winSec = opts.fast ? (spoken / Math.max(1, dur) >= 4 ? 60 : 30) : (spoken / Math.max(1, dur) >= 4 ? 40 : 20);
   // a feature film gets more (and longer) windows than a short clip
   const count = Math.max(1, Math.min(dur > 1800 ? 60 : 30, Math.ceil(dur / winSec)));
   const len = dur / count;
@@ -613,7 +615,7 @@ ${source.slice(0, 24000)}`,
     watching ? opts.coverage ?? 1 : undefined
   );
   const sectionCount = watching
-    ? Math.max(3, Math.min(48, Math.round(((opts.sourceSeconds as number) * (opts.coverage ?? 1)) / 25), bible.events.length))
+    ? Math.max(3, Math.min(48, Math.round(((opts.sourceSeconds as number) * (opts.coverage ?? 1)) / (opts.fast ? 35 : 25)), bible.events.length))
     : Math.max(2, Math.min(14, Math.round(totalChars / (language === 'mm' ? 450 : 700)), bible.events.length));
 
   opts.onStage?.({ stage: 'outline' });
@@ -638,7 +640,7 @@ ${source.slice(0, 24000)}`,
 
   const paragraphs: string[] = [];
   const paraEvents: number[][] = [];
-  const BATCH = 3;
+  const BATCH = opts.fast ? 4 : 3;
   // Batches are written in parallel (3 at a time). Only the "continue from the previous ending" hint is given up;
   // the edit pass below smooths the joins.
   const batches: typeof planned[] = [];
@@ -647,7 +649,7 @@ ${source.slice(0, 24000)}`,
   let nextBatch = 0;
   let writtenCount = 0;
   opts.onStage?.({ stage: 'write', done: 0, total: planned.length });
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(6, opts.concurrency || 3)) }, () => 0).map(async () => {
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(opts.fast ? 8 : 6, opts.concurrency || 3)) }, () => 0).map(async () => {
     while (nextBatch < batches.length) {
       const bi = nextBatch++;
       results[bi] = await writeBatch(llm, bible, batches[bi], planned.length, '', rules, language, partCtx);
@@ -670,7 +672,7 @@ ${source.slice(0, 24000)}`,
     } catch { /* keep */ }
   }
 
-  if (watching && bible.times && !opts.dub) {
+  if (watching && bible.times && !opts.dub && !opts.fast) {
     opts.onStage?.({ stage: 'edit' });
     const polished = await editParagraphs(llm, bible, paragraphs, rules, language);
     polished.forEach((t, i) => { paragraphs[i] = t; });
