@@ -10,6 +10,7 @@ import { OutputPreview } from './components/OutputPreview';
 import { AdminDashboard } from './components/AdminDashboard';
 import { VideoTranscriber } from './components/VideoTranscriber';
 import { AutoRecapStudio } from './components/AutoRecapStudio';
+import { MovieRecapStudio } from './components/MovieRecapStudio';
 import { PrivacyPolicy } from './components/PrivacyPolicy';
 import { TermsOfService } from './components/TermsOfService';
 import { AnnouncementPanel } from './components/AnnouncementPanel';
@@ -31,7 +32,7 @@ import { generateOptimizedSubtitles, generateSRT, createSrtBlob, downloadSrtFile
 import { getServerAuthStatus, serverLogin, serverRegister, hasServerSession, loginErrorText } from './services/serverAuth';
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId, getDocs } from './firebase';
 
-type Tab = 'generate' | 'translator' | 'transcriber' | 'video-editor' | 'thumbnail' | 'history' | 'tools' | 'admin' | 'vbs-admin';
+type Tab = 'generate' | 'movie-recap' | 'translator' | 'transcriber' | 'video-editor' | 'thumbnail' | 'history' | 'tools' | 'admin' | 'vbs-admin';
 
 export default function App() {
   const { language, t } = useLanguage();
@@ -2369,6 +2370,8 @@ export default function App() {
                     go: () => { if (!isPremium) { showToast(t('video.premiumRequired'), 'error'); return; } setSubtitlesSubTab('transcriber'); handleTabSwitch('transcriber'); } },
                   { key: 'recap', icon: <Clapperboard size={18} />, title: 'Auto Recap', sub: language === 'mm' ? 'ဗီဒီယို Recap အလိုအလျောက်' : 'Video recap, automated', active: activeTab === 'transcriber' && subtitlesSubTab === 'auto-recap', busy: isVideoEditorProcessing, locked: !isPremium,
                     go: () => { if (!isPremium) { showToast(t('video.premiumRequired'), 'error'); return; } setSubtitlesSubTab('auto-recap'); handleTabSwitch('transcriber'); } },
+                  { key: 'movie-recap', icon: <BookOpen size={18} />, title: 'Movie Recap', sub: language === 'mm' ? 'Recap စာသား ရေးပေးမည်' : 'Recap script writer', active: activeTab === 'movie-recap', busy: false, locked: false,
+                    go: () => handleTabSwitch('movie-recap') },
                 ]).map(it => (
                   <button
                     key={it.key}
@@ -2438,6 +2441,14 @@ export default function App() {
                 tooltip={isPremium ? t('tooltips.premiumActive') : t('tooltips.transcriber')}
                 locked={!isPremium}
                 isProcessing={isTranscriberProcessing || isVideoEditorProcessing}
+              />
+              <NavTab
+                id="movie-recap"
+                active={activeTab === 'movie-recap'}
+                onClick={() => handleTabSwitch('movie-recap')}
+                icon={<BookOpen size={18} />}
+                label="Movie Recap"
+                tooltip="Movie Recap"
               />
               <NavTab
                 id="tools"
@@ -3254,6 +3265,21 @@ export default function App() {
                     </div>
                   </aside>
                 )}
+              </div>
+
+              {/* Movie Recap: open to every user, kept mounted so a running job survives tab switches */}
+              <div
+                id="tab-panel-movie-recap"
+                role="tabpanel"
+                aria-hidden={activeTab !== 'movie-recap'}
+                className={activeTab === 'movie-recap' ? 'block' : 'hidden'}
+              >
+                <MovieRecapStudio
+                  showToast={showToast}
+                  isAdmin={isVbsAdmin}
+                  isMm={language === 'mm'}
+                  onNavigateToSettings={() => handleTabSwitch('tools')}
+                />
               </div>
 
               {/* Tab 5: Settings / Tools (Kept alive in background) */}

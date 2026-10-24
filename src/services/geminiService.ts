@@ -413,6 +413,27 @@ ${text}`;
     return null;
   }
 
+  /** Makes a too-short recap paragraph fuller (about `targetChars`) without adding facts. */
+  async expandNarration(text: string, targetChars: number, language: 'mm' | 'en' = 'mm', onRetry?: (seconds: number, message: string) => void): Promise<string | null> {
+    const prompt = `Make this recap narration paragraph fuller: about ${targetChars} characters (currently ${text.length}).
+Add what the characters see, feel and risk, and the cause→effect between the actions, in the same spoken storyteller voice, tense and names. Do NOT add any new fact, event, name or ending. Keep the opening connective and the ending hand-over.
+${language === 'mm' ? 'Write only spoken Burmese (မြန်မာ). No Chinese/English sentences.' : 'Write only English.'}
+Output ONLY the paragraph.
+
+${text}`;
+    for (const model of [GEMINI_MODELS.SCRIPT, GEMINI_MODELS.REWRITE]) {
+      try {
+        const data = await this.geminiRequest(model, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.5 } }, 0, onRetry);
+        const out = (data.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || '').join('') || '').trim().replace(/^```[a-z]*\n?|```$/g, '').trim();
+        if (!out) continue;
+        const bad = language === 'mm' ? /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u0e00-\u0e7f]/.test(out) : false;
+        if (bad || out.length > targetChars * 1.4 || out.length < text.length) return null;
+        return out;
+      } catch { /* try next model */ }
+    }
+    return null;
+  }
+
   /**
    * Splits a long film into `count` consecutive story chapters at natural turning points (scene / place / time changes,
    * the end of an episode of the plot) using the transcript. Returns the start second of chapters 2..count, or null.
@@ -1235,6 +1256,7 @@ ${list.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.te
       part?: { index: number; count: number; prevTail?: string };
       concurrency?: number;
       dub?: boolean;
+      flow?: boolean;
       onStage?: (s: RecapStage) => void;
     }
   ): Promise<{ text: string; segments?: RecapSegment[] }> {
@@ -1292,6 +1314,7 @@ ${list.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.te
       part: options?.part,
       concurrency: options?.concurrency,
       dub: options?.dub,
+      flow: options?.flow,
       onStage: options?.onStage,
     });
   }
