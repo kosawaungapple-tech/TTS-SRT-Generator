@@ -158,7 +158,7 @@ export class GeminiTTSService {
           // A dead key (leaked, expired, revoked, no access) is skipped the same way as a spent one.
           const deadKey = (status === 400 || status === 401 || status === 403) && /api key|leaked|expired|revoked|permission|denied|billing/i.test(errorMsg);
           if (key && this.apiKey && ((status === 429 && /quota|exhaust|rate|limit/i.test(errorMsg)) || deadKey)) {
-            const other = hasOtherFreeKey(key, this.apiKey, modelName);
+            const other = hasOtherFreeKey(key, this.apiKey, modelName, apiChannelManager.getPoolKeys(this.isAdmin));
             markLimited(key, modelName, deadKey ? 'retry in 3600s' : errorMsg);
             if (other) throw new KeyLimitError(errorMsg);
           }
@@ -252,14 +252,14 @@ export class GeminiTTSService {
 
     if (this.apiKey) {
       const tried = new Set<string>();
-      let key = pickKey(this.apiKey, modelName, tried) || this.apiKey.split(/[\s,]+/)[0];
+      let key = pickKey(this.apiKey, modelName, tried, apiChannelManager.getPoolKeys(this.isAdmin)) || this.apiKey.split(/[\s,]+/)[0];
       for (;;) {
         try {
           return await executeRequest(key);
         } catch (e) {
           if (e instanceof KeyLimitError) {
             tried.add(key);
-            const next = pickKey(this.apiKey, modelName, tried);
+            const next = pickKey(this.apiKey, modelName, tried, apiChannelManager.getPoolKeys(this.isAdmin));
             if (next) {
               if (onRetry) onRetry(0, `Key limit reached — switching to key ${tried.size + 1}`);
               key = next;
