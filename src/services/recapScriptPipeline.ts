@@ -511,7 +511,7 @@ ${rules}
 FACTS (the only allowed facts):
 ${bibleText(bible)}
 
-${prev ? `The paragraph before these ends with: "${prev}"\n` : ''}Do this: make each paragraph flow into the next, remove repeated words/openers/filler across paragraphs, call every character by the same name, sharpen the emotional peaks, ${i === 0 ? 'make the very first line a gripping hook, ' : ''}keep questions and teasers. Keep EXACTLY ${part.length} paragraphs in the same order (never merge or split), keep each paragraph's facts, keep each about the same length (±15%). Do NOT add facts.
+${prev ? `The paragraph before these ends with: "${prev}"\n` : ''}Do this: make each paragraph flow into the next (every paragraph after the first MUST open with a natural spoken connective and the sentences inside must be joined with connectives - never remove or flatten these, add them where missing, but vary them so no two neighbouring paragraphs open the same way), remove repeated filler words across paragraphs, call every character by the same name, sharpen the emotional peaks, ${i === 0 ? 'make the very first line a gripping hook, ' : ''}keep questions and teasers. Keep EXACTLY ${part.length} paragraphs in the same order (never merge or split), keep each paragraph's facts, keep each about the same length (±15%). Do NOT add facts.
 ${LANG_RULE(language)}
 Return JSON: {"paragraphs":["...","..."]}
 
@@ -523,6 +523,46 @@ ${part.map((t, k) => `${k + 1}. ${t}`).join('\n\n')}`,
       const ok = edited.every((t, k) => t && t.length >= part[k].length * 0.7 && t.length <= part[k].length * 1.35 && languageOk(t, language));
       if (ok) edited.forEach((t, k) => { out[i + k] = t; });
     } catch { /* keep the original paragraphs of this window */ }
+  }));
+  return out;
+}
+
+
+/**
+ * Connective pass: makes sure every paragraph after the first opens with a spoken connective that ties it to the
+ * paragraph before, and that sentences inside are joined too. Count, order, facts, length and dub tags are kept.
+ */
+async function connectParagraphs(
+  llm: RecapLlm,
+  paragraphs: string[],
+  rules: string,
+  language: 'mm' | 'en'
+): Promise<string[]> {
+  const out = [...paragraphs];
+  const W = 6;
+  const starts: number[] = [];
+  for (let i = 0; i < paragraphs.length; i += W) starts.push(i);
+  const tags = (t: string) => (t.match(/\[[^\]|]+\|[♂♀]\]/g) || []).length;
+  await Promise.all(starts.map(async i => {
+    const part = paragraphs.slice(i, i + W);
+    const prev = i > 0 ? paragraphs[i - 1].slice(-220) : '';
+    try {
+      const raw = await llm(
+        `You are polishing the CONNECTIVES of a recap voice-over so it sounds like one story told aloud.
+${rules}
+
+${prev ? `The paragraph before these ends with: "${prev}"\n` : 'The first paragraph below is the opening: keep it as the hook.\n'}For each numbered paragraph: ${i === 0 ? 'keep paragraph 1 as the hook; for all the others ' : ''}make it OPEN with a natural spoken connective that links it to the previous paragraph's last beat (time, cause and effect, contrast or reaction), join the sentences inside with connectives instead of standing alone, and end it so it hands over to the next. Never use the same opening connective in two neighbouring paragraphs. Do NOT change facts, names, order or meaning, do not add events, keep each paragraph about the same length (+-20%), and keep every dialogue tag like [Name|♂] and its line exactly as written.
+Keep EXACTLY ${part.length} paragraphs. ${LANG_RULE(language)}
+Return JSON: {"paragraphs":["...","..."]}
+
+${part.map((t, k) => `${k + 1}. ${t}`).join('\n\n')}`,
+        { json: true }
+      );
+      const edited = extractJson<{ paragraphs?: string[] }>(raw).paragraphs?.map(x => String(x).trim());
+      if (!edited || edited.length !== part.length) return;
+      const ok = edited.every((t, k) => t && t.length >= part[k].length * 0.75 && t.length <= part[k].length * 1.4 && tags(t) === tags(part[k]) && languageOk(t, language));
+      if (ok) edited.forEach((t, k) => { out[i + k] = t; });
+    } catch { /* keep this window as it was */ }
   }));
   return out;
 }
@@ -634,6 +674,11 @@ ${source.slice(0, 24000)}`,
     opts.onStage?.({ stage: 'edit' });
     const polished = await editParagraphs(llm, bible, paragraphs, rules, language);
     polished.forEach((t, i) => { paragraphs[i] = t; });
+  }
+  // Connective pass (also for dub recaps, which skip the edit pass above): every paragraph must hand over to the next.
+  if (opts.flow !== false && paragraphs.length > 1) {
+    const linked = await connectParagraphs(llm, paragraphs, rules, language);
+    linked.forEach((t, i) => { paragraphs[i] = t; });
   }
   const draft = paragraphs.join('\n\n');
 
