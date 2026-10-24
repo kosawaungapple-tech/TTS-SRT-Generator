@@ -176,7 +176,8 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
           cues,
           coverage,
           flow: true,
-          concurrency: Math.min(6, getExtraKeys().length + 2),
+          fast: true,
+          concurrency: Math.min(8, getExtraKeys().length + 4),
           getFrames: async (a, b) => {
             const n = 5;
             return captureVideoFrames(file, Array.from({ length: n }, (_, i) => a + ((b - a) * (i + 0.5)) / n), 448, 0.6);
