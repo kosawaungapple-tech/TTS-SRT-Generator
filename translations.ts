@@ -6,8 +6,9 @@ export const translations = {
     nav: {
       generate: { en: "Generate Voice", mm: "အသံထုတ်ယူခြင်း" },
       translator: { en: "AI Translator", mm: "ဘာသာပြန်" },
-      transcriber: { en: "Recap Video", mm: "Recap ဗီဒီယို" },
-      thumbnail: { en: "Thumbnail", mm: "သမ်းနေးလ်" },
+      transcriber: { en: "Video AI", mm: "ဗီဒီယို AI" },
+      videoEditor: { en: "Video Editor", mm: "ဗီဒီယို ပြင်ဆင်ရန်" },
+      thumbnail: { en: "Story Audiobook", mm: "အသံစာအုပ်" },
       history: { en: "History", mm: "မှတ်တမ်း" },
       studio: { en: "Studio", mm: "စတူဒီယို" },
       settings: { en: "Settings", mm: "ပြင်ဆင်ချက်" },
@@ -18,8 +19,9 @@ export const translations = {
   tooltips: {
     generate: { en: "Audio Extraction / AI Narration", mm: "AI အသံထုတ်ယူခြင်း နှင့် ဇာတ်လမ်းပြောပြခြင်း" },
     translator: { en: "AI Translation Tool", mm: "AI ဘာသာပြန်ကိရိယာ" },
-    transcriber: { en: "Video-to-Text Recap Transcription", mm: "Recap ဗီဒီယိုမှ စာသားသို့ ပြောင်းလဲခြင်း" },
-    thumbnail: { en: "Create Video Thumbnails", mm: "ဗီဒီယို သမ်းနေးလ်များ ပြုလုပ်ရန်" },
+    transcriber: { en: "AI Video Transcription & SRT Subtitles", mm: "ဗီဒီယိုမှ စာတန်းထိုး နှင့် စာသားထုတ်ယူခြင်း" },
+    videoEditor: { en: "Video Subtitles, Color Grading, Aspect Ratio & Anti-Copyright Tools", mm: "စာတန်းထိုး၊ အရောင်ချိန်၊ အချိုးအစားနှင့် မူပိုင်ခွင့်လွတ် အသံ/ဗီဒီယို ပြင်ဆင်ချက်များ" },
+    thumbnail: { en: "Story & Audiobook Studio (Chapters, Voices, BGM & Covers)", mm: "ပုံပြင်နှင့် ဝတ္ထု အသံစာအုပ် စတူဒီယို" },
     history: { en: "Your Generation History", mm: "ယခင်ပြုလုပ်ထားသော မှတ်တမ်းများ" },
     settings: { en: "Account & App Settings", mm: "အကောင့်နှင့် အက်ပ်ပြင်ဆင်ချက်များ" },
     premiumActive: { en: "Premium Access Active ✨", mm: "Premium အဆင့်မြင့်ရယူနိုင်ပါသည် ✨" }
@@ -36,7 +38,7 @@ export const translations = {
     connecting: { en: "Connecting...", mm: "ချိတ်ဆက်နေသည်..." },
     invalidCode: { en: "Invalid Access Code.", mm: "Access Code မမှန်ကန်ပါ။" },
     invalidPassword: { en: "Invalid Password.", mm: "လျှို့ဝှက်နံပါတ် မမှန်ကန်ပါ။" },
-    expired: { en: "Your account has expired. Please contact Admin Saw for renewal.", mm: "သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ။ အဆင့်မြှင့်ရန် Admin ထံ ဆက်သွယ်ပါ။" },
+    expired: { en: "Your account has expired. Please renew to continue.", mm: "သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ။ ကျေးဇူးပြု၍ သက်တမ်းတိုးပါ။" },
     deactivated: { en: "This Access Code has been deactivated.", mm: "ဤ Access Code ကို ပိတ်ထားပါသည်။" }
   },
 
@@ -146,21 +148,53 @@ export const translations = {
   video: {
     title: { en: "Video-to-Text Recap", mm: "ဗီဒီယိုမှ စာသားထုတ်ယူခြင်း" },
     subtitle: { en: "Upload a video file to automatically extract Myanmar text.", mm: "ဗီဒီယိုဖိုင်ကို တင်သွင်းပြီး အလိုအလျောက် စာသားထုတ်ယူပါ။" },
-    premiumRequired: { en: "This is a Premium Feature. Please contact Admin to upgrade.", mm: "ဤသည်မှာ Premium သီးသန့် Feature ဖြစ်ပါသည်။ အဆင့်မြှင့်ရန် Admin ကို ဆက်သွယ်ပါ။" },
-    blocked: { en: "Your User ID is blocked. Contact Admin.", mm: "သင်၏ User ID ကို ပိတ်ပင်ထားပါသည်။ Admin ကို ဆက်သွယ်ပါ။" },
+    premiumRequired: { en: "This is a Premium Feature. Please upgrade your account to use it.", mm: "ဤသည်မှာ Premium သီးသန့် Feature ဖြစ်ပါသည်။ အသုံးပြုလိုပါက အဆင့်မြှင့်တင်ပေးပါ။" },
+    blocked: { en: "Your User ID is restricted. Please verify your access.", mm: "သင်၏ User ID ကို ကန့်သတ်ထားပါသည်။ ကျေးဇူးပြု၍ သင်၏ဝင်ရောက်ခွင့်ကို စစ်ဆေးပါ။" },
     recapLocked: { en: "Premium Feature Locked 🔒", mm: "Premium Feature ကို ပိတ်ထားပါသည် 🔒" },
     videoRecapLimited: { en: "Video Recap is currently limited to Personal API Keys only. Please switch to your own key to use this feature.", mm: "Video Recap ကို မိမိကိုယ်ပိုင် API Key ဖြင့်သာ အသုံးပြုနိုင်ပါသည်။ ကျေးဇူးပြု၍ မိမိ၏ Key သို့ ပြောင်းလဲအသုံးပြုပါ။" },
-    contactAdmin: { en: "Please send your User ID to Admin for approval.", mm: "အသုံးပြုလိုပါက သင်၏ User ID ကို Admin ထံပေးပို့၍ ခွင့်ပြုချက်တောင်းခံပါ။" },
+    contactAdmin: { en: "Please verify your User ID to continue.", mm: "အသုံးပြုလိုပါက သင်၏ User ID ကို အတည်ပြုချက်ရယူပါ။" },
     yourUserId: { en: "Your User ID:", mm: "သင်၏ User ID:" },
     dragDrop: { en: "Drag & Drop Video", mm: "ဗီဒီယိုဖိုင်အား ဤနေရာသို့ ဆွဲထည့်ပါ" },
     supportFormats: { en: "Support MP4, MOV, AVI. Max 20MB recommended.", mm: "MP4, MOV, AVI ဖိုင်များ ရရှိနိုင်ပါသည်။ အများဆုံး 20MB အထိ အကြံပြုပါသည်။" },
     dropToUpload: { en: "Drop to Upload", mm: "တင်ရန် လွှတ်ချလိုက်ပါ" },
     transcribeBtn: { en: "Transcribe Video", mm: "စာသားထုတ်ယူမည်" },
     transcribing: { en: "Transcribing...", mm: "စာသားထုတ်ယူနေသည်..." },
-    aiListening: { en: "AI is listening to your video...", mm: "AI မှ ဗီဒီယိုကို နားထောင်နေပါသည်..." },
+    aiListening: { en: "Listening and analyzing audio...", mm: "ဗီဒီယိုအသံကို နားထောင်ပြီး စက္ကန့်အလိုက် ချိန်ညှိနေပါသည်..." },
     success: { en: "Transcription & Translation successful! ✨", mm: "ဗီဒီယိုမှ မြန်မာဘာသာသို့ ပြန်ဆိုပြီးပါပြီ ✨" },
     onlyVideos: { en: "Only video files are supported.", mm: "ဗီဒီယိုဖိုင်များသာ လက်ခံပါသည်။" },
     premiumActive: { en: "Premium Access Active ✨", mm: "Premium အသုံးပြုခွင့် ရရှိထားပါသည် ✨" }
+  },
+
+  // Auto SRT Subtitles
+  assemblyai: {
+    title: { en: "Auto-SRT Subtitle Generator", mm: "အချိန်ကိုက် အော်တို SRT စာတန်းထိုး ထုတ်ယူခြင်း" },
+    subtitle: { en: "Upload Video/Audio or provide media URL to automatically transcribe and export time-synced .SRT subtitles.", mm: "ဗီဒီယို (သို့) အသံဖိုင် တင်သွင်းခြင်း သို့မဟုတ် URL ထည့်သွင်းရုံဖြင့် အချိန်ကိုက် .SRT စာတန်းထိုးဖိုင်ကို အလိုအလျောက် ထုတ်ယူပါ။" },
+    tabSrt: { en: "⚡ Auto-SRT Subtitles", mm: "⚡ အချိန်ကိုက် စာတန်းထိုး (Auto-SRT)" },
+    tabGemini: { en: "🎬 Video Recap Studio", mm: "🎬 Video Recap Studio" },
+    apiKeyLabel: { en: "Subtitle Service API Key", mm: "စာတန်းထိုးစနစ် API Key" },
+    apiKeyPlaceholder: { en: "Enter your API Key...", mm: "API Key ထည့်သွင်းပါ..." },
+    saveKey: { en: "Save Key", mm: "Key သိမ်းဆည်းမည်" },
+    savedKeySuccess: { en: "API Key saved successfully!", mm: "API Key ကို အောင်မြင်စွာ သိမ်းဆည်းပြီးပါပြီ။" },
+    keyHelp: { en: "Get free API Key from assemblyai.com (Free 100 hours transcription)", mm: "assemblyai.com တွင် အခမဲ့ API Key ရယူနိုင်ပါသည် (အခမဲ့ နာရီ ၁၀၀ ရရှိမည်)" },
+    keyRequired: { en: "Please enter a Subtitle API Key to proceed.", mm: "ရှေ့ဆက်ရန် API Key ထည့်သွင်းပေးပါ။" },
+    inputTabUpload: { en: "Upload Media File", mm: "ဖိုင်တင်သွင်းမည်" },
+    inputTabUrl: { en: "Direct Media URL", mm: "Media URL ထည့်မည်" },
+    urlPlaceholder: { en: "Paste direct video/audio URL (e.g. https://.../audio.mp3)", mm: "ဗီဒီယို (သို့) အသံလင့်ခ် ထည့်ပါ (ဥပမာ - https://.../video.mp4)" },
+    uploadLabel: { en: "Drag & drop Video or Audio file here", mm: "ဗီဒီယို (သို့) အသံဖိုင်ကို ဤနေရာသို့ ဆွဲထည့်ပါ" },
+    uploadHint: { en: "Supports MP4, MKV, MOV, WebM, MP3, WAV, M4A, AAC, FLAC", mm: "MP4, MKV, MOV, WebM, MP3, WAV, M4A, AAC, FLAC ဖိုင်များ ရရှိနိုင်ပါသည်" },
+    languageLabel: { en: "Spoken Language", mm: "စကားပြော ဘာသာစကား" },
+    langAuto: { en: "Auto-Detect Language", mm: "အလိုအလျောက် ဘာသာစကားရှာဖွေမည်" },
+    speakerLabels: { en: "Speaker Diarization (Identify Speakers)", mm: "ပြောသူခွဲခြားမှု (Speaker Diarization)" },
+    generateSrtBtn: { en: "Generate Time-Synced SRT Subtitles", mm: "အချိန်ကိုက် SRT စာတန်းထိုး ထုတ်ယူမည်" },
+    processing: { en: "Generating time-synced subtitles...", mm: "အချိန်ကိုက် စာတန်းထိုး ထုတ်လုပ်နေပါသည်..." },
+    downloadSrt: { en: "Download .SRT File", mm: ".SRT ဖိုင် ဒေါင်းလုဒ်ဆွဲမည်" },
+    copySrt: { en: "Copy SRT Content", mm: "SRT စာသား ကူးယူမည်" },
+    copied: { en: "SRT copied to clipboard!", mm: "SRT စာတန်းထိုးများကို ကူးယူပြီးပါပြီ!" },
+    sendToTts: { en: "Send Script to Voice Studio", mm: "စာသားများကို အသံထုတ်ယူခန်းသို့ ပို့မည်" },
+    srtPreview: { en: "Generated Subtitles Preview", mm: "အချိန်ကိုက် စာတန်းထိုးများ ကြည့်ရှုရန်" },
+    confidence: { en: "Confidence", mm: "တိကျမှု" },
+    words: { en: "Words", mm: "စကားလုံးရေ" },
+    duration: { en: "Duration", mm: "ကြာချိန်" }
   },
 
   // Output Preview
@@ -219,7 +253,12 @@ export const translations = {
     pause: { en: "Pause Queue", mm: "ခေတ္တရပ်မည်" },
     resume: { en: "Resume Queue", mm: "ဆက်လုပ်မည်" },
     cancelAll: { en: "Cancel Remaining", mm: "ကျန်ရှိမှု ပယ်ဖျက်မည်" },
-    retryAll: { en: "Retry Failed", mm: "မအောင်မြင်သည်များ ပြန်ကြိုးစားမည်" }
+    retryAll: { en: "Retry Failed", mm: "မအောင်မြင်သည်များ ပြန်ကြိုးစားမည်" },
+    autoScroll: { en: "Auto-Scroll", mm: "အလိုအလျောက် ဗဟိုပြုခြင်း" },
+    autoScrollOn: { en: "Auto-Scroll: ON", mm: "အလိုအလျောက် ရွှေ့ခြင်း ဖွင့်ထားသည်" },
+    autoScrollOff: { en: "Auto-Scroll: OFF", mm: "အလိုအလျောက် ရွှေ့ခြင်း ပိတ်ထားသည်" },
+    focusActive: { en: "Center Current Item", mm: "လက်ရှိအရာကို ဗဟိုပြုမည်" },
+    autoCenteredBadge: { en: "Auto-Centered", mm: "ဗဟိုပြုထားသည်" }
   },
 
   // Common / UI
@@ -330,6 +369,7 @@ export const translations = {
     tabSystem: { en: "System", mm: "စနစ်" },
     tabRules: { en: "Rules", mm: "စည်းမျဉ်းများ" },
     tabAnnouncements: { en: "Announcements", mm: "ကြေညာချက်များ" },
+    tabFonts: { en: "Fonts", mm: "ဖောင့်များ" },
   },
 
   // Thumbnail Access

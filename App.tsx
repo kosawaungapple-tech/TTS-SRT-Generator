@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Video, Clipboard, Mic2, Play, Info, Sparkles, Image as ImageIcon, X, Calendar, Layers, Pause, RotateCcw } from 'lucide-react';
+import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, Check, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Clipboard, Mic2, Play, Info, Sparkles, X, Calendar, Layers, Pause, RotateCcw, BookOpen, Eye, EyeOff, Zap, Crosshair, Clapperboard } from 'lucide-react';
 import { WelcomePage } from './components/WelcomePage';
 import { Header } from './components/Header';
 import { ApiKeyModal } from './components/ApiKeyModal';
@@ -9,25 +9,31 @@ import { VoiceConfig } from './components/VoiceConfig';
 import { OutputPreview } from './components/OutputPreview';
 import { AdminDashboard } from './components/AdminDashboard';
 import { VideoTranscriber } from './components/VideoTranscriber';
-import { ThumbnailCreator } from './components/ThumbnailCreator';
-import { VideoStudio } from './components/VideoStudio';
+import { AutoRecapStudio } from './components/AutoRecapStudio';
+import { MovieRecapStudio } from './components/MovieRecapStudio';
 import { PrivacyPolicy } from './components/PrivacyPolicy';
 import { TermsOfService } from './components/TermsOfService';
 import { AnnouncementPanel } from './components/AnnouncementPanel';
 import { Modal, ModalType } from './components/Modal';
 import { BatchQueueModal } from './components/BatchQueueModal';
 import { GeminiTTSService } from './services/geminiService';
-import { apiChannelManager } from './services/apiChannelManager';
+import { apiChannelManager, isPlausibleApiKey } from './services/apiChannelManager';
+import { assemblyAiService } from './services/assemblyAiService';
+import { ActivityPill } from './components/ActivityPill';
+import { useActivity } from './services/activity';
 import { logActivity } from './services/activityService';
-import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, SystemConfig, VBSUserControl, Announcement } from './types';
+import { TTSConfig, AudioResult, PronunciationRule, HistoryItem, GlobalSettings, SystemConfig, VBSUserControl, Announcement, CustomFont } from './types';
 import { DEFAULT_RULES } from './constants';
+import { ExtraGeminiKeys } from './components/ExtraGeminiKeys';
 import { useLanguage } from './contexts/LanguageContext';
 import { formatDate } from './utils/dateUtils';
 import { formatMyanmarDuration, renderProcessedAudio, pcmToWav } from './utils/audioUtils';
-import { generateOptimizedSubtitles } from './utils/subtitleUtils';
-import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId } from './firebase';
+import { generateOptimizedSubtitles, generateSRT, downloadSrtFile } from './utils/subtitleUtils';
+import { getCustomPronunciation, setCustomPronunciation } from './utils/pronunciation';
+import { getServerAuthStatus, serverLogin, serverRegister, hasServerSession, loginErrorText } from './services/serverAuth';
+import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId, getDocs } from './firebase';
 
-type Tab = 'generate' | 'translator' | 'transcriber' | 'thumbnail' | 'video-studio' | 'history' | 'tools' | 'admin' | 'vbs-admin';
+type Tab = 'generate' | 'movie-recap' | 'translator' | 'transcriber' | 'video-editor' | 'thumbnail' | 'history' | 'tools' | 'admin' | 'vbs-admin';
 
 export default function App() {
   const { language, t } = useLanguage();
@@ -35,7 +41,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('generate');
   const [hasEntered, setHasEntered] = useState(false);
   const [text, setText] = useState('');
-  const [customRules] = useState('');
+  const [customRules, setCustomRules] = useState(() => getCustomPronunciation() || '');
   const [saveToHistory, setSaveToHistory] = useState(false);
   const [config, setConfig] = useState<TTSConfig>({
     voiceId: 'kore',
@@ -49,6 +55,7 @@ export default function App() {
     exportFormat: 'wav',
   });
   const [isLoading, setIsLoading] = useState(false);
+  useActivity(isLoading, language === 'mm' ? 'အသံထုတ်နေသည်…' : 'Generating voiceover…');
   const [isProcessingSpeed, setIsProcessingSpeed] = useState(false);
   const [result, setResult] = useState<AudioResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +70,11 @@ export default function App() {
     api_keys: ['']
   });
 
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [isTranscriberProcessing, setIsTranscriberProcessing] = useState(false);
+  const [isAudiobookProcessing] = useState(false);
+  const [isVideoEditorProcessing] = useState(false);
+  const [subtitlesSubTab, setSubtitlesSubTab] = useState<'transcriber' | 'auto-recap'>('transcriber');
   const [profile, setProfile] = useState<VBSUserControl | null>(null);
   const [vbsId, setVbsId] = useState<string | null>(localStorage.getItem('VBS_USER_ID'));
   const [userControl, setUserControl] = useState<VBSUserControl | null>(null);
@@ -72,6 +83,10 @@ export default function App() {
            localStorage.getItem('vbs_access_code') === 'saw_vlogs_2026';
   }); 
   const [accessCode, setAccessCode] = useState<string | null>(() => localStorage.getItem('vbs_access_code'));
+  
+  const [assemblyApiKeyInput, setAssemblyApiKeyInput] = useState(() => assemblyAiService.getStoredApiKey());
+  const [showAssemblyKey, setShowAssemblyKey] = useState(false);
+  const [isAssemblyKeySaved, setIsAssemblyKeySaved] = useState(false);
   
   const isAdminUser = useMemo(() => {
     return profile?.role === 'admin' || userControl?.role === 'admin' || accessCode === 'saw_vlogs_2026' || vbsId === 'saw_vlogs_2026';
@@ -121,11 +136,61 @@ export default function App() {
     }
   }, [vbsId]);
 
+  // Font Injection System
+  useEffect(() => {
+    let userFonts: CustomFont[] = [];
+    try {
+      const stored = localStorage.getItem('vbs_user_custom_fonts');
+      if (stored) userFonts = JSON.parse(stored);
+    } catch (e) {
+      console.warn("Failed to parse user custom fonts:", e);
+    }
+
+    const allFonts = [...(globalSettings.fonts || []), ...userFonts];
+    if (allFonts.length === 0) return;
+
+    const fontContainerId = 'vbs-custom-fonts-container';
+    let container = document.getElementById(fontContainerId);
+    if (!container) {
+      container = document.createElement('div');
+      container.id = fontContainerId;
+      document.head.appendChild(container);
+    }
+    container.innerHTML = ''; // Clear previous injections
+
+    allFonts.forEach(font => {
+      if (font.isGoogleFont) {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = font.url;
+        container?.appendChild(link);
+      } else {
+        const style = document.createElement('style');
+        style.textContent = `
+          @font-face {
+            font-family: '${font.family}';
+            src: url('${font.url}');
+            font-display: swap;
+          }
+        `;
+        container?.appendChild(style);
+        try {
+          const fontFace = new FontFace(font.family, `url(${font.url})`);
+          fontFace.load().then(loaded => {
+            document.fonts.add(loaded);
+          }).catch(() => {});
+        } catch {
+          // ignore
+        }
+      }
+    });
+  }, [globalSettings.fonts]);
+
   // Use this for global notifications or debug
   useEffect(() => {
     // Requirement 3: Allow fetch for both real users AND anonymous users with access granted
     // This ensures the Transcribe button works for users logged in via Access Code
-    const canFetch = vbsId && isAuthReady && auth.currentUser && (isAccessGranted || !auth.currentUser.isAnonymous);
+    const canFetch = vbsId && isAuthReady && (isAccessGranted || (auth.currentUser && !auth.currentUser.isAnonymous));
     
     if (canFetch) {
       const unsubscribe = onSnapshot(doc(db, 'user_controls', vbsId), (docSnap) => {
@@ -163,10 +228,10 @@ export default function App() {
         }
       });
       return () => unsubscribe();
-    } else if (vbsId && isAuthReady && auth.currentUser) {
+    } else if (vbsId && isAuthReady) {
       console.log('[VBS] Auth ready, waiting for session sync if needed...');
     }
-  }, [vbsId, isAuthReady, auth.currentUser, isSessionSynced]);
+  }, [vbsId, isAuthReady, auth.currentUser, isSessionSynced, isAccessGranted]);
 
   // Re-process audio when sliders change for an existing result
   useEffect(() => {
@@ -207,7 +272,7 @@ export default function App() {
             duration: finalDuration,
             baseDuration: finalDuration,
             subtitles: generateOptimizedSubtitles(text, finalDuration),
-            srtContent: generateOptimizedSubtitles(text, finalDuration).map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join(''),
+            srtContent: generateSRT(generateOptimizedSubtitles(text, finalDuration)),
             speed: config.speed,
             pitch: config.pitch,
             volume: config.volume
@@ -227,9 +292,9 @@ export default function App() {
     }
   }, [config.speed, config.pitch, config.volume, result]);
 
-  const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
+  const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
     setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
+    setTimeout(() => setToast(null), 3500);
   }, []);
 
   const isUsingAdminKey = useMemo(() => {
@@ -237,8 +302,9 @@ export default function App() {
     if (isAdminUser) return true;
 
     // Personal checks
-    if (localStorage.getItem('VLOGS_BY_SAW_API_KEY')) return false;
-    if (profile?.api_key_stored) return false;
+    const storedLocalKey = localStorage.getItem('VLOGS_BY_SAW_API_KEY');
+    if (storedLocalKey && isPlausibleApiKey(storedLocalKey)) return false;
+    if (profile?.api_key_stored && isPlausibleApiKey(profile.api_key_stored)) return false;
     
     // Admin checks
     if (globalSettings.allow_admin_keys) {
@@ -253,10 +319,10 @@ export default function App() {
   }, [profile, globalSettings]);
 
   const getEffectiveApiKey = useCallback(() => {
-    // Priority -1: Immediate Channel Manager fetch
+    // Priority -1: Immediate Channel Manager fetch (only if plausible format)
     const immediateLocalKey = apiChannelManager.getActiveKey(false, isAdminUser);
-    if (immediateLocalKey && immediateLocalKey.trim()) {
-      return immediateLocalKey;
+    if (immediateLocalKey && isPlausibleApiKey(immediateLocalKey)) {
+      return immediateLocalKey.trim();
     }
 
     // [ADMIN PREMIUM KEY PRIORITY - COMMANDER ORDER]
@@ -269,7 +335,7 @@ export default function App() {
         globalSettings.primary_key || '',
         globalSettings.secondary_key || '',
         globalSettings.backup_key || ''
-      ].filter(k => k.trim());
+      ].filter(k => isPlausibleApiKey(k));
 
       if (adminKeys.length > 0) {
         console.log("App: Prioritizing Admin Pool (Admin User or Toggle ON)");
@@ -278,7 +344,7 @@ export default function App() {
     }
     
     // Priority 2: Firestore User Profile
-    if (profile?.api_key_stored) {
+    if (profile?.api_key_stored && isPlausibleApiKey(profile.api_key_stored)) {
       console.log("App: Using API Key from Firestore Profile");
       return profile.api_key_stored.trim();
     }
@@ -324,6 +390,8 @@ export default function App() {
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [isBatchPaused, setIsBatchPaused] = useState(false);
   const [historyStatusFilter, setHistoryStatusFilter] = useState<'all' | 'queued' | 'processing' | 'completed' | 'failed'>('all');
+  const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState(true);
+  const [activeProcessingBatchId, setActiveProcessingBatchId] = useState<string | null>(null);
   const isBatchProcessingRef = useRef(false);
   const isBatchPausedRef = useRef(false);
   const isBatchCancelledRef = useRef(false);
@@ -332,6 +400,51 @@ export default function App() {
   useEffect(() => {
     historyRef.current = history;
   }, [history]);
+
+  // Check if any background process is currently active across all tabs
+  const isStudioProcessing = isLoading || isProcessingSpeed;
+  const isAnyProcessRunning = isStudioProcessing || isTranscriberProcessing || isAudiobookProcessing || isBatchProcessing;
+
+  // Protect ongoing background processes from accidental tab close or page reload
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isAnyProcessRunning) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isAnyProcessRunning]);
+
+  // Notify user when background Studio audio generation finishes while viewing another tab
+  const prevStudioLoading = useRef(isLoading);
+  useEffect(() => {
+    if (prevStudioLoading.current && !isLoading && result && activeTab !== 'generate') {
+      showToast(
+        language === 'mm' 
+          ? '🎙️ Studio အသံဖိုင် ထုတ်ယူမှု ပြီးဆုံးပါပြီ။ "Studio" tab တွင် နားဆင်/ဒေါင်းလုဒ် ပြုလုပ်နိုင်ပါပြီ!' 
+          : '🎙️ Voiceover audio generation completed! Return to Studio tab to play/download.',
+        'success'
+      );
+    }
+    prevStudioLoading.current = isLoading;
+  }, [isLoading, result, activeTab, language, showToast]);
+
+  // Notify user when background Video transcription finishes while viewing another tab
+  const prevTranscriberProcessing = useRef(isTranscriberProcessing);
+  useEffect(() => {
+    if (prevTranscriberProcessing.current && !isTranscriberProcessing && activeTab !== 'transcriber') {
+      showToast(
+        language === 'mm' 
+          ? '🎬 ဗီဒီယို စာတန်းထိုး/ဘာသာပြန် အောင်မြင်စွာ ပြီးဆုံးပါပြီ။ "Recap Video" tab တွင် ကြည့်ရှုနိုင်ပါပြီ!' 
+          : '🎬 Video transcription/translation completed! Return to Recap Video tab to view.',
+        'success'
+      );
+    }
+    prevTranscriberProcessing.current = isTranscriberProcessing;
+  }, [isTranscriberProcessing, activeTab, language, showToast]);
+
   // Auth & Access State (Custom)
   const [accessCodeInput, setAccessCodeInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
@@ -414,7 +527,7 @@ export default function App() {
     });
   };
 
-  // Handle Anonymous Auth
+  // Handle Auth State
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
@@ -431,12 +544,16 @@ export default function App() {
           setIsSessionSynced(true);
         }
       } else {
+        // Attempt anonymous sign-in if enabled in Firebase; if restricted (auth/admin-restricted-operation),
+        // fallback gracefully without error so access-code / local credentials continue seamlessly.
         signInAnonymously(auth).then((result) => {
-          if (result.user) {
+          if (result?.user) {
             setIsAuthReady(true);
           }
         }).catch((err) => {
-          console.error("Failed to sign in anonymously (Silent Auth Fallback):", err);
+          // Anonymous authentication is restricted in this Firebase project (admin-restricted-operation)
+          console.log("[VBS Auth] Anonymous sign-in not available, operating in access-code mode:", err?.code || err?.message);
+          setIsAuthReady(true);
         });
       }
     });
@@ -465,21 +582,24 @@ export default function App() {
   useEffect(() => {
     // We allow session sync for both real users AND anonymous users who have granted access
     // This is because the "Access Code" is the primary login method in this app
-    if (isAccessGranted && isAuthReady && auth.currentUser && accessCode) {
+    const code = accessCode || localStorage.getItem('vbs_access_code') || '';
+    const isOwner = code === 'saw_vlogs_2026';
+
+    if ((isAccessGranted || isOwner) && isAuthReady && code) {
       setIsSessionSynced(true);
 
       const syncSession = async () => {
-        const authUserId = getCurrentUserId();
+        const authUserId = getCurrentUserId() || code;
         if (!authUserId) return;
 
         try {
           await setDoc(doc(db, 'sessions', authUserId), {
-            accessCode: accessCode,
+            accessCode: code,
             createdAt: serverTimestamp()
           });
-          console.log('[VBS] Session synced in background for:', accessCode);
+          console.log('[VBS] Session synced in background for:', code);
         } catch (e) {
-          console.warn('[VBS] Background session sync failed:', e);
+          console.warn('[VBS] Background session sync warning:', e);
         }
       };
       syncSession();
@@ -509,15 +629,15 @@ export default function App() {
           setProfile(data);
           
           // Sync API Key from Firestore to Channel Manager
-          if (data.api_key_stored) {
+          if (data.api_key_stored && isPlausibleApiKey(data.api_key_stored)) {
             apiChannelManager.setUserChannel(data.api_key_stored);
-          }
-          
-          // Sync API Key from Firestore to LocalStorage if missing locally
-          if (data.api_key_stored && !localStorage.getItem('VLOGS_BY_SAW_API_KEY')) {
             const trimmedKey = data.api_key_stored.trim();
             localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
             setLocalApiKey(trimmedKey);
+          } else {
+            apiChannelManager.clearUserChannel();
+            localStorage.removeItem('VLOGS_BY_SAW_API_KEY');
+            setLocalApiKey(null);
           }
         } else if (code === 'saw_vlogs_2026') {
           // Master Admin Fallback
@@ -542,6 +662,27 @@ export default function App() {
       });
     }
   }, [isAuthReady, isSessionSynced]);
+
+  // With server-side login on, a stored "granted" flag alone is not a session: it needs the Firebase token from the server.
+  useEffect(() => {
+    if (!isAuthReady) return;
+    let cancelled = false;
+    (async () => {
+      const st = await getServerAuthStatus();
+      if (!st.configured || cancelled) return;
+      const flagged = isAccessGranted || localStorage.getItem('vbs_access_granted') === 'true';
+      if (flagged && !(await hasServerSession()) && !cancelled) {
+        localStorage.removeItem('vbs_access_granted');
+        localStorage.removeItem('vbs_access_code');
+        localStorage.removeItem('vbs_admin_auth');
+        setIsAccessGranted(false);
+        setAccessCode(null);
+        setProfile(null);
+        setIsStepTwo(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isAuthReady, isAccessGranted]);
 
   // Initialize API Channel Sync
   useEffect(() => {
@@ -742,11 +883,86 @@ export default function App() {
       }
     };
     
-    // Only seed if we are not authenticated
+    // Only seed if we are not authenticated, and never once the server-side login is in charge
     if (!isAccessGranted) {
-      seedDefaultAdmin();
+      getServerAuthStatus().then(st => { if (!st.configured) seedDefaultAdmin(); });
     }
   }, [isAccessGranted]);
+
+  const [registerMode, setRegisterMode] = useState(false);
+  const [regId, setRegId] = useState('');
+  const [regPass, setRegPass] = useState('');
+  const [regNote, setRegNote] = useState('');
+  const [regDone, setRegDone] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false);
+
+  const hashPassword = async (id: string, pass: string) => {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${id}:${pass}`));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  };
+
+  /** Self sign-up: creates a pending account; it can only be used after the admin activates it. */
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const id = regId.trim();
+    if (!/^[A-Za-z0-9_-]{3,32}$/.test(id)) {
+      setError(language === 'mm' ? 'User ID က စာလုံး/ဂဏန်း/_/- ၃ လုံးမှ ၃၂ လုံးအထိ ဖြစ်ရပါမယ်' : 'User ID must be 3-32 letters, digits, _ or -');
+      return;
+    }
+    if (regPass.length < 6) {
+      setError(language === 'mm' ? 'Password အနည်းဆုံး ၆ လုံး ရှိရပါမယ်' : 'Password must be at least 6 characters');
+      return;
+    }
+    setIsRegistering(true);
+    setError(null);
+    try {
+      if ((await getServerAuthStatus()).configured) {
+        const r = await serverRegister(id, regPass, regNote);
+        if (!r.ok) {
+          const mm = language === 'mm';
+          const m: Record<string, string> = {
+            id_taken: mm ? 'ဒီ User ID ကို သုံးပြီးသားပါ၊ တခြားတစ်ခု ရွေးပါ' : 'That User ID is already taken',
+            invalid_id: mm ? 'ဒီ User ID ကို သုံးလို့မရပါ' : 'That User ID cannot be used',
+            weak_password: mm ? 'Password အနည်းဆုံး ၆ လုံး ရှိရပါမယ်' : 'Password must be at least 6 characters',
+            too_many_attempts: mm ? 'အကြိမ်များလွန်းပါတယ်၊ ခဏနေမှ ထပ်ကြိုးစားပါ' : 'Too many attempts, try again later',
+          };
+          setError(m[r.error || ''] || (mm ? 'စာရင်းသွင်းမရပါ' : 'Sign-up failed'));
+          return;
+        }
+        setRegDone(true);
+        return;
+      }
+      const existing = await getDocFromServer(doc(db, 'user_controls', id));
+      if (existing.exists()) {
+        setError(language === 'mm' ? 'ဒီ User ID ကို သုံးပြီးသားပါ၊ တခြားတစ်ခု ရွေးပါ' : 'That User ID is already taken');
+        return;
+      }
+      await setDoc(doc(db, 'user_controls', id), {
+        vbsId: id,
+        dailyUsage: 0,
+        credits: 0,
+        lastUsedDate: new Date().toDateString(),
+        isUnlimited: false,
+        membershipStatus: 'standard',
+        isBlocked: false,
+        expiryDate: null,
+        role: 'user',
+        note: regNote.trim().slice(0, 200),
+        passwordHash: await hashPassword(id, regPass),
+        password: null,
+        isActive: false,
+        status: 'pending',
+        selfRegistered: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setRegDone(true);
+    } catch (err) {
+      setError(`${language === 'mm' ? 'စာရင်းသွင်းမရပါ' : 'Sign-up failed'}: ${(err as { message?: string }).message || ''}`);
+    } finally {
+      setIsRegistering(false);
+    }
+  };
 
   const handleLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -757,7 +973,51 @@ export default function App() {
       return;
     }
 
-    // [COMMANDER BYPASS - URGENT]
+    // Server-side login (when the Firebase service account is set up on Vercel): every account, the admin included,
+    // is checked with its password on the server. The old direct flow below is only the fallback.
+    const serverStatus = await getServerAuthStatus();
+    if (serverStatus.configured) {
+      if (!isStepTwo) {
+        setIsStepTwo(true);
+        setError(null);
+        return;
+      }
+      setIsVerifyingCode(true);
+      setError(null);
+      try {
+        const r = await serverLogin(code, passwordInput);
+        if (!r.ok) {
+          setError(loginErrorText((r as { error: string }).error, language === 'mm'));
+          return;
+        }
+        const data = (r as { profile: VBSUserControl }).profile;
+        setIsAccessGranted(true);
+        setAccessCode(code);
+        setVbsId(code);
+        localStorage.setItem('VBS_USER_ID', code);
+        localStorage.setItem('vbs_access_granted', 'true');
+        localStorage.setItem('vbs_access_code', code);
+        setProfile(data);
+        if (data.api_key_stored && isPlausibleApiKey(data.api_key_stored)) {
+          const trimmedKey = data.api_key_stored.trim();
+          localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
+          setLocalApiKey(trimmedKey);
+          apiChannelManager.setUserChannel(trimmedKey);
+        } else {
+          localStorage.removeItem('VLOGS_BY_SAW_API_KEY');
+          setLocalApiKey(null);
+          apiChannelManager.clearUserChannel();
+        }
+        logActivity(code, 'login', 'User logged into the platform');
+        setToast({ message: data.role === 'admin' ? 'Welcome back, Commander!' : 'Welcome back!', type: 'success' });
+        setTimeout(() => setToast(null), 3000);
+      } finally {
+        setIsVerifyingCode(false);
+      }
+      return;
+    }
+
+    // [COMMANDER BYPASS - legacy mode only, used until the server-side login is set up]
     if (code === 'saw_vlogs_2026') {
       setIsAccessGranted(true);
       setAccessCode(code);
@@ -802,6 +1062,11 @@ export default function App() {
 
       const codeData = codeDoc.data() as VBSUserControl;
       
+      // Self-registered accounts keep only a hash of the password
+      if (codeData.passwordHash && codeData.passwordHash !== await hashPassword(code, passwordInput)) {
+        setError(t('auth.invalidPassword'));
+        return;
+      }
       // Check password if it exists in DB
       if (codeData.password && codeData.password.trim() !== '' && codeData.password !== passwordInput.trim()) {
         console.warn('Invalid password for access code');
@@ -820,6 +1085,10 @@ export default function App() {
       }
 
       // Requirement 3: If document exists AND isActive is true, grant access immediately
+      if (!codeData.isActive && codeData.status === 'pending') {
+        setError(language === 'mm' ? 'သင့်အကောင့်ကို Admin က အတည်ပြုဖို့ စောင့်နေဆဲပါ။ အတည်ပြုပြီးရင် ဝင်လို့ရပါမယ်။' : 'Your account is waiting for the admin to activate it. You can sign in once it is approved.');
+        return;
+      }
       if (!codeData.isActive) {
         console.warn('Access Code is inactive');
         setError(t('auth.deactivated'));
@@ -837,10 +1106,15 @@ export default function App() {
       setProfile(codeData);
       
       // Sync API Key from Firestore to LocalStorage if present
-      if (codeData.api_key_stored) {
+      if (codeData.api_key_stored && isPlausibleApiKey(codeData.api_key_stored)) {
         const trimmedKey = codeData.api_key_stored.trim();
         localStorage.setItem('VLOGS_BY_SAW_API_KEY', trimmedKey);
         setLocalApiKey(trimmedKey);
+        apiChannelManager.setUserChannel(trimmedKey);
+      } else {
+        localStorage.removeItem('VLOGS_BY_SAW_API_KEY');
+        setLocalApiKey(null);
+        apiChannelManager.clearUserChannel();
       }
       
       // Log successful login
@@ -862,6 +1136,39 @@ export default function App() {
       setError(`Verification failed: ${msg}`);
     } finally {
       setIsVerifyingCode(false);
+    }
+  };
+
+  // Google Play / App Store requirement: users must be able to delete their account and data in-app.
+  const handleDeleteAccount = async () => {
+    const code = accessCode || localStorage.getItem('vbs_access_code') || '';
+    if (!code) return;
+    if (code === 'saw_vlogs_2026') {
+      alert('Owner account cannot be deleted from the app.');
+      return;
+    }
+    const ok = window.confirm(
+      language === 'mm'
+        ? 'သင့်အကောင့်နှင့် သိမ်းထားသော data (history) အားလုံးကို အပြီးအပိုင် ဖျက်မည်။ ပြန်မရနိုင်ပါ။ ဆက်လုပ်မလား?'
+        : 'This permanently deletes your account and saved data (history). This cannot be undone. Continue?'
+    );
+    if (!ok) return;
+    try {
+      const snap = await getDocs(query(collection(db, 'history'), where('userId', '==', code)));
+      await Promise.all(snap.docs.map(d => deleteDoc(d.ref)));
+      const ids = Array.from(new Set([code, getCurrentUserId() || code]));
+      await Promise.all(ids.flatMap(id => [
+        deleteDoc(doc(db, 'sessions', id)).catch(() => {}),
+        deleteDoc(doc(db, 'user_controls', id)).catch(() => {}),
+        deleteDoc(doc(db, 'users', id)).catch(() => {}),
+      ]));
+      try { await auth.currentUser?.delete(); } catch { /* anonymous/recent-login errors are non-fatal */ }
+      localStorage.clear();
+      await handleLogout();
+      alert(language === 'mm' ? 'အကောင့်ကို ဖျက်ပြီးပါပြီ။' : 'Your account has been deleted.');
+    } catch (e) {
+      console.error('[VBS] delete account failed', e);
+      alert(language === 'mm' ? 'ဖျက်မရပါ။ နောက်မှ ပြန်ကြိုးစားပါ။' : 'Could not delete the account. Please try again later.');
     }
   };
 
@@ -906,6 +1213,48 @@ export default function App() {
     );
   }, [history, historySearch, historyStatusFilter]);
 
+  // Active batch item currently being processed
+  const currentProcessingItem = useMemo(() => {
+    if (activeProcessingBatchId) {
+      const found = history.find(i => i.id === activeProcessingBatchId);
+      if (found) return found;
+    }
+    return history.find(i => i.status === 'processing') || null;
+  }, [history, activeProcessingBatchId]);
+
+  // Center viewport on a specific history item
+  const centerOnHistoryItem = useCallback((itemId: string, smooth = true) => {
+    const el = document.getElementById(`history-item-${itemId}`);
+    if (el) {
+      const prefersReducedMotion = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      el.scrollIntoView({
+        behavior: smooth && !prefersReducedMotion ? 'smooth' : 'auto',
+        block: 'center',
+        inline: 'nearest'
+      });
+      return true;
+    }
+    return false;
+  }, []);
+
+  // Auto-scroll effect: centers viewport on the currently processing batch item
+  useEffect(() => {
+    if (!isAutoScrollEnabled || activeTab !== 'history' || !currentProcessingItem) {
+      return;
+    }
+
+    // If currently filtered to completed/failed, switch to 'all' so the processing item is visible in DOM
+    if (historyStatusFilter === 'completed' || historyStatusFilter === 'failed') {
+      setHistoryStatusFilter('all');
+    }
+
+    const timer = setTimeout(() => {
+      centerOnHistoryItem(currentProcessingItem.id, true);
+    }, 120);
+
+    return () => clearTimeout(timer);
+  }, [currentProcessingItem?.id, activeTab, isAutoScrollEnabled, historyStatusFilter, centerOnHistoryItem]);
+
   const handleGenerate = async () => {
     if (!text.trim()) {
       setError('Please enter some text to generate voiceover.');
@@ -914,7 +1263,13 @@ export default function App() {
 
     const effectiveKey = getEffectiveApiKey();
     if (!effectiveKey) {
-      setIsApiKeyModalOpen(true);
+      openModal({
+        title: t('common.error'),
+        message: t('generate.noApiKey'),
+        type: 'error',
+        confirmText: language === 'mm' ? 'ပြင်ဆင်ချက်သို့ သွားမည်' : 'Go to Settings',
+        onConfirm: () => setActiveTab('tools')
+      });
       setError(t('generate.noApiKey'));
       return;
     }
@@ -1010,7 +1365,7 @@ export default function App() {
           duration: finalDuration,
           baseDuration: finalDuration, 
           subtitles: generateOptimizedSubtitles(text, finalDuration),
-          srtContent: generateOptimizedSubtitles(text, finalDuration).map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join(''),
+          srtContent: generateSRT(generateOptimizedSubtitles(text, finalDuration)),
           speed: config.speed,
           pitch: config.pitch,
           volume: config.volume,
@@ -1168,15 +1523,7 @@ export default function App() {
       content = await response.text();
     }
     
-    // Ensure Windows line endings (CRLF) and pure text/plain without BOM
-    const sanitizedContent = content.replace(/\r?\n/g, '\r\n');
-    const blob = new Blob([sanitizedContent], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename.toLowerCase(); // Ensure lowercase .srt
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadSrtFile(content, filename);
   };
 
   const updateHistoryItem = useCallback((id: string, updates: Partial<HistoryItem>) => {
@@ -1268,7 +1615,7 @@ export default function App() {
     const finalBase64 = await base64Promise;
 
     const subtitles = generateOptimizedSubtitles(item.text, finalDuration);
-    const srtContent = subtitles.map(s => `${s.index}\r\n${s.startTime} --> ${s.endTime}\r\n${s.text}\r\n\r\n`).join('');
+    const srtContent = generateSRT(subtitles);
 
     let audioStorageUrl: string | undefined = undefined;
     let srtStorageUrl: string | undefined = undefined;
@@ -1323,6 +1670,7 @@ export default function App() {
           break;
         }
 
+        setActiveProcessingBatchId(nextItem.id);
         updateHistoryItem(nextItem.id, { status: 'processing', error: undefined });
 
         const effectiveKey = getEffectiveApiKey();
@@ -1372,10 +1720,23 @@ export default function App() {
     } finally {
       isBatchProcessingRef.current = false;
       setIsBatchProcessing(false);
+      setActiveProcessingBatchId(null);
     }
   }, [getEffectiveApiKey, updateHistoryItem, executeSingleTTSItem, accessCode, isAccessGranted, isAuthReady, globalSettings.total_generations]);
 
   const handleQueueBatch = useCallback(async (itemsText: string[], batchConfig: TTSConfig) => {
+    const effectiveKey = getEffectiveApiKey();
+    if (!effectiveKey) {
+      openModal({
+        title: t('common.error'),
+        message: t('generate.noApiKey'),
+        type: 'error',
+        confirmText: language === 'mm' ? 'ပြင်ဆင်ချက်သို့ သွားမည်' : 'Go to Settings',
+        onConfirm: () => setActiveTab('tools')
+      });
+      return;
+    }
+
     const currentBatchId = `batch_${Date.now()}`;
     const newItems: HistoryItem[] = [];
 
@@ -1426,6 +1787,8 @@ export default function App() {
     }
 
     showToast(`Added ${newItems.length} items to batch queue!`, 'success');
+    setHistoryStatusFilter('all');
+    setIsAutoScrollEnabled(true);
     setActiveTab('history');
 
     isBatchCancelledRef.current = false;
@@ -1446,6 +1809,7 @@ export default function App() {
   }, [updateHistoryItem, startBatchQueue]);
 
   const handleCancelQueuedItem = useCallback((id: string) => {
+    setActiveProcessingBatchId(prev => (prev === id ? null : prev));
     setHistory(prev => prev.filter(i => i.id !== id));
     if (isAccessGranted && isAuthReady && auth.currentUser && !auth.currentUser.isAnonymous) {
       deleteDoc(doc(db, 'history', id)).catch(() => {});
@@ -1468,6 +1832,7 @@ export default function App() {
 
   const handleCancelAllQueued = useCallback(() => {
     isBatchCancelledRef.current = true;
+    setActiveProcessingBatchId(null);
     setHistory(prev => prev.filter(i => i.status !== 'queued'));
     showToast('Cancelled remaining queued items', 'info');
   }, [showToast]);
@@ -1617,7 +1982,6 @@ export default function App() {
   }, [userControl?.expiryDate, isVbsAdmin]);
 
   const isPremium = isVbsAdmin || (userControl?.membershipStatus === 'premium' && !isExpired);
-  const canUseThumbnail = isPremium;
 
   useEffect(() => {
     if (isExpired && userControl?.isUnlimited) {
@@ -1639,7 +2003,34 @@ export default function App() {
     }
   }, [isLoading, result, activeTab]);
 
-  const NavTab = ({ icon, label, tooltip, onClick, active, locked = false, badge }: {
+  const handleTabSwitch = useCallback((targetTab: Tab) => {
+    if (targetTab === 'video-editor') {
+      setActiveTab('transcriber');
+      setSubtitlesSubTab('transcriber');
+      return;
+    }
+
+    if (targetTab === activeTab) return;
+
+    const currentTabHasProcess = 
+      (activeTab === 'generate' && isStudioProcessing) ||
+      (activeTab === 'transcriber' && isTranscriberProcessing) ||
+      (activeTab === 'thumbnail' && isAudiobookProcessing) ||
+      (activeTab === 'history' && isBatchProcessing);
+
+    if (currentTabHasProcess) {
+      showToast(
+        language === 'mm' 
+          ? 'လုပ်ဆောင်ဆဲ လုပ်ငန်းစဉ်ကို မပျက်စေဘဲ နောက်ကွယ်တွင် ဆက်လက်လုပ်ဆောင်နေပါသည် ✨' 
+          : 'Process continues running safely in background ✨',
+        'info'
+      );
+    }
+
+    setActiveTab(targetTab);
+  }, [activeTab, isStudioProcessing, isTranscriberProcessing, isAudiobookProcessing, isBatchProcessing, language, showToast]);
+
+  const NavTab = ({ icon, label, tooltip, onClick, active, locked = false, badge, isProcessing = false }: {
     id: Tab;
     icon: React.ReactNode;
     label: string;
@@ -1648,32 +2039,48 @@ export default function App() {
     active: boolean;
     locked?: boolean;
     badge?: string;
+    isProcessing?: boolean;
   }) => {
     const [isHovered, setIsHovered] = useState(false);
     
     return (
-      <div className="relative">
+      <div className="relative lg:w-full">
         <button
           onClick={onClick}
           onMouseEnter={() => setIsHovered(true)}
           onMouseLeave={() => setIsHovered(false)}
-          className={`px-3 sm:px-6 py-2.5 sm:py-3 rounded-lg sm:rounded-xl text-[10px] sm:text-sm font-bold transition-all flex items-center justify-center gap-2 relative group flex-1 sm:flex-initial ${
+          className={`px-3 sm:px-6 py-2.5 sm:py-3 lg:w-full lg:justify-start lg:px-4 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-1.5 sm:gap-2 relative group shrink-0 ${
             active 
               ? 'bg-amber-400 text-black shadow-lg shadow-amber-400/20 scale-[1.02] z-10' 
-              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              : isProcessing
+                ? 'text-amber-300 bg-amber-400/10 border border-amber-400/30'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
           }`}
         >
-          <div className={`${active ? 'scale-110' : 'group-hover:scale-110 transition-transform'}`}>
+          <div className={`relative ${active ? 'scale-110' : 'group-hover:scale-110 transition-transform'}`}>
             {locked && !active ? <Lock size={14} className="text-slate-600" /> : icon}
+            {isProcessing && !active && (
+              <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+              </span>
+            )}
           </div>
-          <span className="hidden md:inline tracking-tight whitespace-nowrap">
+          <span className="inline tracking-tight whitespace-nowrap text-[11px] sm:text-xs md:text-sm">
             {label}
           </span>
-          {badge && (
+          {isProcessing ? (
+            <span className={`text-[8px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-1 ${
+              active ? 'bg-black/20 text-black' : 'bg-amber-400/20 text-amber-300 border border-amber-400/30 animate-pulse'
+            }`}>
+              <RefreshCw size={8} className="animate-spin shrink-0" />
+              <span>{language === 'mm' ? 'လည်ပတ်ဆဲ' : 'Active'}</span>
+            </span>
+          ) : badge ? (
             <span className="absolute -top-1 -right-1 bg-brand-purple text-white text-[8px] px-1.5 py-0.5 rounded-full font-bold scale-90 sm:scale-100 shadow-md">
               {badge}
             </span>
-          )}
+          ) : null}
           
           {active && (
             <div className="absolute inset-0 bg-brand-purple/20 blur-lg rounded-xl -z-10" />
@@ -1686,11 +2093,16 @@ export default function App() {
               initial={{ opacity: 0, y: 10, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 10, scale: 0.95 }}
-              className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl border border-white/20 bg-white/10 backdrop-blur-md dark:bg-black/20 text-[10px] font-bold text-slate-800 dark:text-white whitespace-nowrap shadow-2xl z-50 pointer-events-none"
+              className="lg:hidden absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl border border-white/20 bg-white/10 backdrop-blur-md dark:bg-black/20 text-[10px] font-bold text-slate-800 dark:text-white whitespace-nowrap shadow-2xl z-50 pointer-events-none"
             >
               <div className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-brand-purple animate-pulse" />
+                <div className={`w-1.5 h-1.5 rounded-full ${isProcessing ? 'bg-amber-400 animate-ping' : 'bg-brand-purple animate-pulse'}`} />
                 {tooltip}
+                {isProcessing && (
+                  <span className="text-amber-400 ml-1">
+                    ({language === 'mm' ? 'နောက်ကွယ်တွင် ဆက်လက်လည်ပတ်နေဆဲ' : 'Running in background'})
+                  </span>
+                )}
               </div>
               <div className="absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent border-t-white/10" />
             </motion.div>
@@ -1705,7 +2117,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white selection:bg-amber-400/30 transition-colors duration-500 relative overflow-hidden font-sans">
+    <div className="min-h-screen bg-black text-white selection:bg-amber-400/30 transition-colors duration-500 relative overflow-x-clip font-sans">
       {/* Premium Background Elements */}
       <div className="fixed inset-0 -z-10 bg-black overflow-hidden pointer-events-none">
         <div className="noise-overlay absolute inset-0 mix-blend-overlay" />
@@ -1773,7 +2185,7 @@ export default function App() {
           <AnnouncementPanel announcements={globalSettings.announcements} />
         )}
 
-        <main className="flex-1 container mx-auto px-4 sm:px-6 py-6 sm:py-8 overflow-x-hidden">
+        <main className="flex-1 w-full max-w-[1760px] mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 overflow-x-clip">
           {isConfigLoading ? (
           <div className="flex flex-col items-center justify-center py-40">
             <div className="flex items-center justify-center gap-1.5 h-12 mb-6">
@@ -1849,7 +2261,7 @@ export default function App() {
             </p>
           </div>
           
-          <form onSubmit={handleLogin} className="space-y-5">
+          <form onSubmit={handleLogin} className={registerMode ? 'hidden' : 'space-y-5'}>
             <div className="relative">
               <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
               <input
@@ -1897,7 +2309,7 @@ export default function App() {
               whileTap={{ scale: 0.98 }}
               type="submit"
               disabled={isVerifyingCode || !accessCodeInput.trim() || !isAuthReady}
-              className="w-full py-4 bg-amber-400 text-black rounded-[20px] font-bold text-lg hover:bg-amber-500 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-amber-400/30 metallic-btn"
+              className="w-full py-4 bg-amber-400 text-black rounded-[20px] font-bold text-lg hover:bg-amber-500 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-amber-400/30"
             >
               {isVerifyingCode || !isAuthReady ? (
                 <div className="flex items-center gap-2">
@@ -1912,19 +2324,107 @@ export default function App() {
               )}
             </motion.button>
               </form>
+          {registerMode ? (
+            regDone ? (
+              <div className="space-y-4 text-center">
+                <p className="text-emerald-400 text-sm font-medium leading-relaxed">
+                  {language === 'mm' ? 'စာရင်းသွင်းပြီးပါပြီ ✅ Admin က အတည်ပြု (activate) လုပ်ပေးပြီးမှ ဝင်လို့ရပါမယ်။ အတည်ပြုပြီးရင် သင့် User ID နဲ့ Password နဲ့ ဝင်ပါ။' : 'Signed up ✅ You can sign in once the admin activates your account, using your User ID and password.'}
+                </p>
+                <button type="button" onClick={() => { setRegisterMode(false); setRegDone(false); setAccessCodeInput(regId.trim()); setRegPass(''); }} className="text-amber-400 text-sm font-bold underline">
+                  {language === 'mm' ? 'ဝင်ရောက်ရန် စာမျက်နှာသို့' : 'Back to sign in'}
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleRegister} className="space-y-4 text-left">
+                <input value={regId} onChange={e => setRegId(e.target.value)} placeholder={language === 'mm' ? 'User ID ရွေးပါ (ဥပမာ mgmg_01)' : 'Choose a User ID (e.g. mgmg_01)'} autoCapitalize="none" className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] px-5 py-4 text-base font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/30" />
+                <input type="password" value={regPass} onChange={e => setRegPass(e.target.value)} placeholder={language === 'mm' ? 'Password (၆ လုံးအထက်)' : 'Password (6+ characters)'} className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] px-5 py-4 text-base font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/30" />
+                <input value={regNote} onChange={e => setRegNote(e.target.value)} placeholder={language === 'mm' ? 'နာမည် / Telegram (Admin သိနိုင်ဖို့)' : 'Your name / Telegram (so the admin knows you)'} className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-[20px] px-5 py-4 text-base text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-purple/30" />
+                {error && <div className="text-red-500 text-sm font-medium flex items-center justify-center gap-2"><AlertCircle size={16} /> {error}</div>}
+                <button type="submit" disabled={isRegistering || !isAuthReady} className="w-full py-4 bg-amber-400 text-black rounded-[20px] font-bold text-lg disabled:opacity-50">
+                  {isRegistering ? '…' : (language === 'mm' ? 'အကောင့်ဖွင့်မည်' : 'Create account')}
+                </button>
+              </form>
+            )
+          ) : null}
+          <button type="button" onClick={() => { setRegisterMode(m => !m); setRegDone(false); setError(null); }} className="text-sm font-bold text-amber-400 underline">
+            {registerMode
+              ? (language === 'mm' ? 'အကောင့်ရှိပြီးသား — ဝင်ရန်' : 'I already have an account')
+              : (language === 'mm' ? 'အကောင့်အသစ် ဖွင့်ရန်' : 'Create a new account')}
+          </button>
             </div>
           </div>
-        ) : (
-          <div className="space-y-8">
-            {/* Tab Navigation */}
-            <div className="flex items-center gap-1 sm:gap-2 bg-white/5 backdrop-blur-xl border border-white/10 p-1 rounded-xl sm:rounded-2xl w-full sm:w-fit mx-auto shadow-2xl relative z-40 mb-8 sm:mb-10 overflow-x-auto no-scrollbar">
+        ) : null}
+
+        {/* Main app stays mounted (just hidden) while the admin page is open, so a running Auto Recap is not lost */}
+        {!isConfigLoading && !isPrivacyRoute && !isTermsRoute && isAccessGranted && (
+          <div className={(isAdminRoute || isAdminConfigRoute) ? 'hidden' : ''}>
+          <div className="space-y-8 lg:space-y-0 lg:flex lg:items-start lg:gap-8">
+            {/* Desktop sidebar */}
+            <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:shrink-0 lg:sticky lg:top-24 gap-3">
+              <div className="rounded-3xl border border-white/10 bg-gradient-to-b from-slate-900/80 to-black/80 p-3 shadow-2xl shadow-black/40">
+                <div className="px-3 pt-2 pb-3 text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">{language === 'mm' ? 'လုပ်ငန်းခွင်' : 'Workspace'}</div>
+                {([
+                  { key: 'studio', icon: <Mic2 size={18} />, title: t('nav.studio'), sub: language === 'mm' ? 'စာမှ အသံ' : 'Text to speech', active: activeTab === 'generate', busy: isStudioProcessing, locked: false,
+                    go: () => handleTabSwitch('generate') },
+                  { key: 'srt', icon: <FileText size={18} />, title: language === 'mm' ? 'စကားပြော → SRT' : 'Speech → SRT', sub: language === 'mm' ? 'အသံမှ စာတန်း' : 'Subtitles from audio', active: activeTab === 'transcriber' && subtitlesSubTab === 'transcriber', busy: isTranscriberProcessing, locked: !isPremium,
+                    go: () => { if (!isPremium) { showToast(t('video.premiumRequired'), 'error'); return; } setSubtitlesSubTab('transcriber'); handleTabSwitch('transcriber'); } },
+                  { key: 'recap', icon: <Clapperboard size={18} />, title: 'Auto Recap', sub: language === 'mm' ? 'ဗီဒီယို Recap အလိုအလျောက်' : 'Video recap, automated', active: activeTab === 'transcriber' && subtitlesSubTab === 'auto-recap', busy: isVideoEditorProcessing, locked: !isPremium,
+                    go: () => { if (!isPremium) { showToast(t('video.premiumRequired'), 'error'); return; } setSubtitlesSubTab('auto-recap'); handleTabSwitch('transcriber'); } },
+                  { key: 'movie-recap', icon: <BookOpen size={18} />, title: 'Movie Recap', sub: language === 'mm' ? 'Recap စာသား ရေးပေးမည်' : 'Recap script writer', active: activeTab === 'movie-recap', busy: false, locked: false,
+                    go: () => handleTabSwitch('movie-recap') },
+                ]).map(it => (
+                  <button
+                    key={it.key}
+                    type="button"
+                    onClick={it.go}
+                    className={`relative w-full flex items-center gap-3 px-2.5 py-2.5 mb-1 rounded-2xl text-left transition-all border ${it.active ? 'bg-amber-400/10 border-amber-400/30' : 'border-transparent hover:bg-white/5'}`}
+                  >
+                    {it.active && <span className="absolute left-0 top-3 bottom-3 w-1 rounded-r-full bg-amber-400" />}
+                    <span className={`w-10 h-10 rounded-xl grid place-items-center shrink-0 transition ${it.active ? 'bg-amber-400 text-black shadow-lg shadow-amber-400/30' : 'bg-white/5 text-slate-300'}`}>
+                      {it.locked && !it.active ? <Lock size={15} className="text-slate-500" /> : it.icon}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className={`block text-[13.5px] font-bold leading-tight truncate ${it.active ? 'text-white' : 'text-slate-200'}`}>{it.title}</span>
+                      <span className="block text-[11px] text-slate-500 truncate mt-0.5">{it.sub}</span>
+                    </span>
+                    {it.busy && <span className="relative flex h-2.5 w-2.5 shrink-0"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" /><span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" /></span>}
+                  </button>
+                ))}
+                <div className="my-2 mx-3 h-px bg-white/10" />
+                <button
+                  type="button"
+                  onClick={() => handleTabSwitch('tools')}
+                  className={`relative w-full flex items-center gap-3 px-2.5 py-2.5 rounded-2xl text-left transition-all border ${activeTab === 'tools' ? 'bg-amber-400/10 border-amber-400/30' : 'border-transparent hover:bg-white/5'}`}
+                >
+                  {activeTab === 'tools' && <span className="absolute left-0 top-3 bottom-3 w-1 rounded-r-full bg-amber-400" />}
+                  <span className={`w-10 h-10 rounded-xl grid place-items-center shrink-0 ${activeTab === 'tools' ? 'bg-amber-400 text-black shadow-lg shadow-amber-400/30' : 'bg-white/5 text-slate-300'}`}><Settings size={18} /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className={`block text-[13.5px] font-bold leading-tight ${activeTab === 'tools' ? 'text-white' : 'text-slate-200'}`}>{t('nav.settings')}</span>
+                    <span className="block text-[11px] text-slate-500 truncate mt-0.5">{language === 'mm' ? 'အကောင့်၊ Credits၊ API' : 'Account, credits, API'}</span>
+                  </span>
+                </button>
+              </div>
+              {userControl && (
+                <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4 flex items-center justify-between">
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Credits</div>
+                    <div className={`mt-1 text-2xl font-extrabold font-mono ${(userControl.credits || 0) > 0 || isVbsAdmin ? 'text-amber-400' : 'text-rose-500'}`}>{isVbsAdmin ? '∞' : (userControl.credits || 0)}</div>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-amber-400/10 border border-amber-400/20 grid place-items-center"><Sparkles size={18} className="text-amber-400" /></div>
+                </div>
+              )}
+            </aside>
+
+            {/* Tab Navigation: top bar on phones/tablets, a side bar on desktop */}
+            <div className="flex items-center gap-1 sm:gap-2 bg-white/5 backdrop-blur-xl border border-white/10 p-1 rounded-xl sm:rounded-2xl w-full sm:w-fit mx-auto shadow-2xl relative z-40 mb-8 sm:mb-10 overflow-x-auto no-scrollbar lg:hidden">
               <NavTab
                 id="generate"
                 active={activeTab === 'generate'}
-                onClick={() => setActiveTab('generate')}
+                onClick={() => handleTabSwitch('generate')}
                 icon={<Mic2 size={18} />}
                 label={t('nav.studio')}
                 tooltip={t('tooltips.generate')}
+                isProcessing={isStudioProcessing}
               />
               <NavTab
                 id="transcriber"
@@ -1934,64 +2434,42 @@ export default function App() {
                     showToast(t('video.premiumRequired'), "error");
                     return;
                   }
-                  setActiveTab('transcriber');
+                  handleTabSwitch('transcriber');
                 }}
                 icon={<FileVideo size={18} />}
                 label={t('nav.transcriber')}
                 tooltip={isPremium ? t('tooltips.premiumActive') : t('tooltips.transcriber')}
                 locked={!isPremium}
+                isProcessing={isTranscriberProcessing || isVideoEditorProcessing}
               />
               <NavTab
-                id="thumbnail"
-                active={activeTab === 'thumbnail'}
-                onClick={() => {
-                  if (!canUseThumbnail) {
-                    showToast(isPremium ? t('thumbnailFeature.temporarilyDisabled') : t('thumbnailFeature.premiumRequired'), "error");
-                    return;
-                  }
-                  setActiveTab('thumbnail');
-                }}
-                icon={<ImageIcon size={18} />}
-                label={t('nav.thumbnail') || 'သမ်းနေးလ်'}
-                tooltip={canUseThumbnail ? t('tooltips.thumbnail') : t('thumbnailFeature.locked')}
-                locked={!canUseThumbnail}
-              />
-              <NavTab
-                id="video-studio"
-                active={activeTab === 'video-studio'}
-                onClick={() => setActiveTab('video-studio')}
-                icon={<Video size={18} />}
-                label="Video Studio"
-                tooltip="AI-Powered Video Enhancement (Coming Soon)"
-                badge="SOON"
-              />
-              <NavTab
-                id="history"
-                active={activeTab === 'history'}
-                onClick={() => setActiveTab('history')}
-                icon={<History size={18} />}
-                label={t('nav.history')}
-                tooltip={t('tooltips.history')}
+                id="movie-recap"
+                active={activeTab === 'movie-recap'}
+                onClick={() => handleTabSwitch('movie-recap')}
+                icon={<BookOpen size={18} />}
+                label="Movie Recap"
+                tooltip="Movie Recap"
               />
               <NavTab
                 id="tools"
                 active={activeTab === 'tools'}
-                onClick={() => setActiveTab('tools')}
+                onClick={() => handleTabSwitch('tools')}
                 icon={<Settings size={18} />}
                 label={t('nav.settings')}
                 tooltip={t('tooltips.settings')}
               />
             </div>
 
-            <AnimatePresence mode="wait">
-              {activeTab === 'generate' && (
-                <motion.div
-                  key="generate"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="grid grid-cols-1 lg:grid-cols-12 gap-8"
-                >
+            {/* Persistent Tab Panels Viewport: Never unmount tabs to ensure all background processes, inputs, and state are preserved */}
+            <div className="tab-panels-viewport relative lg:flex-1 lg:min-w-0">
+              {/* Tab 1: Studio / Generation */}
+              <div 
+                id="tab-panel-generate"
+                role="tabpanel"
+                aria-hidden={activeTab !== 'generate'}
+                className={activeTab === 'generate' ? 'block' : 'hidden'}
+              >
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                     {/* Left Column - Main Flow */}
                   <div className="lg:col-span-7 space-y-8">
                     <ContentInput 
@@ -1999,6 +2477,7 @@ export default function App() {
                       setText={setText} 
                       getApiKey={getEffectiveApiKey}
                       showToast={showToast}
+                      openModal={openModal}
                       engineStatus={engineStatus}
                       retryCountdown={retryCountdown}
                       speed={config.speed}
@@ -2007,6 +2486,7 @@ export default function App() {
                       userControl={userControl}
                       isSharedKey={apiKeyStatus.isShared}
                       rewriteCost={globalSettings.rewrite_cost}
+                      onNavigateToSettings={() => setActiveTab('tools')}
                     />
                     
 
@@ -2019,87 +2499,46 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* Right Column - Config */}
-                  <div className="lg:col-span-5 space-y-8">
+                  {/* Right Column - Studio Tool Suite Grid */}
+                  <div className="lg:col-span-5 space-y-6 lg:sticky lg:top-24 lg:self-start lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:pr-1 [scrollbar-width:thin]">
                     <VoiceConfig 
                       config={config} 
                       setConfig={setConfig} 
                       isAdmin={isAdminUser}
                       baseDuration={result?.oneXDuration}
+                      saveToHistory={saveToHistory}
+                      setSaveToHistory={setSaveToHistory}
+                      onOpenBatchQueue={() => setIsBatchModalOpen(true)}
+                      customRules={customRules}
+                      setCustomRules={(val) => {
+                        setCustomRules(val);
+                        setCustomPronunciation(val);
+                      }}
                     />
 
                     <div className="space-y-4">
-                      <div className="flex items-center justify-between bg-white/50 backdrop-blur dark:bg-slate-900/50 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors duration-300">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 bg-brand-purple/10 rounded-lg text-brand-purple">
-                            <History size={18} />
-                          </div>
-                          <div>
-                            <p className="text-sm font-bold text-slate-900 dark:text-white">{t('generate.saveToHistory')}</p>
-                            <p className="text-[10px] text-slate-500 dark:text-slate-400">{t('generate.saveToHistoryDesc')}</p>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setSaveToHistory(!saveToHistory)}
-                          className={`w-12 h-6 rounded-full transition-all relative ${saveToHistory ? 'bg-brand-purple' : 'bg-slate-300 dark:bg-slate-700'}`}
-                        >
-                          <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${saveToHistory ? 'left-7' : 'left-1'}`} />
-                        </button>
-                      </div>
-
-                      {/* Batch Queue Trigger Button */}
-                      <button
-                        type="button"
-                        onClick={() => setIsBatchModalOpen(true)}
-                        className="w-full p-4 rounded-2xl bg-brand-purple/10 border border-brand-purple/25 hover:border-brand-purple/50 hover:bg-brand-purple/15 transition-all flex items-center justify-between group shadow-sm text-left"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="p-2.5 bg-brand-purple/20 text-brand-purple rounded-xl group-hover:scale-110 transition-transform">
-                            <Layers size={18} />
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-bold text-slate-900 dark:text-white">
-                                {t('history.batchQueue')}
-                              </span>
-                              <span className="text-[9px] px-2 py-0.5 rounded-full bg-brand-purple text-white font-bold tracking-wider uppercase">
-                                Multi-Input
-                              </span>
-                            </div>
-                            <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
-                              Upload .txt/.csv/.json or paste multiple text inputs
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-1 text-xs font-bold text-brand-purple group-hover:translate-x-1 transition-transform">
-                          <span>Open</span>
-                          <ArrowRight size={14} />
-                        </div>
-                      </button>
-
                       {config.speed > 1.5 && (
-                          <motion.div 
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="mb-6 p-4 rounded-2xl bg-brand-purple/10 border border-brand-purple/20 text-brand-purple shadow-xl shadow-brand-purple/5"
-                          >
-                            <div className="flex gap-3">
-                              <Info size={18} className="shrink-0 mt-0.5 text-brand-purple" />
-                              <div className="text-[11px] leading-relaxed space-y-1">
-                                <p className="font-bold">အမြန်နှုန်း အရမ်းမြန်ရင် အသံအရည်အသွေး အနည်းငယ် ပြောင်းလဲနိုင်ပါတယ်။</p>
-                                <p className="opacity-80">အကောင်းဆုံး အသံထွက်အတွက် 1.2x မှ 1.5x အတွင်းသာ ထားရှိရန် အကြံပြုပါတယ်။</p>
-                                <button 
-                                  onClick={() => setConfig(prev => ({ ...prev, speed: 1.2 }))}
-                                  className="mt-2 flex items-center gap-1.5 px-3 py-1 bg-brand-purple text-white rounded-full font-bold uppercase text-[9px] tracking-wider hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/30"
-                                >
-                                  <Sparkles size={10} />
-                                  Optimize to 1.2x
-                                </button>
-                              </div>
+                        <motion.div 
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className="p-4 rounded-2xl bg-amber-400/10 border border-amber-400/25 text-amber-300 shadow-xl shadow-amber-500/5"
+                        >
+                          <div className="flex gap-3">
+                            <Info size={18} className="shrink-0 mt-0.5 text-amber-400" />
+                            <div className="text-[11.5px] leading-relaxed space-y-1">
+                              <p className="font-bold">{language === 'mm' ? 'အမြန်နှုန်း အရမ်းမြန်ရင် အသံအရည်အသွေး အနည်းငယ် ပြောင်းလဲနိုင်ပါတယ်။' : 'High speeds may alter voice quality slightly.'}</p>
+                              <p className="opacity-80">{language === 'mm' ? 'အကောင်းဆုံး အသံထွက်အတွက် 1.2x မှ 1.5x အတွင်းသာ ထားရှိရန် အကြံပြုပါတယ်။' : 'Recommended speed range: 1.2x to 1.5x for natural pacing.'}</p>
+                              <button 
+                                onClick={() => setConfig(prev => ({ ...prev, speed: 1.2 }))}
+                                className="mt-2 flex items-center gap-1.5 px-3 py-1 bg-amber-400 text-black rounded-full font-bold uppercase text-[9px] tracking-wider hover:bg-amber-300 transition-all shadow-lg shadow-amber-400/20"
+                              >
+                                <Sparkles size={10} />
+                                Optimize to 1.2x
+                              </button>
                             </div>
-                          </motion.div>
-                        )}
+                          </div>
+                        </motion.div>
+                      )}
 
                       <button
                         onClick={isLoading || isProcessingSpeed ? () => abortController?.abort() : handleGenerate}
@@ -2159,9 +2598,9 @@ export default function App() {
                         )}
                       </button>
                       <div className="flex flex-col items-center">
-                          <span className="flex items-baseline gap-3">
-                            {"အသံနှင့် စာတန်းထိုး ထုတ်ယူမည်"}
-                            <span className="text-sm font-medium opacity-60">
+                          <span className="flex items-baseline gap-3 text-slate-500 dark:text-slate-400 text-xs font-semibold">
+                            {language === 'mm' ? "အသံနှင့် စာတန်းထိုး ထုတ်ယူမည်" : "Generate Audio & Subtitles"}
+                            <span className="text-xs font-medium opacity-75">
                               ({Math.ceil(text.length / 3000) || 1} {Math.ceil(text.length / 3000) > 1 ? 'chunks' : 'chunk'})
                             </span>
                           </span>
@@ -2171,7 +2610,7 @@ export default function App() {
 
                   {/* Full Width Output Preview */}
                   <AnimatePresence>
-                    {(isLoading || error || (result && activeTab === 'generate')) && (
+                    {(isLoading || error || result) && (
                       <motion.div
                         initial={{ opacity: 0, y: 40, scale: 0.98 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -2179,7 +2618,7 @@ export default function App() {
                         transition={{ 
                           type: "spring", 
                           stiffness: 100, 
-                          damping: 20,
+                          damping: 20, 
                           duration: 0.6 
                         }}
                         id="output-preview-container"
@@ -2198,18 +2637,18 @@ export default function App() {
                       </motion.div>
                     )}
                   </AnimatePresence>
-                </motion.div>
-              )}
+                </div>
+              </div>
 
-              {activeTab === 'transcriber' && (
-                <motion.div
-                  key="transcriber"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="max-w-4xl mx-auto"
-                >
-                  {!isPremium ? (
+              {/* Tab 2: AI Subtitles & Video Studio (Transcriber & Video Editor) */}
+              <div
+                id="tab-panel-transcriber"
+                role="tabpanel"
+                aria-hidden={activeTab !== 'transcriber'}
+                className={activeTab === 'transcriber' ? 'block' : 'hidden'}
+              >
+                {!isPremium ? (
+                  <div className="max-w-4xl mx-auto">
                     <div className="glass-card rounded-[32px] p-12 text-center space-y-6 max-w-2xl mx-auto border border-white/5">
                       <div className="w-20 h-20 bg-rose-500/10 text-rose-500 rounded-3xl flex items-center justify-center mx-auto mb-4 border border-rose-500/20">
                         <Lock size={40} />
@@ -2217,77 +2656,99 @@ export default function App() {
                       <h3 className="text-2xl font-bold text-slate-900 dark:text-white">
                         {isExpired ? "သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ" : "ဤသည်မှာ Premium Feature ဖြစ်ပါသည်။"}
                       </h3>
-                        <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
-                          {isExpired 
-                            ? "သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ။ အသုံးပြုလိုပါက Admin ထံ ဆက်သွယ်၍ သက်တမ်းတိုးပါ။" 
-                            : "အသုံးပြုလိုပါက Admin ထံသို့ ခွင့်ပြုချက်တောင်းခံပါ။"
-                          }
-                        </p>
+                      <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
+                        {isExpired 
+                          ? "သင့်အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ။ အသုံးပြုလိုပါက Admin ထံ ဆက်သွယ်၍ သက်တမ်းတိုးပါ။" 
+                          : "အသုံးပြုလိုပါက Admin ထံသို့ ခွင့်ပြုချက်တောင်းခံပါ။"
+                        }
+                      </p>
                       <div className="pt-4">
                         <button 
-                          onClick={() => setActiveTab('tools')}
+                          onClick={() => handleTabSwitch('tools')}
                           className="px-8 py-3 bg-brand-purple text-white rounded-xl font-bold hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/20"
                         >
                           Admin ကို ဆက်သွယ်ရန်
                         </button>
                       </div>
                     </div>
-                  ) : (
-                    <VideoTranscriber 
-                      onTranscriptionComplete={(transcribedText) => {
-                        setText(transcribedText);
-                        setActiveTab('generate');
-                        setTimeout(() => {
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {/* Sub-Tabs under AI Subtitles: Speech → SRT | Auto Recap */}
+                    <div className="flex lg:hidden items-center justify-center gap-2 max-w-2xl mx-auto bg-black/50 p-1.5 rounded-2xl border border-white/10 backdrop-blur-xl shadow-2xl">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSubtitlesSubTab('transcriber');
                           window.scrollTo({ top: 0, behavior: 'smooth' });
-                        }, 100);
-                      }}
-                      getApiKey={getEffectiveApiKey}
-                      showToast={showToast}
-                      isAdmin={isVbsAdmin}
-                      userControl={userControl}
-                      isSharedKey={apiKeyStatus.isShared}
-                      allowVideoRecapAdminKey={globalSettings.allow_video_recap_admin_key}
-                      recapCost={globalSettings.recap_cost}
-                    />
-                  )}
-                </motion.div>
-              )}
+                        }}
+                        className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                          subtitlesSubTab === 'transcriber'
+                            ? 'bg-amber-400 text-black shadow-lg shadow-amber-400/20 scale-[1.02]'
+                            : 'text-slate-400 hover:text-white hover:bg-white/5'
+                        }`}
+                      >
+                        <FileText size={16} />
+                        <span>{language === 'mm' ? 'စကားပြော → SRT စာသား' : 'Speech → SRT'}</span>
+                      </button>
 
-              {activeTab === 'thumbnail' && (
-                <motion.div
-                  key="thumbnail"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                >
-                   <ThumbnailCreator 
-                     showToast={showToast}
-                     getApiKey={getEffectiveApiKey}
-                     isAdmin={isVbsAdmin}
-                     isPremium={isPremium}
-                   />
-                </motion.div>
-              )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSubtitlesSubTab('auto-recap');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                          subtitlesSubTab === 'auto-recap'
+                            ? 'bg-amber-400 text-black shadow-lg shadow-amber-400/20 scale-[1.02]'
+                            : 'text-slate-400 hover:text-white hover:bg-white/5'
+                        }`}
+                      >
+                        <Clapperboard size={16} />
+                        <span>Auto Recap</span>
+                      </button>
+                    </div>
 
-              {activeTab === 'video-studio' && (
-                <motion.div
-                  key="video-studio"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                >
-                  <VideoStudio isAdmin={isVbsAdmin} />
-                </motion.div>
-              )}
+                    {/* Content View: Keep both mounted to preserve transcription state and media buffers */}
+                    <div className={subtitlesSubTab === 'transcriber' ? 'block max-w-4xl mx-auto lg:mx-0' : 'hidden'}>
+                      <VideoTranscriber 
+                        onTranscriptionComplete={(transcribedText) => {
+                          setText(transcribedText);
+                          handleTabSwitch('generate');
+                          setTimeout(() => {
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }, 100);
+                        }}
+                        getApiKey={getEffectiveApiKey}
+                        showToast={showToast}
+                        openModal={openModal}
+                        isAdmin={isVbsAdmin}
+                        userControl={userControl}
+                        onNavigateToSettings={() => handleTabSwitch('tools')}
+                        onProcessingStateChange={setIsTranscriberProcessing}
+                      />
+                    </div>
 
-              {activeTab === 'history' && (
-                <motion.div
-                  key="history"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="max-w-6xl mx-auto space-y-8"
-                >
+                    <div className={subtitlesSubTab === 'auto-recap' ? 'block w-full' : 'hidden'}>
+                      <AutoRecapStudio
+                        showToast={showToast}
+                        isAdmin={isVbsAdmin}
+                        isMm={language === 'mm'}
+                        onNavigateToSettings={() => handleTabSwitch('tools')}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Tab 4: History / Batch Queue */}
+              <div
+                id="tab-panel-history"
+                role="tabpanel"
+                aria-hidden={activeTab !== 'history'}
+                className={activeTab === 'history' ? 'block' : 'hidden'}
+              >
+                <div className="max-w-6xl mx-auto space-y-8">
                   <div className="glass-card rounded-[32px] p-8 sm:p-10 shadow-2xl transition-all duration-300">
                     <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 mb-8">
                       <div>
@@ -2402,7 +2863,44 @@ export default function App() {
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            {/* Auto-Scroll Toggle Button */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextVal = !isAutoScrollEnabled;
+                                setIsAutoScrollEnabled(nextVal);
+                                if (nextVal && currentProcessingItem) {
+                                  centerOnHistoryItem(currentProcessingItem.id, true);
+                                }
+                              }}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${
+                                isAutoScrollEnabled
+                                  ? 'bg-brand-purple/20 text-brand-purple border-brand-purple/40 hover:bg-brand-purple/30 shadow-sm'
+                                  : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10 hover:text-slate-200'
+                              }`}
+                              title={isAutoScrollEnabled ? t('history.autoScrollOn') : t('history.autoScrollOff')}
+                            >
+                              <Crosshair size={13} className={isAutoScrollEnabled && isBatchProcessing ? 'animate-pulse text-brand-purple' : ''} />
+                              <span>{isAutoScrollEnabled ? t('history.autoScrollOn') : t('history.autoScrollOff')}</span>
+                            </button>
+
+                            {/* Focus Current Active Item */}
+                            {currentProcessingItem && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setHistoryStatusFilter('all');
+                                  centerOnHistoryItem(currentProcessingItem.id, true);
+                                }}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30 text-xs font-bold transition-all shadow-sm active:scale-95 animate-pulse"
+                                title={t('history.focusActive')}
+                              >
+                                <Crosshair size={13} />
+                                <span>{t('history.focusActive')}</span>
+                              </button>
+                            )}
+
                             {batchStats.hasActiveQueue && (
                               <button
                                 type="button"
@@ -2486,9 +2984,11 @@ export default function App() {
                           return (
                             <div 
                               key={item.id} 
-                              className={`group bg-white/40 dark:bg-slate-900/40 border rounded-[24px] p-6 sm:p-8 transition-all hover:shadow-xl hover:-translate-y-1 ${
+                              id={`history-item-${item.id}`}
+                              data-batch-processing={isProcessingItem ? 'true' : 'false'}
+                              className={`group bg-white/40 dark:bg-slate-900/40 border rounded-[24px] p-6 sm:p-8 transition-all hover:shadow-xl hover:-translate-y-1 relative ${
                                 isProcessingItem 
-                                  ? 'border-brand-purple shadow-lg shadow-brand-purple/10 bg-brand-purple/5'
+                                  ? 'border-brand-purple shadow-2xl shadow-brand-purple/20 bg-brand-purple/10 ring-2 ring-brand-purple/60 ring-offset-2 ring-offset-slate-900 dark:ring-offset-black'
                                   : isFailedItem
                                   ? 'border-rose-500/40 bg-rose-500/5'
                                   : isQueuedItem
@@ -2501,10 +3001,18 @@ export default function App() {
                                   <div className="flex flex-wrap items-center gap-3">
                                     {/* Status Badge */}
                                     {isProcessingItem && (
-                                      <span className="flex items-center gap-1.5 px-3 py-1 bg-brand-purple/20 text-brand-purple border border-brand-purple/40 rounded-full text-[10px] font-bold uppercase tracking-wider animate-pulse">
-                                        <RefreshCw size={11} className="animate-spin" />
-                                        {t('history.statusProcessing')}
-                                      </span>
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="flex items-center gap-1.5 px-3 py-1 bg-brand-purple/20 text-brand-purple border border-brand-purple/40 rounded-full text-[10px] font-bold uppercase tracking-wider animate-pulse shadow-sm shadow-brand-purple/20">
+                                          <RefreshCw size={11} className="animate-spin" />
+                                          {t('history.statusProcessing')}
+                                        </span>
+                                        {isAutoScrollEnabled && (
+                                          <span className="flex items-center gap-1 px-2.5 py-0.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-bold uppercase tracking-wider">
+                                            <Crosshair size={10} className="text-emerald-400" />
+                                            {t('history.autoCenteredBadge')}
+                                          </span>
+                                        )}
+                                      </div>
                                     )}
                                     {isQueuedItem && (
                                       <span className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-full text-[10px] font-bold uppercase tracking-wider">
@@ -2629,9 +3137,20 @@ export default function App() {
                                   )}
 
                                   {isProcessingItem && (
-                                    <div className="flex items-center gap-1.5 px-4 py-2 bg-brand-purple/15 text-brand-purple rounded-xl border border-brand-purple/30">
-                                      <RefreshCw size={14} className="animate-spin" />
-                                      <span className="text-xs font-bold">Rendering...</span>
+                                    <div className="flex items-center gap-2">
+                                      <button 
+                                        type="button"
+                                        onClick={() => centerOnHistoryItem(item.id, true)}
+                                        className="flex items-center gap-1.5 px-3 py-2 bg-brand-purple/20 hover:bg-brand-purple text-brand-purple hover:text-white rounded-xl text-xs font-bold transition-all border border-brand-purple/30 shadow-sm active:scale-95"
+                                        title={t('history.focusActive')}
+                                      >
+                                        <Crosshair size={13} />
+                                        <span className="hidden sm:inline">{t('history.focusActive')}</span>
+                                      </button>
+                                      <div className="flex items-center gap-1.5 px-4 py-2 bg-brand-purple/15 text-brand-purple rounded-xl border border-brand-purple/30">
+                                        <RefreshCw size={14} className="animate-spin" />
+                                        <span className="text-xs font-bold">Rendering...</span>
+                                      </div>
                                     </div>
                                   )}
 
@@ -2650,17 +3169,86 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                </motion.div>
-              )}
+                </div>
 
-              {activeTab === 'tools' && (
-                <motion.div
-                  key="tools"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="max-w-5xl mx-auto space-y-8"
-                >
+                {/* Floating Real-Time Batch Focus Pill */}
+                {activeTab === 'history' && currentProcessingItem && (
+                  <aside
+                    aria-label="Active batch item status"
+                    className="fixed bottom-6 right-6 z-40 max-w-sm sm:max-w-md bg-slate-900/95 dark:bg-black/95 backdrop-blur-xl border border-brand-purple/40 rounded-2xl p-3 sm:p-4 shadow-2xl shadow-brand-purple/30 text-white flex items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom-4 duration-300"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="relative shrink-0">
+                        <div className="w-3.5 h-3.5 rounded-full bg-brand-purple animate-ping" />
+                        <div className="absolute inset-0 w-3.5 h-3.5 rounded-full bg-brand-purple" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-bold uppercase tracking-wider text-brand-purple flex items-center gap-1.5">
+                          <RefreshCw size={11} className="animate-spin" />
+                          <span>{t('history.statusProcessing')}</span>
+                          {isAutoScrollEnabled && (
+                            <span className="text-[10px] text-emerald-400 font-semibold lowercase">
+                              ({t('history.autoCenteredBadge')})
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-300 font-medium truncate max-w-[170px] sm:max-w-[220px]">
+                          {currentProcessingItem.text}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHistoryStatusFilter('all');
+                          centerOnHistoryItem(currentProcessingItem.id, true);
+                        }}
+                        className="px-3 py-1.5 bg-brand-purple hover:bg-brand-purple/90 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 flex items-center gap-1.5"
+                      >
+                        <Crosshair size={12} />
+                        <span>{t('history.focusActive')}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsAutoScrollEnabled(prev => !prev)}
+                        className={`p-1.5 rounded-xl border text-xs font-bold transition-all ${
+                          isAutoScrollEnabled
+                            ? 'bg-brand-purple/20 border-brand-purple/40 text-brand-purple hover:bg-brand-purple/30'
+                            : 'bg-white/5 border-white/10 text-slate-400 hover:text-white'
+                        }`}
+                        title={isAutoScrollEnabled ? t('history.autoScrollOn') : t('history.autoScrollOff')}
+                      >
+                        <Crosshair size={14} className={isAutoScrollEnabled ? 'text-brand-purple' : 'text-slate-500'} />
+                      </button>
+                    </div>
+                  </aside>
+                )}
+              </div>
+
+              {/* Movie Recap: open to every user, kept mounted so a running job survives tab switches */}
+              <div
+                id="tab-panel-movie-recap"
+                role="tabpanel"
+                aria-hidden={activeTab !== 'movie-recap'}
+                className={activeTab === 'movie-recap' ? 'block' : 'hidden'}
+              >
+                <MovieRecapStudio
+                  showToast={showToast}
+                  isAdmin={isVbsAdmin}
+                  isMm={language === 'mm'}
+                  onNavigateToSettings={() => handleTabSwitch('tools')}
+                />
+              </div>
+
+              {/* Tab 5: Settings / Tools (Kept alive in background) */}
+              <div
+                id="tab-panel-tools"
+                role="tabpanel"
+                aria-hidden={activeTab !== 'tools'}
+                className={activeTab === 'tools' ? 'block' : 'hidden'}
+              >
+                <div className="max-w-5xl mx-auto space-y-8">
                   {/* Profile Card */}
                   <div className="glass-card rounded-[32px] p-8 sm:p-12 shadow-2xl transition-all duration-300 relative overflow-hidden">
                     <div className="absolute top-0 right-0 w-32 h-32 bg-brand-purple/5 blur-[50px] -z-10" />
@@ -2702,6 +3290,12 @@ export default function App() {
                             className="px-8 py-4 bg-rose-500/10 text-rose-500 border border-rose-500/20 rounded-[16px] font-bold text-sm hover:bg-rose-500 hover:text-white transition-all flex items-center justify-center gap-3 shadow-sm"
                           >
                             <LogOut size={18} /> Sign Out
+                          </button>
+                          <button
+                            onClick={handleDeleteAccount}
+                            className="px-8 py-4 bg-transparent text-slate-400 border border-slate-500/30 rounded-[16px] font-bold text-sm hover:text-rose-500 hover:border-rose-500/40 transition-all flex items-center justify-center gap-3"
+                          >
+                            {language === 'mm' ? 'အကောင့်နှင့် data ဖျက်မည်' : 'Delete Account & Data'}
                           </button>
                         </div>
                       </div>
@@ -2877,9 +3471,109 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+
+                  <ExtraGeminiKeys isMm={language === 'mm'} showToast={showToast} />
+
+                  {/* AssemblyAI API Key Section (SRT & Subtitles) */}
+                  <div className="glass-card rounded-[24px] p-6 sm:p-8 shadow-2xl transition-all duration-300">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-amber-400/10 rounded-xl flex items-center justify-center text-amber-400">
+                          <Zap size={20} />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">AssemblyAI API Key</h3>
+                            <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-400/20 text-amber-400 px-2 py-0.5 rounded-md">
+                              SRT Subtitles
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">
+                            {language === 'mm' ? 'Recap Video အတွက် အချိန်ကိုက် SRT စာတန်းထိုးထုတ်ယူရန် Key (Google API Key ကို ဘာသာပြန်ရန် အသုံးပြုသည်)' : 'Used in Recap Video tab for time-synced .SRT subtitles. Google API is used for Myanmar translation.'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {assemblyApiKeyInput.trim() ? (
+                          <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full text-xs font-bold">
+                            <CheckCircle2 size={12} />
+                            <span>CONNECTED</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-full text-xs font-bold">
+                            <AlertCircle size={12} />
+                            <span>NOT SET</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                      <div className="relative flex-1">
+                        <input
+                          type={showAssemblyKey ? 'text' : 'password'}
+                          value={assemblyApiKeyInput}
+                          onChange={(e) => setAssemblyApiKeyInput(e.target.value)}
+                          placeholder="Enter your AssemblyAI API Key (e.g. 7b34f8...)"
+                          className="w-full bg-slate-50/50 dark:bg-slate-950/50 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 font-mono focus:outline-none focus:ring-2 focus:ring-amber-400/40 pr-10"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowAssemblyKey(!showAssemblyKey)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition-colors"
+                        >
+                          {showAssemblyKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          assemblyAiService.setStoredApiKey(assemblyApiKeyInput.trim());
+                          setIsAssemblyKeySaved(true);
+                          showToast(language === 'mm' ? 'AssemblyAI Key သိမ်းဆည်းပြီးပါပြီ ✨' : 'AssemblyAI API Key saved!', 'success');
+                          setTimeout(() => setIsAssemblyKeySaved(false), 2000);
+                        }}
+                        className="px-6 py-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-black font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shrink-0 shadow-md shadow-amber-400/20 active:scale-95"
+                      >
+                        {isAssemblyKeySaved ? <Check size={16} /> : <Key size={14} />}
+                        <span>{isAssemblyKeySaved ? 'SAVED' : 'SAVE KEY'}</span>
+                      </button>
+
+                      {assemblyApiKeyInput.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAssemblyApiKeyInput('');
+                            assemblyAiService.setStoredApiKey('');
+                            showToast(language === 'mm' ? 'AssemblyAI Key ဖျက်လိုက်ပါပြီ' : 'Cleared AssemblyAI API Key', 'success');
+                          }}
+                          className="px-3 py-3 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-bold transition-colors"
+                          title="Clear Key"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 pt-3">
+                      <span>{language === 'mm' ? 'အခမဲ့ API Key ရယူရန်' : 'Need a free key?'}</span>
+                      <a
+                        href="https://www.assemblyai.com/dashboard/signup"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 transition-colors"
+                      >
+                        <span>assemblyai.com (100 Hours Free)</span>
+                        <ExternalLink size={11} />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
           </div>
         )}
       </main>
@@ -2911,15 +3605,18 @@ export default function App() {
             className={`fixed bottom-8 left-1/2 -translate-x-1/2 px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 z-50 border backdrop-blur-xl ${
               toast.type === 'success' 
                 ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400' 
+                : toast.type === 'info'
+                ? 'bg-amber-500/20 border-amber-500/30 text-amber-300'
                 : 'bg-red-500/20 border-red-500/30 text-red-400'
             }`}
           >
-            {toast.type === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
+            {toast.type === 'success' ? <CheckCircle2 size={18} /> : toast.type === 'info' ? <Info size={18} /> : <AlertCircle size={18} />}
             <span className="text-sm font-bold">{toast.message}</span>
           </motion.div>
         )}
       </AnimatePresence>
 
+      <ActivityPill mm={language === 'mm'} />
       <Modal
         isOpen={modal.isOpen}
         onClose={() => setModal({ ...modal, isOpen: false })}

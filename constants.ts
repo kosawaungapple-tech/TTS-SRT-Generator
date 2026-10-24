@@ -33,7 +33,9 @@ export const GEMINI_MODELS = {
   TTS: 'gemini-3.8-flash-lite-tts',
   TTS_STUDIO: 'gemini-3.8-flash-tts',
   VIDEO: 'gemini-3.1-flash-lite',
-  TRANSCRIBE: 'gemini-3.5-transcribe'
+  SCRIPT: 'gemini-3.8-flash',
+  TRANSCRIBE: 'gemini-3.5-transcribe',
+  LIVE: 'gemini-2.0-flash-exp'
 };
 
 export const ELEVENLABS_VOICES = [

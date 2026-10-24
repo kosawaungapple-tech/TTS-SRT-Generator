@@ -1,3 +1,5 @@
+import React from 'react';
+
 export interface VBSUserControl {
   vbsId: string;
   dailyUsage: number;
@@ -17,12 +19,16 @@ export interface VBSUserControl {
   note?: string;
   password?: string;
   credits?: number;
-  videosGeneratedToday?: number;
-  dailyVideoLimit?: number;
-  lastVideoDate?: string;
   admin_override_active?: boolean;
   api_key_stored?: string;
   allowAdminKey?: boolean;
+  /** Admin allows this user to render recap videos on the shared render server / admin PC. */
+  renderEnabled?: boolean;
+  /** 'pending' = signed up by the user, waiting for the admin to activate. */
+  status?: 'pending' | 'active';
+  selfRegistered?: boolean;
+  /** SHA-256 of `${vbsId}:${password}` for self-registered users (the password itself is never stored). */
+  passwordHash?: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   createdAt?: any;
 }
@@ -42,6 +48,15 @@ export interface Announcement {
   scrollSpeed?: 'slow' | 'normal' | 'fast';
 }
 
+export interface CustomFont {
+  id: string;
+  name: string;
+  family: string;
+  url: string; // URL to the font file or Google Fonts link
+  isGoogleFont?: boolean;
+  createdAt?: unknown;
+}
+
 export interface GlobalSettings {
   global_system_key?: string;
   api_keys?: string[]; // List of rotated API keys
@@ -56,21 +71,17 @@ export interface GlobalSettings {
   allow_elevenlabs?: boolean;
   allow_admin_keys: boolean; // Toggle to allow users to use admin keys
   sharedChannelIds?: string[]; // IDs of admin keys allowed in shared pool
-  allow_video_recap_admin_key?: boolean; // New gate for video recap
   allow_thumbnail_admin_key?: boolean; // New gate for thumbnail
   total_generations: number;
   mock_mode?: boolean;
-  transcription_daily_limit?: number;
-  transcription_public_access?: boolean;
   welcome_credits?: number;
-  recap_cost?: number;
   tts_cost?: number;
   rewrite_cost?: number;
   announcements?: Announcement[];
+  fonts?: CustomFont[];
 }
 
 export interface CreditSettings {
-  videoRecapCost: number;
   ttsGenerationCost: number;
   aiRewriteCost: number;
   newPremiumWelcomeCredits: number;
@@ -110,6 +121,17 @@ export interface HistoryItem {
   localAudioData?: string;
 }
 
+export interface ModalConfig {
+  title: string;
+  message: string | React.ReactNode;
+  type?: 'info' | 'success' | 'error' | 'warning';
+  confirmText?: string;
+  cancelText?: string;
+  onConfirm?: () => void;
+  onCancel?: () => void;
+  showCancel?: boolean;
+}
+
 export interface VoiceOption {
   id: string;
   name: string;
@@ -145,7 +167,7 @@ export interface TTSConfig {
   effects?: Record<string, boolean | number | string>;
   selectedModel?: string;
   customFileName?: string;
-  voiceProfile?: string; // Base64 audio sample for voice style cloning
+  voiceProfile?: string; // Gemini custom voice id (voice_... / voicekey_...) created from the user's own sample
   exportFormat?: 'wav' | 'mp3'; // Audio export format
 }
 

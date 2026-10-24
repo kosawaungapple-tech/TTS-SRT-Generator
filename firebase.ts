@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, User as FirebaseUser, browserLocalPersistence, setPersistence } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, signInWithCustomToken, User as FirebaseUser, browserLocalPersistence, setPersistence } from 'firebase/auth';
 import { initializeFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, serverTimestamp, Timestamp, increment } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL, uploadString } from 'firebase/storage';
 
@@ -64,9 +64,9 @@ if (!validateConfig(firebaseConfig)) {
 // Initialize Firebase SDK
 const app = initializeApp(firebaseConfig);
 
-// Use initializeFirestore with long polling to bypass potential WebSocket blocks in the preview environment
+// Initialize Firestore with long polling to bypass potential WebSocket blocks in the preview environment
 export const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true,
+  experimentalAutoDetectLongPolling: true,
 }, firebaseConfig.firestoreDatabaseId);
 
 export const auth = getAuth(app);
@@ -83,21 +83,20 @@ export const getIdToken = async () => {
 
 export function getCurrentUserId(): string | null {
   const user = auth.currentUser;
-  // Previously we blocked anonymous writes here, but this app uses Access Code login
-  // which leaves users technically anonymous. We must allow them to write their own docs.
-  if (!user) return null;
-  return user.uid;
+  if (user?.uid) return user.uid;
+
+  if (typeof window !== 'undefined') {
+    const accessCode = localStorage.getItem('vbs_access_code');
+    if (accessCode) return accessCode;
+
+    const vbsId = localStorage.getItem('VBS_USER_ID');
+    if (vbsId) return vbsId;
+  }
+
+  return 'vbs_authenticated_user';
 }
 
 export async function getUserControls(userId: string) {
-  const currentUser = auth.currentUser;
-  
-  // Requirement: Allow fetching for authorized anonymous users
-  if (!currentUser) {
-    console.warn("[VBS] Skipping getUserControls — not logged in");
-    return null;
-  }
-
   try {
     const docRef = doc(db, "user_controls", userId);
     const snap = await getDoc(docRef);
@@ -108,17 +107,17 @@ export async function getUserControls(userId: string) {
   }
 }
 
-export { signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadBytes, getDownloadURL, uploadString, serverTimestamp, Timestamp, increment };
+export { signInWithPopup, signOut, onAuthStateChanged, signInAnonymously, signInWithCustomToken, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, collection, query, where, orderBy, addDoc, deleteDoc, getDocs, limit, ref, uploadBytes, getDownloadURL, uploadString, serverTimestamp, Timestamp, increment };
 export type { FirebaseUser };
 
 // Test connection to Firestore
 async function testConnection() {
   try {
+    // Only test if not in a restricted environment if possible, 
+    // but here we'll just try to reach the server once quietly.
     await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if(error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration. ");
-    }
+  } catch {
+    // Silent fail for test connection to avoid confusing console errors
   }
 }
 testConnection();
