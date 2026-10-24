@@ -940,6 +940,26 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
 
   const panel = 'rounded-[28px] border border-white/10 bg-gradient-to-b from-slate-900/90 to-black/90 p-5 sm:p-6 shadow-2xl shadow-black/50';
 
+  const voiceControls = (
+    <div className="space-y-5">
+          <div>
+            <Label icon={<Mic size={12} />}>{isMm ? 'AI အသံရှင်' : 'Voice'}</Label>
+            <Select icon={VOICE_OPTIONS.find(v => v.id === voice)?.gender === 'female' ? '👩' : '👨'} value={voice} onChange={setVoice}>
+              {VOICE_OPTIONS.map(v => (
+                <option key={v.id} value={v.id}>{v.name}</option>
+              ))}
+            </Select>
+          </div>
+          <div className="sm:col-span-2 lg:col-span-1">
+            <div className="flex items-center justify-between mb-2">
+              <Label>{isMm ? 'အသံနှုန်း' : 'Voice speed'}</Label>
+              <span className="mb-2 px-2.5 py-0.5 rounded-full bg-amber-400/15 text-amber-300 text-[12px] font-mono font-bold">{speed.toFixed(2)}x</span>
+            </div>
+            <input type="range" min={0.8} max={1.3} step={0.05} value={speed} onChange={e => setSpeed(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
+          </div>
+    </div>
+  );
+
   const settingsBlock = (
     <>
         {/* What kind of video */}
@@ -1092,14 +1112,6 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
               <option value="en">English</option>
             </Select>
           </div>
-          <div>
-            <Label icon={<Mic size={12} />}>{isMm ? 'AI အသံရှင်' : 'Voice'}</Label>
-            <Select icon={VOICE_OPTIONS.find(v => v.id === voice)?.gender === 'female' ? '👩' : '👨'} value={voice} onChange={setVoice}>
-              {VOICE_OPTIONS.map(v => (
-                <option key={v.id} value={v.id}>{v.name}</option>
-              ))}
-            </Select>
-          </div>
           {mode === 'speech' && (
             <div>
               <Label>{isMm ? 'စကားပြော ဘာသာစကား' : 'Spoken language'}</Label>
@@ -1111,13 +1123,6 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
               </Select>
             </div>
           )}
-          <div className="sm:col-span-2 lg:col-span-1">
-            <div className="flex items-center justify-between mb-2">
-              <Label>{isMm ? 'အသံနှုန်း' : 'Voice speed'}</Label>
-              <span className="mb-2 px-2.5 py-0.5 rounded-full bg-amber-400/15 text-amber-300 text-[12px] font-mono font-bold">{speed.toFixed(2)}x</span>
-            </div>
-            <input type="range" min={0.8} max={1.3} step={0.05} value={speed} onChange={e => setSpeed(Number(e.target.value))} className="w-full h-2 rounded-full accent-amber-400" />
-          </div>
         </div>
         <div className="mt-5 rounded-2xl border border-white/10 bg-black/30 p-3.5">
           <label className="flex items-start gap-2.5 cursor-pointer">
@@ -1140,6 +1145,15 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           )}
         </div>
 
+        {!reviewScript && (
+          <details className="mt-4 rounded-2xl border border-white/10 bg-black/30">
+            <summary className="cursor-pointer list-none px-4 py-3 text-[12.5px] font-bold text-slate-200 flex items-center justify-between">
+              <span>🎙 {isMm ? 'အသံသွင်း ဆက်တင် (AI အသံရှင် · အသံနှုန်း)' : 'Voice settings (voice · speed)'}</span>
+              <span className="text-[11px] font-normal text-slate-400">{VOICE_OPTIONS.find(v => v.id === voice)?.voiceName} · {speed.toFixed(2)}x</span>
+            </summary>
+            <div className="px-4 pb-4 pt-1">{voiceControls}</div>
+          </details>
+        )}
         </Group>
     </>
   );
@@ -1252,6 +1266,10 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                   />
                 </div>
               ))}
+            </div>
+            <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-3.5">
+              <div className="text-[12.5px] font-bold text-white mb-3">🎙 {isMm ? 'အသံသွင်း ဆက်တင်' : 'Voice settings'}</div>
+              {voiceControls}
             </div>
             <div className="mt-4 grid grid-cols-3 gap-2">
               <button type="button" onClick={() => { setDraft(null); draftRef.current = null; }} className="h-12 rounded-2xl bg-white/10 text-white text-[12.5px] font-bold">{isMm ? 'ပယ်ဖျက်' : 'Discard'}</button>
