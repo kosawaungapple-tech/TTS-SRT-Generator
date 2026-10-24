@@ -96,6 +96,8 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
   const [timed, setTimed] = useState(true);
   const [fitting, setFitting] = useState<number | 'all' | null>(null);
   const abortRef = useRef(false);
+  const [setTab, setSetTab] = useState<'source' | 'length' | 'lang'>('source');
+  const [outTab, setOutTab] = useState<'script' | 'voice'>('script');
   const [voice, setVoice] = useState(VOICE_OPTIONS.find(v => v.id === 'aoede')?.id || VOICE_OPTIONS[0].id);
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [voiceProg, setVoiceProg] = useState('');
@@ -442,6 +444,18 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
           </div>
         )}
 
+        <div className="mt-5 grid grid-cols-3 gap-1 rounded-2xl border border-white/10 bg-black/40 p-1">
+          {([
+            { id: 'source', icon: '🎬', mm: 'ရင်းမြစ်', en: 'Source' },
+            { id: 'length', icon: '⏱', mm: 'အရှည်', en: 'Length' },
+            { id: 'lang', icon: '🌐', mm: 'ဘာသာစကား', en: 'Language' },
+          ] as const).map(t => (
+            <button key={t.id} type="button" onClick={() => setSetTab(t.id)} className={`rounded-xl py-2.5 flex flex-col items-center gap-0.5 text-[11px] font-bold transition ${setTab === t.id ? 'bg-white text-slate-900' : 'text-slate-300 hover:bg-white/10'}`}>
+              <span className="text-[15px] leading-none">{t.icon}</span>{isMm ? t.mm : t.en}
+            </button>
+          ))}
+        </div>
+        <div className={setTab === 'source' ? '' : 'hidden'}>
         <div className="mt-5">
           <div className="flex items-center gap-1.5 mb-2 text-[11.5px] font-semibold tracking-wide text-slate-400"><Film size={12} />{isMm ? 'ဘာကို Recap လုပ်မလဲ' : 'What are you recapping?'}</div>
           <div className="grid grid-cols-1 gap-2">
@@ -456,6 +470,8 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
           </div>
         </div>
 
+        </div>
+        <div className={setTab === 'length' ? '' : 'hidden'}>
         <div className="mt-5">
           <div className="flex items-center gap-1.5 mb-2 text-[11.5px] font-semibold tracking-wide text-slate-400"><Wand2 size={12} />{isMm ? 'စာသား အရှည်' : 'Script length'}</div>
           <div className="flex flex-wrap gap-1.5">
@@ -468,6 +484,8 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
           </p>
         </div>
 
+        </div>
+        <div className={setTab === 'lang' ? '' : 'hidden'}>
         <div className="mt-5 grid grid-cols-1 gap-3">
           <div>
             <div className="flex items-center gap-1.5 mb-2 text-[11.5px] font-semibold tracking-wide text-slate-400"><Globe2 size={12} />{isMm ? 'Recap ဘာသာစကား' : 'Recap language'}</div>
@@ -489,6 +507,7 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
           )}
         </div>
 
+        </div>
         <button
           type="button"
           onClick={() => void generate()}
@@ -543,6 +562,17 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
               </button>
             </div>
 
+            <div className="mb-4 grid grid-cols-2 gap-1 rounded-2xl border border-white/10 bg-black/40 p-1">
+              {([
+                { id: 'script', icon: '📝', mm: 'စာသား', en: 'Script' },
+                { id: 'voice', icon: '🎙', mm: 'အသံ + SRT', en: 'Voice + SRT' },
+              ] as const).map(t => (
+                <button key={t.id} type="button" onClick={() => setOutTab(t.id)} className={`rounded-xl py-2.5 flex items-center justify-center gap-1.5 text-[12px] font-bold transition ${outTab === t.id ? 'bg-white text-slate-900' : 'text-slate-300 hover:bg-white/10'}`}>
+                  <span>{t.icon}</span>{isMm ? t.mm : t.en}
+                </button>
+              ))}
+            </div>
+            <div className={outTab === 'script' ? '' : 'hidden'}>
             <div className="flex flex-wrap items-center gap-2 mb-4">
               <label className="flex items-center gap-2 text-[12px] text-slate-300 mr-auto cursor-pointer">
                 <input type="checkbox" checked={timed} onChange={e => setTimed(e.target.checked)} className="accent-violet-400 w-4 h-4" />
@@ -552,6 +582,32 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
               <button type="button" onClick={download} className="px-4 py-2.5 rounded-xl bg-emerald-400 text-black text-[12.5px] font-extrabold flex items-center gap-2"><Download size={14} />{isMm ? 'TXT ဒေါင်းမည်' : 'Download TXT'}</button>
             </div>
 
+            <div className="space-y-3">
+              {paras.map((p, i) => {
+                const b = badge(p);
+                const est = estimateNarrationSeconds(p.text, lang);
+                return (
+                  <div key={i} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3.5">
+                    <div className="flex flex-wrap items-center gap-2 mb-2">
+                      <span className="w-6 h-6 rounded-full bg-violet-400/15 border border-violet-400/30 text-violet-300 text-[11px] font-extrabold grid place-items-center">{i + 1}</span>
+                      <span className="text-[11.5px] font-mono text-slate-400">{fmt(p.start)} – {fmt(p.end)}</span>
+                      <span className={`px-2 py-0.5 rounded-full border text-[10.5px] font-bold ${b.cls}`}>{b.label} · {est}s / {Math.round(slotOf(p))}s</span>
+                      <button type="button" onClick={async () => { setFitting(i); await fitOne(i); setFitting(null); }} disabled={fitting !== null} className="ml-auto px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-[11px] font-bold text-slate-200 flex items-center gap-1 disabled:opacity-50">
+                        {fitting === i ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}{isMm ? 'ညှိ' : 'Fit'}
+                      </button>
+                    </div>
+                    <textarea
+                      value={p.text}
+                      onChange={e => { const text = e.target.value; setParas(cur => cur ? cur.map((x, k) => (k === i ? { ...x, text } : x)) : cur); }}
+                      rows={Math.max(3, Math.ceil(p.text.length / 46))}
+                      className="w-full rounded-xl bg-black/50 border border-white/10 p-3 text-[13px] leading-[1.9] text-slate-100 focus:outline-none focus:border-violet-400/60"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+            </div>
+            <div className={outTab === 'voice' ? '' : 'hidden'}>
             <div className="mb-5 rounded-2xl border border-violet-400/25 bg-violet-400/[0.05] p-3.5 sm:p-4 min-w-0">
               <div className="flex items-center gap-2 mb-3 text-[13px] font-extrabold text-white"><Volume2 size={16} className="text-violet-300" />{isMm ? 'အသံနဲ့ SRT ထုတ်ရန်' : 'Voiceover & subtitles'}</div>
               <select value={voice} onChange={e => setVoice(e.target.value)} style={{ colorScheme: 'dark' }} className="w-full min-w-0 rounded-2xl bg-white/[0.06] border border-white/10 px-4 py-3 text-[13px] text-white focus:outline-none focus:border-violet-400/60">
@@ -595,29 +651,6 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
               )}
             </div>
 
-            <div className="space-y-3">
-              {paras.map((p, i) => {
-                const b = badge(p);
-                const est = estimateNarrationSeconds(p.text, lang);
-                return (
-                  <div key={i} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3.5">
-                    <div className="flex flex-wrap items-center gap-2 mb-2">
-                      <span className="w-6 h-6 rounded-full bg-violet-400/15 border border-violet-400/30 text-violet-300 text-[11px] font-extrabold grid place-items-center">{i + 1}</span>
-                      <span className="text-[11.5px] font-mono text-slate-400">{fmt(p.start)} – {fmt(p.end)}</span>
-                      <span className={`px-2 py-0.5 rounded-full border text-[10.5px] font-bold ${b.cls}`}>{b.label} · {est}s / {Math.round(slotOf(p))}s</span>
-                      <button type="button" onClick={async () => { setFitting(i); await fitOne(i); setFitting(null); }} disabled={fitting !== null} className="ml-auto px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-[11px] font-bold text-slate-200 flex items-center gap-1 disabled:opacity-50">
-                        {fitting === i ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}{isMm ? 'ညှိ' : 'Fit'}
-                      </button>
-                    </div>
-                    <textarea
-                      value={p.text}
-                      onChange={e => { const text = e.target.value; setParas(cur => cur ? cur.map((x, k) => (k === i ? { ...x, text } : x)) : cur); }}
-                      rows={Math.max(3, Math.ceil(p.text.length / 46))}
-                      className="w-full rounded-xl bg-black/50 border border-white/10 p-3 text-[13px] leading-[1.9] text-slate-100 focus:outline-none focus:border-violet-400/60"
-                    />
-                  </div>
-                );
-              })}
             </div>
           </>
         )}

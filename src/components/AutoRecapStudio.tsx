@@ -264,6 +264,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [srcRatio, setSrcRatio] = useState(0);
   const [pron, setPron] = useState(getCustomPronunciation());
   const [reviewScript, setReviewScript] = useState(true);
+  const [setupTab, setSetupTab] = useState<'content' | 'lang'>('content');
   const [resTab, setResTab] = useState<'scenes' | 'captions' | 'video' | 'brand' | 'export'>('export');
   const [draft, setDraft] = useState<{ segments: Segment[]; hasVideoTimes: boolean } | null>(null);
   const [blurSubOn, setBlurSubOn] = useState(false);
@@ -964,6 +965,17 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const settingsBlock = (
     <>
         {/* What kind of video */}
+        <div className="mt-4 grid grid-cols-2 gap-1 rounded-2xl border border-white/10 bg-black/40 p-1">
+          {([
+            { id: 'content', icon: '🎞', mm: 'အကြောင်းအရာ', en: 'Content' },
+            { id: 'lang', icon: '🌐', mm: 'ဘာသာစကား · Dub', en: 'Language · Dub' },
+          ] as const).map(t => (
+            <button key={t.id} type="button" onClick={() => setSetupTab(t.id)} className={`rounded-xl py-2.5 flex items-center justify-center gap-1.5 text-[12px] font-bold transition ${setupTab === t.id ? 'bg-white text-slate-900' : 'text-slate-300 hover:bg-white/10'}`}>
+              <span>{t.icon}</span>{isMm ? t.mm : t.en}
+            </button>
+          ))}
+        </div>
+        <div className={setupTab === 'content' ? '' : 'hidden'}>
         <Group n={1} title={isMm ? 'အကြောင်းအရာ' : 'Content'}>
         <div>
           <Label icon={<Layers size={12} />}>{isMm ? 'ဗီဒီယိုအမျိုးအစား' : 'What to make'}</Label>
@@ -1102,8 +1114,10 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         )}
 
         </Group>
+        </div>
 
         {/* Selects */}
+        <div className={setupTab === 'lang' ? '' : 'hidden'}>
         <Group n={2} title={isMm ? 'ဘာသာစကားနဲ့ အသံ' : 'Language & voice'}>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-x-4 gap-y-5">
           <div>
@@ -1156,6 +1170,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           </details>
         )}
         </Group>
+        </div>
     </>
   );
 
@@ -1735,7 +1750,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         </div>
       )}
 
-        <div className="hidden lg:grid lg:grid-cols-2 gap-5 items-start [&>section]:mt-0">{settingsBlock}</div>
+        <div className="hidden lg:block">{settingsBlock}</div>
       </div>
     </div>
   );
