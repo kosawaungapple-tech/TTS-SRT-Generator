@@ -24,7 +24,7 @@ import { defaultFx, renderCardPng, renderImageOverlayPng, FILTER_CSS, type Image
 import { getExtraKeys, soonestFreeSeconds } from '../services/geminiKeyPool';
 import { authHeader } from '../services/serverAuth';
 import { loadLogoImage, renderLogoPng, type LogoPosition } from '../utils/recapLogo';
-import { SUBTITLE_PRESETS, getSubtitleStyle } from '../utils/subtitlePresets';
+import { SUBTITLE_PRESETS, SUBTITLE_FONTS, getSubtitleStyle, type SubtitleFontId } from '../utils/subtitlePresets';
 import { VOICE_OPTIONS } from '../constants';
 import type { SRTSubtitle } from '../types';
 
@@ -217,6 +217,9 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [subPreset, setSubPreset] = useState('viral');
   const [subY, setSubY] = useState(84);
   const [subScale, setSubScale] = useState(1);
+  const [subFont, setSubFont] = useState<SubtitleFontId>('noto');
+  const [captionsOn, setCaptionsOn] = useState(true);
+  const [capTab, setCapTab] = useState<'presets' | 'font' | 'effects'>('presets');
   const [framing, setFraming] = useState<'blurred-fit' | 'cover' | 'letterbox'>('blurred-fit');
   const [blurAmount, setBlurAmount] = useState(40);
   const [textLayers, setTextLayers] = useState<TextLayer[]>([]);
@@ -829,7 +832,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         width,
         height,
         background: overlayBg,
-        style: getSubtitleStyle(subPreset, subY, subScale),
+        style: getSubtitleStyle(subPreset, subY, subScale, subFont),
         onProgress: f => setOverlayBusy(f),
       });
       setOverlayFile({ blob, name: `${baseName}_subtitle_overlay.${ext}` });
@@ -929,7 +932,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         introPng: await renderCardPng(fx.intro, w, h),
         outroPng: await renderCardPng(fx.outro, w, h),
         bgColor: '#000000',
-        subtitleStyle: getSubtitleStyle(subPreset, subY, subScale),
+        subtitleStyle: captionsOn ? getSubtitleStyle(subPreset, subY, subScale, subFont) : null,
         subtitleBlur: blurSubOn ? { y: blurSubY / 100, h: blurSubH / 100 } : null,
         bgm: bgmFile,
         bgmVolume: bgmVol,
@@ -1482,6 +1485,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                 textLayers={textLayers}
                 filterCss={FILTER_CSS[fx.filter]}
                 subPreset={subPreset}
+                subFont={subFont}
+                captionsOn={captionsOn}
                 subY={subY}
                 subScale={subScale}
                 blurBand={blurSubOn ? { y: blurSubY / 100, h: blurSubH / 100 } : null}
@@ -1530,17 +1535,53 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           </div>
           <div className={resTab === 'captions' ? '' : 'hidden'}>
           <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 space-y-5">
-            <div>
-              <Label>{isMm ? 'စာတန်းပုံစံ' : 'Subtitle look'}</Label>
-              <div className="grid grid-cols-4 gap-2">
-                {SUBTITLE_PRESETS.map(p => (
-                  <button key={p.id} type="button" onClick={() => setSubPreset(p.id)} className={`rounded-2xl border px-2 py-3 flex flex-col items-center gap-1.5 transition ${subPreset === p.id ? 'border-emerald-400 bg-emerald-400/10' : 'border-white/10 bg-white/[0.04]'}`}>
-                    <span className="text-[20px] font-black leading-none" style={{ color: p.swatch.fill, WebkitTextStroke: `2px ${p.swatch.stroke}`, paintOrder: 'stroke fill' }}>Aa</span>
-                    <span className="text-[10.5px] text-slate-300 text-center leading-tight">{isMm ? p.name.mm : p.name.en}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
+            <label className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 cursor-pointer">
+              <span className="text-[13px] font-bold text-white">{isMm ? 'စာတန်း ပြမည်' : 'Show captions'}</span>
+              <input type="checkbox" checked={captionsOn} onChange={e => setCaptionsOn(e.target.checked)} className="accent-emerald-400 w-5 h-5" />
+            </label>
+            {captionsOn && (
+              <>
+                <div className="grid grid-cols-3 gap-1 rounded-xl bg-white/[0.05] p-1">
+                  {([['presets', isMm ? 'ပုံစံ' : 'Presets'], ['font', isMm ? 'ဖောင့်' : 'Font'], ['effects', isMm ? 'Effects' : 'Effects']] as const).map(([id, l]) => (
+                    <button key={id} type="button" onClick={() => setCapTab(id)} className={`rounded-lg py-2 text-[12px] font-bold transition ${capTab === id ? 'bg-amber-400 text-black' : 'text-slate-300'}`}>{l}</button>
+                  ))}
+                </div>
+                <div className={capTab === 'presets' ? '' : 'hidden'}>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {SUBTITLE_PRESETS.map(p => (
+                      <button key={p.id} type="button" onClick={() => setSubPreset(p.id)} className={`rounded-2xl border px-2 py-3 flex flex-col items-center gap-2 transition ${subPreset === p.id ? 'border-emerald-400 bg-emerald-400/10' : 'border-white/10 bg-white/[0.04]'}`}>
+                        <span className="rounded-lg px-2.5 py-1 text-[17px] font-black leading-none" style={{ background: p.swatch.bg, color: p.swatch.fill, WebkitTextStroke: p.swatch.bg ? undefined : `2px ${p.swatch.stroke}`, paintOrder: 'stroke fill' }}>
+                          {p.swatch.accent ? <>A<span style={{ color: p.swatch.accent }}>a</span></> : 'Aa'}
+                        </span>
+                        <span className="text-[10.5px] text-slate-300 text-center leading-tight">{isMm ? p.name.mm : p.name.en}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className={capTab === 'font' ? '' : 'hidden'}>
+                  <div className="grid grid-cols-2 gap-2">
+                    {SUBTITLE_FONTS.map(f => (
+                      <button key={f.id} type="button" onClick={() => setSubFont(f.id)} className={`rounded-2xl border px-3 py-4 flex flex-col items-center gap-1.5 transition ${subFont === f.id ? 'border-emerald-400 bg-emerald-400/10' : 'border-white/10 bg-white/[0.04]'}`}>
+                        <span className="text-[22px] font-black text-white" style={{ fontFamily: f.family }}>{f.sample}</span>
+                        <span className="text-[10.5px] text-slate-300">{f.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className={capTab === 'effects' ? '' : 'hidden'}>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded-2xl border border-emerald-400 bg-emerald-400/10 px-3 py-4 text-center">
+                      <div className="text-[13px] font-bold text-white">{isMm ? 'Still (ငြိမ်)' : 'Still'}</div>
+                      <div className="text-[10.5px] text-slate-400 mt-1">{isMm ? 'စာတန်းတစ်ကြောင်းလုံး တစ်ပြိုင်နက်ပေါ်' : 'Whole line appears at once'}</div>
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.02] px-3 py-4 text-center opacity-50">
+                      <div className="text-[13px] font-bold text-slate-300">{isMm ? 'Animation' : 'Animation'}</div>
+                      <div className="text-[10.5px] text-slate-500 mt-1">{isMm ? 'စကားလုံးတစ်လုံးချင်း — မရသေးပါ' : 'Word-by-word — not supported yet'}</div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
 
             <div>
               <div className="flex items-center justify-between mb-1.5">

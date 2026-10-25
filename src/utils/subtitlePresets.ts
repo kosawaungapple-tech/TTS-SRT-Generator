@@ -4,7 +4,7 @@ export interface SubtitlePreset {
   id: string;
   name: { mm: string; en: string };
   /** Small preview colours for the chip. */
-  swatch: { fill: string; stroke: string };
+  swatch: { fill: string; stroke: string; accent?: string; bg?: string };
   /** Overlay videos are blended with "Screen", so they must stay bright to be visible. */
   style: Omit<SubtitleStyle, 'positionY'> & { positionY?: number };
 }
@@ -36,9 +36,40 @@ export const SUBTITLE_PRESETS: SubtitlePreset[] = [
     swatch: { fill: '#ffffff', stroke: '#111111' },
     style: { fontSize: 44, fontFamily: FONT, fontColor: '#ffffff', strokeColor: '#000000', strokeWidth: 0, bgBoxEnabled: true, bgBoxColor: 'rgba(0,0,0,0.72)' },
   },
+  {
+    id: 'twotone',
+    name: { mm: 'နှစ်ရောင် Clean', en: 'Clean two-tone' },
+    swatch: { fill: '#ffffff', stroke: '#000000', accent: '#ffd400' },
+    style: { fontSize: 48, fontFamily: FONT, fontColor: '#ffffff', accentColor: '#ffd400', strokeColor: '#000000', strokeWidth: 8, bgBoxEnabled: false, bgBoxColor: 'rgba(0,0,0,0)' },
+  },
+  {
+    id: 'pop',
+    name: { mm: 'Pop အဝါခုံ', en: 'Pop highlight' },
+    swatch: { fill: '#111111', stroke: '#111111', bg: '#ffe600' },
+    style: { fontSize: 46, fontFamily: FONT, fontColor: '#111111', strokeColor: '#000000', strokeWidth: 0, bgBoxEnabled: true, bgBoxColor: '#ffe600', boxRadius: 10 },
+  },
+  {
+    id: 'sticker',
+    name: { mm: 'Sticker အဖြူ', en: 'Sticker' },
+    swatch: { fill: '#111111', stroke: '#111111', bg: '#ffffff' },
+    style: { fontSize: 44, fontFamily: FONT, fontColor: '#111111', strokeColor: '#000000', strokeWidth: 0, bgBoxEnabled: true, bgBoxColor: '#ffffff', boxRadius: 28 },
+  },
+  {
+    id: 'banner',
+    name: { mm: 'Banner အနီ', en: 'Banner' },
+    swatch: { fill: '#ffffff', stroke: '#b00020', bg: '#d0021b' },
+    style: { fontSize: 44, fontFamily: FONT, fontColor: '#ffffff', strokeColor: '#000000', strokeWidth: 0, bgBoxEnabled: true, bgBoxColor: '#d0021b', boxRadius: 2 },
+  },
 ];
 
-export function getSubtitleStyle(id: string, positionY: number, sizeScale = 1): SubtitleStyle {
+export type SubtitleFontId = 'noto' | 'padauk';
+export const SUBTITLE_FONTS: { id: SubtitleFontId; label: string; family: string; sample: string }[] = [
+  { id: 'noto', label: 'Noto Sans Myanmar', family: '"Noto Sans Myanmar", "Padauk", sans-serif', sample: 'မင်္ဂလာပါ' },
+  { id: 'padauk', label: 'Padauk', family: '"Padauk", "Noto Sans Myanmar", sans-serif', sample: 'မင်္ဂလာပါ' },
+];
+
+export function getSubtitleStyle(id: string, positionY: number, sizeScale = 1, font: SubtitleFontId = 'noto'): SubtitleStyle {
   const p = SUBTITLE_PRESETS.find(x => x.id === id) || SUBTITLE_PRESETS[0];
-  return { ...p.style, fontSize: Math.round(p.style.fontSize * sizeScale), positionY } as SubtitleStyle;
+  const family = SUBTITLE_FONTS.find(f => f.id === font)?.family || FONT;
+  return { ...p.style, fontFamily: family, fontSize: Math.round(p.style.fontSize * sizeScale), positionY } as SubtitleStyle;
 }
