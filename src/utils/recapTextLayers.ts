@@ -16,7 +16,17 @@ export interface TextLayer {
   box: boolean;
   /** how it appears */
   anim?: 'none' | 'fade' | 'slide';
+  /** ready-made title look; 'plain' uses colour / outline / box as set */
+  look?: TitleLook;
 }
+
+export type TitleLook = 'plain' | 'plate' | 'news' | 'banner' | 'sticker';
+export const TITLE_LOOKS: Record<Exclude<TitleLook, 'plain'>, { bg: string; fg: string; radius: number; full?: boolean; label: { mm: string; en: string } }> = {
+  plate: { bg: 'rgba(0,0,0,0.72)', fg: '#ffffff', radius: 0.25, label: { mm: 'Plate', en: 'Plate' } },
+  news: { bg: '#0b3d91', fg: '#ffffff', radius: 0.05, label: { mm: 'News', en: 'News' } },
+  banner: { bg: '#d0021b', fg: '#ffffff', radius: 0, full: true, label: { mm: 'Banner', en: 'Banner' } },
+  sticker: { bg: '#ffffff', fg: '#111111', radius: 0.6, label: { mm: 'Sticker', en: 'Sticker' } },
+};
 
 export function newTextLayer(id: number, start = 0, end = 3): TextLayer {
   return { id, text: '', start, end, x: 50, y: 12, size: 6, color: '#ffffff', stroke: true, box: false, anim: 'fade' };
@@ -50,7 +60,15 @@ export async function renderTextLayerPng(l: TextLayer, W: number, H: number): Pr
   const cx = (W * l.x) / 100;
   const cy = (H * l.y) / 100;
   const top = cy - ((lines.length - 1) * lh) / 2;
-  if (l.box) {
+  const lk = l.look && l.look !== 'plain' ? TITLE_LOOKS[l.look] : null;
+  if (lk) {
+    const w = lk.full ? W : Math.max(...lines.map(s => ctx.measureText(s).width)) + font * 0.9;
+    const h = lines.length * lh + font * 0.4;
+    ctx.fillStyle = lk.bg;
+    ctx.beginPath();
+    ctx.roundRect(cx - w / 2, cy - h / 2, w, h, font * lk.radius);
+    ctx.fill();
+  } else if (l.box) {
     const w = Math.max(...lines.map(s => ctx.measureText(s).width)) + font * 0.8;
     const h = lines.length * lh + font * 0.3;
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
@@ -60,12 +78,12 @@ export async function renderTextLayerPng(l: TextLayer, W: number, H: number): Pr
   }
   lines.forEach((s, i) => {
     const y = top + i * lh;
-    if (l.stroke) {
+    if (l.stroke && !lk) {
       ctx.lineWidth = Math.max(3, font * 0.14);
       ctx.strokeStyle = '#000000';
       ctx.strokeText(s, cx, y);
     }
-    ctx.fillStyle = l.color;
+    ctx.fillStyle = lk ? lk.fg : l.color;
     ctx.fillText(s, cx, y);
   });
   return await new Promise<Blob | null>(res => canvas.toBlob(b => res(b), 'image/png'));
