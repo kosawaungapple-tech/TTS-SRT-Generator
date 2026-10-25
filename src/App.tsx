@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, Check, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Clipboard, Mic2, Play, Info, Sparkles, X, Calendar, Layers, Pause, RotateCcw, BookOpen, Eye, EyeOff, Zap, Crosshair, Clapperboard } from 'lucide-react';
 import { WelcomePage } from './components/WelcomePage';
 import { Header } from './components/Header';
+import { MyFontsCard } from './components/MyFontsCard';
+import { loadUserFonts } from './utils/userFonts';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { ContentInput } from './components/ContentInput';
 import { VoiceConfig } from './components/VoiceConfig';
@@ -185,6 +187,9 @@ export default function App() {
       }
     });
   }, [globalSettings.fonts]);
+
+  // fonts the user added in Settings: register them once so every canvas/preview can use them
+  useEffect(() => { void loadUserFonts(); }, []);
 
   // Use this for global notifications or debug
   useEffect(() => {
@@ -3399,6 +3404,9 @@ export default function App() {
                       )}
                     </div>
                   </div>
+
+                  {/* My fonts (captions / titles) */}
+                  <MyFontsCard isMm={language === 'mm'} showToast={showToast} />
 
                   {/* Gemini API Key Section */}
                   <div 
