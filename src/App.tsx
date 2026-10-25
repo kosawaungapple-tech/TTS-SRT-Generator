@@ -2460,14 +2460,6 @@ export default function App() {
                 label="Movie Recap"
                 tooltip="Movie Recap"
               />
-              <NavTab
-                id="tools"
-                active={activeTab === 'tools'}
-                onClick={() => handleTabSwitch('tools')}
-                icon={<Settings size={18} />}
-                label={t('nav.settings')}
-                tooltip={t('tooltips.settings')}
-              />
             </div>
 
             {/* Persistent Tab Panels Viewport: Never unmount tabs to ensure all background processes, inputs, and state are preserved */}
