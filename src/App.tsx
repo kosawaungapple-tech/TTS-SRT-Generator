@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, Check, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Clipboard, Mic2, Play, Info, Sparkles, X, Calendar, Layers, Pause, RotateCcw, BookOpen, Eye, EyeOff, Zap, Film, Crosshair, Clapperboard } from 'lucide-react';
+import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, Check, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Clipboard, Mic2, Play, Info, Sparkles, X, Calendar, Layers, Pause, RotateCcw, BookOpen, Eye, EyeOff, Zap, Crosshair, Clapperboard } from 'lucide-react';
 import { WelcomePage } from './components/WelcomePage';
 import { Header } from './components/Header';
 import { ApiKeyModal } from './components/ApiKeyModal';
@@ -28,7 +28,8 @@ import { ExtraGeminiKeys } from './components/ExtraGeminiKeys';
 import { useLanguage } from './contexts/LanguageContext';
 import { formatDate } from './utils/dateUtils';
 import { formatMyanmarDuration, renderProcessedAudio, pcmToWav } from './utils/audioUtils';
-import { generateOptimizedSubtitles, generateSRT, createSrtBlob, downloadSrtFile } from './utils/subtitleUtils';
+import { generateOptimizedSubtitles, generateSRT, downloadSrtFile } from './utils/subtitleUtils';
+import { getCustomPronunciation, setCustomPronunciation } from './utils/pronunciation';
 import { getServerAuthStatus, serverLogin, serverRegister, hasServerSession, loginErrorText } from './services/serverAuth';
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId, getDocs } from './firebase';
 
@@ -40,7 +41,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('generate');
   const [hasEntered, setHasEntered] = useState(false);
   const [text, setText] = useState('');
-  const [customRules] = useState('');
+  const [customRules, setCustomRules] = useState(() => getCustomPronunciation() || '');
   const [saveToHistory, setSaveToHistory] = useState(false);
   const [config, setConfig] = useState<TTSConfig>({
     voiceId: 'kore',
@@ -71,8 +72,8 @@ export default function App() {
 
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [isTranscriberProcessing, setIsTranscriberProcessing] = useState(false);
-  const [isAudiobookProcessing, setIsAudiobookProcessing] = useState(false);
-  const [isVideoEditorProcessing, setIsVideoEditorProcessing] = useState(false);
+  const [isAudiobookProcessing] = useState(false);
+  const [isVideoEditorProcessing] = useState(false);
   const [subtitlesSubTab, setSubtitlesSubTab] = useState<'transcriber' | 'auto-recap'>('transcriber');
   const [profile, setProfile] = useState<VBSUserControl | null>(null);
   const [vbsId, setVbsId] = useState<string | null>(localStorage.getItem('VBS_USER_ID'));
@@ -1981,7 +1982,6 @@ export default function App() {
   }, [userControl?.expiryDate, isVbsAdmin]);
 
   const isPremium = isVbsAdmin || (userControl?.membershipStatus === 'premium' && !isExpired);
-  const canUseThumbnail = isPremium || isAccessGranted || isVbsAdmin;
 
   useEffect(() => {
     if (isExpired && userControl?.isUnlimited) {
@@ -2450,6 +2450,14 @@ export default function App() {
                 label="Movie Recap"
                 tooltip="Movie Recap"
               />
+              <NavTab
+                id="tools"
+                active={activeTab === 'tools'}
+                onClick={() => handleTabSwitch('tools')}
+                icon={<Settings size={18} />}
+                label={t('nav.settings')}
+                tooltip={t('tooltips.settings')}
+              />
             </div>
 
             {/* Persistent Tab Panels Viewport: Never unmount tabs to ensure all background processes, inputs, and state are preserved */}
@@ -2491,87 +2499,46 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* Right Column - Config */}
-                  <div className="lg:col-span-5 space-y-8 lg:sticky lg:top-24 lg:self-start lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:pr-1 [scrollbar-width:thin]">
+                  {/* Right Column - Studio Tool Suite Grid */}
+                  <div className="lg:col-span-5 space-y-6 lg:sticky lg:top-24 lg:self-start lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:pr-1 [scrollbar-width:thin]">
                     <VoiceConfig 
                       config={config} 
                       setConfig={setConfig} 
                       isAdmin={isAdminUser}
                       baseDuration={result?.oneXDuration}
+                      saveToHistory={saveToHistory}
+                      setSaveToHistory={setSaveToHistory}
+                      onOpenBatchQueue={() => setIsBatchModalOpen(true)}
+                      customRules={customRules}
+                      setCustomRules={(val) => {
+                        setCustomRules(val);
+                        setCustomPronunciation(val);
+                      }}
                     />
 
                     <div className="space-y-4">
-                      <div className="flex items-center justify-between bg-white/50 backdrop-blur dark:bg-slate-900/50 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors duration-300">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 bg-brand-purple/10 rounded-lg text-brand-purple">
-                            <History size={18} />
-                          </div>
-                          <div>
-                            <p className="text-sm font-bold text-slate-900 dark:text-white">{t('generate.saveToHistory')}</p>
-                            <p className="text-[10px] text-slate-500 dark:text-slate-400">{t('generate.saveToHistoryDesc')}</p>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setSaveToHistory(!saveToHistory)}
-                          className={`w-12 h-6 rounded-full transition-all relative ${saveToHistory ? 'bg-brand-purple' : 'bg-slate-300 dark:bg-slate-700'}`}
-                        >
-                          <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${saveToHistory ? 'left-7' : 'left-1'}`} />
-                        </button>
-                      </div>
-
-                      {/* Batch Queue Trigger Button */}
-                      <button
-                        type="button"
-                        onClick={() => setIsBatchModalOpen(true)}
-                        className="w-full p-4 rounded-2xl bg-brand-purple/10 border border-brand-purple/25 hover:border-brand-purple/50 hover:bg-brand-purple/15 transition-all flex items-center justify-between group shadow-sm text-left"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="p-2.5 bg-brand-purple/20 text-brand-purple rounded-xl group-hover:scale-110 transition-transform">
-                            <Layers size={18} />
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-bold text-slate-900 dark:text-white">
-                                {t('history.batchQueue')}
-                              </span>
-                              <span className="text-[9px] px-2 py-0.5 rounded-full bg-brand-purple text-white font-bold tracking-wider uppercase">
-                                Multi-Input
-                              </span>
-                            </div>
-                            <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
-                              Upload .txt/.csv/.json or paste multiple text inputs
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-1 text-xs font-bold text-brand-purple group-hover:translate-x-1 transition-transform">
-                          <span>Open</span>
-                          <ArrowRight size={14} />
-                        </div>
-                      </button>
-
                       {config.speed > 1.5 && (
-                          <motion.div 
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="mb-6 p-4 rounded-2xl bg-brand-purple/10 border border-brand-purple/20 text-brand-purple shadow-xl shadow-brand-purple/5"
-                          >
-                            <div className="flex gap-3">
-                              <Info size={18} className="shrink-0 mt-0.5 text-brand-purple" />
-                              <div className="text-[11px] leading-relaxed space-y-1">
-                                <p className="font-bold">အမြန်နှုန်း အရမ်းမြန်ရင် အသံအရည်အသွေး အနည်းငယ် ပြောင်းလဲနိုင်ပါတယ်။</p>
-                                <p className="opacity-80">အကောင်းဆုံး အသံထွက်အတွက် 1.2x မှ 1.5x အတွင်းသာ ထားရှိရန် အကြံပြုပါတယ်။</p>
-                                <button 
-                                  onClick={() => setConfig(prev => ({ ...prev, speed: 1.2 }))}
-                                  className="mt-2 flex items-center gap-1.5 px-3 py-1 bg-brand-purple text-white rounded-full font-bold uppercase text-[9px] tracking-wider hover:bg-brand-purple/90 transition-all shadow-lg shadow-brand-purple/30"
-                                >
-                                  <Sparkles size={10} />
-                                  Optimize to 1.2x
-                                </button>
-                              </div>
+                        <motion.div 
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className="p-4 rounded-2xl bg-amber-400/10 border border-amber-400/25 text-amber-300 shadow-xl shadow-amber-500/5"
+                        >
+                          <div className="flex gap-3">
+                            <Info size={18} className="shrink-0 mt-0.5 text-amber-400" />
+                            <div className="text-[11.5px] leading-relaxed space-y-1">
+                              <p className="font-bold">{language === 'mm' ? 'အမြန်နှုန်း အရမ်းမြန်ရင် အသံအရည်အသွေး အနည်းငယ် ပြောင်းလဲနိုင်ပါတယ်။' : 'High speeds may alter voice quality slightly.'}</p>
+                              <p className="opacity-80">{language === 'mm' ? 'အကောင်းဆုံး အသံထွက်အတွက် 1.2x မှ 1.5x အတွင်းသာ ထားရှိရန် အကြံပြုပါတယ်။' : 'Recommended speed range: 1.2x to 1.5x for natural pacing.'}</p>
+                              <button 
+                                onClick={() => setConfig(prev => ({ ...prev, speed: 1.2 }))}
+                                className="mt-2 flex items-center gap-1.5 px-3 py-1 bg-amber-400 text-black rounded-full font-bold uppercase text-[9px] tracking-wider hover:bg-amber-300 transition-all shadow-lg shadow-amber-400/20"
+                              >
+                                <Sparkles size={10} />
+                                Optimize to 1.2x
+                              </button>
                             </div>
-                          </motion.div>
-                        )}
+                          </div>
+                        </motion.div>
+                      )}
 
                       <button
                         onClick={isLoading || isProcessingSpeed ? () => abortController?.abort() : handleGenerate}

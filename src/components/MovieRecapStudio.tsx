@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { BookOpen, Upload, Loader2, Sparkles, Copy, Download, RefreshCw, Film, Mic, Globe2, Wand2, CheckCircle2, Volume2, FileText } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { BookOpen, Upload, Loader2, Sparkles, Copy, Download, RefreshCw, Film, Mic, Globe2, Wand2, CheckCircle2, Volume2, FileText, ShieldAlert } from 'lucide-react';
+import { CopyrightModal } from './CopyrightModal';
 import { GeminiTTSService } from '../services/geminiService';
 import { assemblyAiService } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
@@ -88,6 +89,7 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
   const [source, setSource] = useState<Source>('speech');
   const [language, setLanguage] = useState<'mm' | 'en'>('mm');
   const [spokenLang, setSpokenLang] = useState('auto');
+  const [showCopyrightModal, setShowCopyrightModal] = useState(false);
   const [coverage, setCoverage] = useState(1);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ text: string; percent: number } | null>(null);
@@ -580,6 +582,15 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
               </label>
               <button type="button" onClick={() => void copy()} className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-[12.5px] font-bold flex items-center gap-2"><Copy size={14} />{isMm ? 'ကူးမည်' : 'Copy'}</button>
               <button type="button" onClick={download} className="px-4 py-2.5 rounded-xl bg-emerald-400 text-black text-[12.5px] font-extrabold flex items-center gap-2"><Download size={14} />{isMm ? 'TXT ဒေါင်းမည်' : 'Download TXT'}</button>
+              <button 
+                type="button" 
+                onClick={() => setShowCopyrightModal(true)} 
+                className="px-3.5 py-2.5 rounded-xl bg-amber-400/15 hover:bg-amber-400/25 border border-amber-400/35 text-amber-300 text-[12.5px] font-extrabold flex items-center gap-1.5 transition active:scale-95 shadow-sm"
+                title={isMm ? 'မူပိုင်ခွင့် ကာကွယ်ရေး စစ်ဆေးမည်' : 'Check Anti-Copyright Protection'}
+              >
+                <ShieldAlert size={14} className="text-amber-400" />
+                {isMm ? 'Copyright စစ်မည်' : 'Copyright'}
+              </button>
             </div>
 
             <div className="space-y-3">
@@ -655,6 +666,15 @@ export const MovieRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, on
           </>
         )}
       </div>
+
+      <CopyrightModal
+        isOpen={showCopyrightModal}
+        onClose={() => setShowCopyrightModal(false)}
+        isMm={isMm}
+        hasVideo={!!file}
+        scriptText={paras?.map(p => p.text).join('\n\n')}
+        onNavigateToVideoEditor={onNavigateToSettings}
+      />
     </div>
   );
 };

@@ -1167,7 +1167,7 @@ ${list.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.te
       // One long translated line becomes several short on-screen pieces (max 2 short lines each),
       // each shown for its share of the cue's time, so the picture is never covered by a wall of text.
       const tw = timeLine.match(/(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)/);
-      let pieces = tw ? planSubtitlePieces(translated, splitSentenceIntoCueBlocks, 44, 24) : [];
+      const pieces = tw ? planSubtitlePieces(translated, splitSentenceIntoCueBlocks, 44, 24) : [];
       if (tw && pieces.length > 1) {
         const toS2 = (h: string, m: string, sec: string, ms: string) => +h * 3600 + +m * 60 + +sec + +ms.padEnd(3, '0').slice(0, 3) / 1000;
         const a0 = toS2(tw[1], tw[2], tw[3], tw[4]);

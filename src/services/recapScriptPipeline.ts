@@ -240,7 +240,7 @@ ${dialogue || '(none)'}`;
   const worker = async () => {
     while (queue.length) {
       const i = queue.shift()!;
-      try { await runWindow(i); } catch (e1) {
+      try { await runWindow(i); } catch {
         try { await runWindow(i); } catch (e2) {
           failed.push(`${fmtT(i * len)}: ${e2 instanceof Error ? e2.message : String(e2)}`);
           done++; opts.onStage?.({ stage: 'watch', done, total: count });

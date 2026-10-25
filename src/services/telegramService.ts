@@ -1,6 +1,12 @@
-import { Config } from '../types';
+export interface TelegramConfig {
+  telegramBotToken?: string;
+  telegramChatId?: string;
+  [key: string]: unknown;
+}
 
-export const sendTelegramNotification = async (message: string, config: Config) => {
+export type Config = TelegramConfig;
+
+export const sendTelegramNotification = async (message: string, config: TelegramConfig) => {
   try {
     const response = await fetch('/api/telegram/send', {
       method: 'POST',
@@ -17,7 +23,7 @@ export const sendTelegramNotification = async (message: string, config: Config) 
       const errorData = await response.json().catch(() => ({}));
       throw new Error(errorData.error || `Server error: ${response.status}`);
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Telegram Notification Error:', error);
     throw error;
   }

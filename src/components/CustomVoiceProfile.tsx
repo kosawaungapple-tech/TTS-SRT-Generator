@@ -37,7 +37,6 @@ export const CustomVoiceProfile: React.FC<CustomVoiceProfileProps> = ({ onProfil
       try { localStorage.removeItem('vbs_custom_voice_profile'); } catch { /* ignore */ }
       onProfileChange(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const stopTimer = () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };

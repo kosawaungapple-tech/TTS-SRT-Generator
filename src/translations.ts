@@ -369,6 +369,7 @@ export const translations = {
     tabSystem: { en: "System", mm: "စနစ်" },
     tabRules: { en: "Rules", mm: "စည်းမျဉ်းများ" },
     tabAnnouncements: { en: "Announcements", mm: "ကြေညာချက်များ" },
+    tabFonts: { en: "Fonts", mm: "ဖောင့်များ" },
   },
 
   // Thumbnail Access

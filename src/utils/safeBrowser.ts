@@ -7,28 +7,28 @@ export const safeStorage = {
   getItem: (key: string) => {
     try {
       return typeof window !== 'undefined' ? localStorage.getItem(key) : null;
-    } catch (e) {
+    } catch {
       return null;
     }
   },
   setItem: (key: string, value: string) => {
     try {
       if (typeof window !== 'undefined') localStorage.setItem(key, value);
-    } catch (e) {
+    } catch {
       // Ignore
     }
   },
   removeItem: (key: string) => {
     try {
       if (typeof window !== 'undefined') localStorage.removeItem(key);
-    } catch (e) {
+    } catch {
       // Ignore
     }
   },
   clear: () => {
     try {
       if (typeof window !== 'undefined') localStorage.clear();
-    } catch (e) {
+    } catch {
       // Ignore
     }
   }
@@ -38,35 +38,35 @@ export const safeSessionStorage = {
   getItem: (key: string) => {
     try {
       return typeof window !== 'undefined' ? sessionStorage.getItem(key) : null;
-    } catch (e) {
+    } catch {
       return null;
     }
   },
   setItem: (key: string, value: string) => {
     try {
       if (typeof window !== 'undefined') sessionStorage.setItem(key, value);
-    } catch (e) {
+    } catch {
       // Ignore
     }
   },
   removeItem: (key: string) => {
     try {
       if (typeof window !== 'undefined') sessionStorage.removeItem(key);
-    } catch (e) {
+    } catch {
       // Ignore
     }
   },
   clear: () => {
     try {
       if (typeof window !== 'undefined') sessionStorage.clear();
-    } catch (e) {
+    } catch {
       // Ignore
     }
   }
 };
 
 export const safeHistory = {
-  pushState: (data: any, title: string, url: string) => {
+  pushState: (data: unknown, title: string, url: string) => {
     try {
       if (typeof window !== 'undefined' && window.history) {
         window.history.pushState(data, title, url);
@@ -75,7 +75,7 @@ export const safeHistory = {
       console.warn('History pushState failed:', e);
     }
   },
-  replaceState: (data: any, title: string, url: string) => {
+  replaceState: (data: unknown, title: string, url: string) => {
     try {
       if (typeof window !== 'undefined' && window.history) {
         window.history.replaceState(data, title, url);

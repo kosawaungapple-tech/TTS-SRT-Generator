@@ -67,7 +67,6 @@ export function useActivity(active: boolean, label: string, opts: { detail?: str
       if (f) activity.fail(idRef.current, f); else activity.finish(idRef.current);
       idRef.current = null;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
   useEffect(() => {
     if (active && idRef.current) activity.update(idRef.current, { detail: opts.detail, percent: opts.percent });

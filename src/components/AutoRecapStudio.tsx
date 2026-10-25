@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Clapperboard, Upload, Download, Sparkles, Mic, FileText, Film, Loader2, CheckCircle2, Eye, MessageSquareText, ChevronDown, RefreshCw, Smartphone, Globe2, Gauge, Layers } from 'lucide-react';
+import { Clapperboard, Upload, Download, Sparkles, Mic, FileText, Film, Loader2, CheckCircle2, ChevronDown, RefreshCw, Smartphone, Globe2, Gauge, Layers, ShieldAlert } from 'lucide-react';
+import { CopyrightModal } from './CopyrightModal';
 import { useActivity } from '../services/activity';
 import { GeminiTTSService, type RecapPlanScene } from '../services/geminiService';
 import { assemblyAiService } from '../services/assemblyAiService';
@@ -159,6 +160,19 @@ const Segmented = <T extends string>({ value, onChange, options }: { value: T; o
   </div>
 );
 
+const Chip: React.FC<{ on: boolean; onClick: () => void; children: React.ReactNode }> = ({ on, onClick, children }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`px-3 py-2 rounded-xl text-[12px] font-bold border transition text-left leading-snug flex items-center gap-1.5 ${
+      on
+        ? 'bg-amber-400 text-black border-amber-400 shadow-sm shadow-amber-400/20'
+        : 'bg-white/5 text-slate-300 border-white/10 hover:bg-white/10'
+    }`}
+  >
+    {children}
+  </button>
+);
 
 export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onNavigateToSettings }) => {
   const [file, setFile] = useState<File | null>(null);
@@ -270,6 +284,17 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [blurSubOn, setBlurSubOn] = useState(false);
   const [blurSubY, setBlurSubY] = useState(78);
   const [blurSubH, setBlurSubH] = useState(16);
+  const [showCopyrightModal, setShowCopyrightModal] = useState(false);
+
+  const handleApplyFullAntiCopyright = () => {
+    setBlurSubOn(true);
+    setBlurSubY(80);
+    setBlurSubH(16);
+    setFraming('blurred-fit');
+    setBlurAmount(45);
+    setFx(prev => ({ ...prev, filter: 'cinematic' }));
+    showToast(isMm ? '🛡️ မူပိုင်ခွင့် ကာကွယ်ရေးစနစ် (Anti-Copyright & Subtitle Blur) အောင်မြင်စွာ ဖွင့်ထားပြီးပါပြီ' : '🛡️ Full Anti-Copyright suite & Subtitle Blur activated!', 'success');
+  };
   const [bgmFile, setBgmFile] = useState<File | null>(null);
   const [bgmVol, setBgmVol] = useState(0.2);
   const [logoImg, setLogoImg] = useState<HTMLImageElement | null>(null);
@@ -440,8 +465,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         partCues.map((c, i) => `[${i + 1}] ${c.text}`).join('\n'),
         (s, msg) => setProgress(p => ({ text: `${msg} (${s}s)`, percent: p?.percent ?? 30 })),
         {
-          style: 'Cinematic recap that follows the story itself: infer the genre and mood (drama, thriller, action, comedy, romance...) from what actually happens and let it shift scene by scene. Never impose a genre the footage does not show.',
-          tone: 'Engaging, emotional, cinematic and captivating',
+          style: styleHints[style] || 'Cinematic recap that follows the story itself: infer the genre and mood (drama, thriller, action, comedy, romance...) from what actually happens and let it shift scene by scene. Never impose a genre the footage does not show.',
+          tone: style === 'tiktok' ? 'Fast viral TikTok pacing, punchy hooks, high energy' : 'Engaging, emotional, cinematic and captivating',
           targetMinutes: targetMin > 0 ? targetMin : length === 'short' ? 1.5 : length === 'full' ? 9 : 4,
           sourceSeconds: partLen,
           targetLanguage: language,
@@ -592,7 +617,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             voiced[i] = blob;
             finished++;
             console.info(`[Auto Recap] scene ${i + 1}/${segments.length} voiced in ${Math.round((Date.now() - t0) / 1000)}s`);
-            setProgress(p => ({ text: `${isMm ? '၃/၄ အသံသွင်းနေသည်' : '3/4 Recording the voiceover'} (${finished}/${segments.length})`, percent: 50 + Math.round((finished / segments.length) * 40) }));
+            setProgress(() => ({ text: `${isMm ? '၃/၄ အသံသွင်းနေသည်' : '3/4 Recording the voiceover'} (${finished}/${segments.length})`, percent: 50 + Math.round((finished / segments.length) * 40) }));
             // keep a resumable draft: the finished scenes from the start
             const prefix: Blob[] = [];
             for (const v of voiced) { if (!v) break; prefix.push(v); }
@@ -1008,6 +1033,18 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           />
         </div>
 
+        {/* Recap Style */}
+        <div className="mt-5">
+          <Label icon={<Sparkles size={12} />}>{isMm ? 'ဇာတ်လမ်းစတိုင်' : 'Recap style'}</Label>
+          <div className="flex flex-wrap gap-1.5">
+            {styles.map(s => (
+              <Chip key={s.id} on={style === s.id} onClick={() => setStyle(s.id)}>
+                <span>{s.emoji}</span> {s.name}
+              </Chip>
+            ))}
+          </div>
+        </div>
+
         {/* Fixed length: for long films (e.g. a 2-hour movie into a 15 or 30 minute recap) */}
         {duration >= 480 && (
           <div className="mt-5">
@@ -1178,14 +1215,29 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     <div className="max-w-2xl lg:max-w-none mx-auto space-y-5 lg:space-y-0 lg:grid lg:grid-cols-12 lg:gap-6 lg:items-start">
       <div className={`${panel} lg:col-span-5 xl:col-span-4 lg:order-2`}>
         {/* Header */}
-        <div className="flex items-center gap-3.5 mb-5 pb-5 border-b border-white/10">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-300 to-orange-500 grid place-items-center shadow-lg shadow-amber-500/30">
-            <Clapperboard size={22} className="text-black" />
+        <div className="flex items-center justify-between gap-3.5 mb-5 pb-5 border-b border-white/10">
+          <div className="flex items-center gap-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-300 to-orange-500 grid place-items-center shadow-lg shadow-amber-500/30">
+              <Clapperboard size={22} className="text-black" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-extrabold text-white leading-tight">Auto Recap</h2>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-400/20 text-amber-300 border border-amber-400/30">PRO</span>
+              </div>
+              <p className="text-[12px] text-slate-400">{isMm ? 'ဗီဒီယိုကို ကြည့်ပြီး ဇာတ်ညွှန်း · Voiceover · SRT ထုတ်ပေးမည်' : 'Watches your video → script · voiceover · SRT'}</p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-lg font-extrabold text-white leading-tight">Auto Recap</h2>
-            <p className="text-[12px] text-slate-400">{isMm ? 'ဗီဒီယိုကို ကြည့်ပြီး ဇာတ်ညွှန်း · Voiceover · SRT ထုတ်ပေးမည်' : 'Watches your video → script · voiceover · SRT'}</p>
-          </div>
+          <button
+            type="button"
+            onClick={() => setShowCopyrightModal(true)}
+            className="px-3 py-2 rounded-xl bg-amber-400/15 hover:bg-amber-400/25 border border-amber-400/35 text-amber-300 text-[12px] font-extrabold flex items-center gap-1.5 transition active:scale-95 shadow-sm shrink-0"
+            title={isMm ? 'မူပိုင်ခွင့် ကာကွယ်ရေး စစ်ဆေးမည်' : 'Anti-Copyright Protection'}
+          >
+            <ShieldAlert size={14} className="text-amber-400" />
+            <span>{isMm ? 'Copyright' : 'Copyright'}</span>
+            {blurSubOn && <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />}
+          </button>
         </div>
 
         {/* Video */}
@@ -1354,13 +1406,34 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             </label>
           ) : (
             <div className="w-full">
-              <div className="mx-auto max-w-[520px] aspect-video rounded-3xl overflow-hidden bg-black border border-white/10 grid place-items-center shadow-2xl shadow-black/60">
+              <div className="mx-auto max-w-[520px] aspect-video rounded-3xl overflow-hidden bg-black border border-white/10 grid place-items-center shadow-2xl shadow-black/60 relative">
                 {thumb ? <img src={thumb} alt="" className="w-full h-full object-contain" /> : <Film size={40} className="text-slate-600" />}
+                {blurSubOn && (
+                  <div
+                    className="absolute inset-x-0 bg-amber-400/25 border-y-2 border-dashed border-amber-400/80 backdrop-blur-md pointer-events-none flex items-center justify-center z-10"
+                    style={{ top: `${blurSubY}%`, height: `${blurSubH}%` }}
+                  >
+                    <span className="px-2.5 py-1 rounded bg-black/85 text-[11px] font-bold text-amber-300 flex items-center gap-1 shadow-md">
+                      🙈 {isMm ? 'မူရင်းစာတန်း Blur နေရာ' : 'Original Subtitle Blur'} ({blurSubY}%, {blurSubH}%)
+                    </span>
+                  </div>
+                )}
               </div>
               <div className="mt-5 text-[15px] font-extrabold text-white truncate">{file.name}</div>
               <div className="mt-2 flex items-center justify-center gap-2 text-[11.5px] text-slate-400">
                 <span className="px-2.5 py-1 rounded-full bg-white/10">{duration > 0 ? fmt(duration) : '…'}</span>
                 <span className="px-2.5 py-1 rounded-full bg-white/10">{(file.size / 1048576).toFixed(1)} MB</span>
+              </div>
+              <div className="mt-3 flex items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCopyrightModal(true)}
+                  className="px-3.5 py-1.5 rounded-xl bg-amber-400/15 hover:bg-amber-400/25 border border-amber-400/35 text-amber-300 text-[11.5px] font-extrabold flex items-center gap-1.5 transition active:scale-95 shadow-sm"
+                >
+                  <ShieldAlert size={13} className="text-amber-400" />
+                  <span>{isMm ? 'Anti-Copyright & စာတန်း Blur စစ်ဆေးမည်' : 'Anti-Copyright & Subtitle Blur'}</span>
+                  {blurSubOn && <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />}
+                </button>
               </div>
               <p className="mt-4 text-[12.5px] text-slate-400">{isMm ? 'အဆင်သင့်ပါပြီ — ညာဘက်က “Auto Recap စတင်မည်” ကို နှိပ်ပါ။' : 'Ready — press “Start Auto Recap” on the right.'}</p>
             </div>
@@ -1752,6 +1825,23 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
 
         <div className="hidden lg:block">{settingsBlock}</div>
       </div>
+
+      <CopyrightModal
+        isOpen={showCopyrightModal}
+        onClose={() => setShowCopyrightModal(false)}
+        isMm={isMm}
+        hasVideo={!!file}
+        scriptText={draft?.segments.map(s => s.text).join('\n\n') || result?.scenes.map(s => s.text).join('\n\n')}
+        subtitleBlurOn={blurSubOn}
+        subtitleBlurY={blurSubY}
+        subtitleBlurH={blurSubH}
+        onSubtitleBlurChange={(on, y, h) => {
+          setBlurSubOn(on);
+          setBlurSubY(y);
+          setBlurSubH(h);
+        }}
+        onApplyFullProtection={handleApplyFullAntiCopyright}
+      />
     </div>
   );
 };

@@ -7,6 +7,7 @@ import {
   Sparkles, 
   Trash2, 
   ShieldCheck, 
+  ShieldAlert,
   Key,
   Download,
   Copy,
@@ -36,6 +37,7 @@ import { parseTimestampToSeconds, shiftSrtContent, downloadSrtFile } from '../ut
 import { formatTime } from '../utils/audioUtils';
 import { VBSUserControl, ModalConfig } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
+import { CopyrightModal } from './CopyrightModal';
 
 interface VideoTranscriberProps {
   onTranscriptionComplete: (text: string, duration?: number) => void;
@@ -141,6 +143,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
   const [activeResultTab, setActiveResultTab] = useState<'cues' | 'raw' | 'text' | 'recap'>('cues');
   const [recapScript, setRecapScript] = useState<string | null>(null);
   const [isGeneratingRecap, setIsGeneratingRecap] = useState(false);
+  const [showCopyrightModal, setShowCopyrightModal] = useState(false);
   const [srtSearchQuery, setSrtSearchQuery] = useState('');
   const [isCopied, setIsCopied] = useState(false);
   const [copiedCueIndex, setCopiedCueIndex] = useState<number | null>(null);
@@ -1274,7 +1277,7 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
                     >
                       SRT Code
                     </button>
-                    {recapScript && (
+                    {recapScript ? (
                       <button
                         type="button"
                         onClick={() => setActiveResultTab('recap')}
@@ -1286,6 +1289,17 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
                       >
                         <Sparkles size={13} className={activeResultTab === 'recap' ? "fill-white" : ""} />
                         <span>Recap Script</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleGenerateRecapScript(assemblyResult?.transcript?.text || assemblyResult?.srt || '')}
+                        disabled={isGeneratingRecap}
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold text-purple-400 hover:text-purple-300 hover:bg-purple-500/10 transition-all flex items-center gap-1.5 disabled:opacity-50"
+                        title={isMm ? 'Recap ဇာတ်ညွှန်း ထုတ်ယူမည်' : 'Generate Recap Script'}
+                      >
+                        <Sparkles size={13} />
+                        <span>{isGeneratingRecap ? 'Writing...' : 'Recap'}</span>
                       </button>
                     )}
                     {isGeneratingRecap && (
@@ -1342,6 +1356,14 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
                           title="Download Script"
                         >
                           <Download size={16} />
+                        </button>
+                        <button
+                          onClick={() => setShowCopyrightModal(true)}
+                          className="px-2.5 py-1.5 text-xs font-bold text-amber-300 hover:text-amber-200 bg-amber-400/15 hover:bg-amber-400/25 rounded-lg transition-colors border border-amber-400/35 flex items-center gap-1.5 shadow-sm"
+                          title="Copyright Check & Protection"
+                        >
+                          <ShieldAlert size={14} className="text-amber-400" />
+                          <span>Copyright</span>
                         </button>
                       </div>
                     </div>
@@ -1505,6 +1527,16 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
           </motion.div>
         )}
       </motion.div>
+
+      <CopyrightModal
+        isOpen={showCopyrightModal}
+        onClose={() => setShowCopyrightModal(false)}
+        isMm={isMm}
+        scriptText={recapScript || undefined}
+        onNavigateToVideoEditor={() => {
+          if (onNavigateToSettings) onNavigateToSettings();
+        }}
+      />
     </div>
   );
 };

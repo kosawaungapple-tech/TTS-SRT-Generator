@@ -381,7 +381,6 @@ class ApiChannelManager {
 
   // --- AUTO-SWITCH LOGIC ---
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   /** Every key this user may rotate through: their own key plus the shared admin pool when they are allowed to use it. */
   getPoolKeys(isUserAdmin: boolean = false): string[] {
     const keys: string[] = [];
@@ -393,11 +392,12 @@ class ApiChannelManager {
     return Array.from(new Set(keys));
   }
 
-  private isRateLimit(err: any): boolean {
-    return err?.status === 429 ||
-      err?.message?.includes("429") ||
-      err?.message?.includes("rate limit") ||
-      err?.message?.includes("RESOURCE_EXHAUSTED");
+  private isRateLimit(err: unknown): boolean {
+    const errorObj = err as { status?: number; message?: string } | undefined;
+    return errorObj?.status === 429 ||
+      errorObj?.message?.includes("429") === true ||
+      errorObj?.message?.includes("rate limit") === true ||
+      errorObj?.message?.includes("RESOURCE_EXHAUSTED") === true;
   }
 
   async callWithAutoSwitch<T>(apiFn: (key: string) => Promise<T>, isAdmin: boolean = false, isUserAdmin: boolean = false): Promise<T> {
