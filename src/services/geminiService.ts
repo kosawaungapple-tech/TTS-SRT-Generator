@@ -212,8 +212,19 @@ export class GeminiTTSService {
               if (onRetry) onRetry(Math.round(delay/1000), `API Error ${status}. Retrying in ${Math.round(delay/1000)}s...`);
             }
             
+            // Voice generation hitting a server-side error (500/502/503/504): do not sit through the long
+            // back-off, and from the second failure on try the other voice model (it is usually the model, not the key).
+            let nextBody = body;
+            if (body.isTts && status !== 429) {
+              delay = Math.min(delay, 2500 + retryCount * 1500);
+              if (retryCount >= 1) {
+                const cur = body.selectedModel || modelName;
+                const alt = cur === GEMINI_MODELS.TTS ? GEMINI_MODELS.TTS_STUDIO : cur === GEMINI_MODELS.TTS_STUDIO ? GEMINI_MODELS.TTS : null;
+                if (alt) nextBody = { ...body, selectedModel: alt };
+              }
+            }
             await new Promise(resolve => setTimeout(resolve, delay));
-            return this.geminiRequest(modelName, body, retryCount + 1, onRetry);
+            return this.geminiRequest(modelName, nextBody, retryCount + 1, onRetry);
           }
           
           // If we are at MAX_RETRIES or it's a non-retryable error, throw it

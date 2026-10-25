@@ -196,12 +196,14 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const baseVer = useRef(0);
   const lapRef = useRef<{ name: string; at: number }>({ name: '', at: 0 });
   /** Writes "how long the previous step took" into the activity log, so a slow step is easy to spot. */
+  const [stepTimes, setStepTimes] = useState<string[]>([]);
   const lap = (next: string) => {
     const now = Date.now();
     const prev = lapRef.current;
     if (prev.name) {
       const sec = Math.round((now - prev.at) / 1000);
       setProgress(p => ({ text: `⏱ ${prev.name}: ${sec}s`, percent: p?.percent ?? 0 }));
+      setStepTimes(t => [...t, `${prev.name}: ${sec}s`]);
     }
     lapRef.current = { name: next, at: now };
   };
@@ -413,6 +415,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
     doneIdx.current = part;
     setIsCombined(false);
     setBusy(true);
+    if (!resume) { setStepTimes([]); lapRef.current = { name: '', at: 0 }; }
     setErrorInfo(null);
     stageRef.current = 'start'; lapRef.current = { name: '', at: Date.now() };
     setResult(null);
@@ -488,7 +491,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           cues: partCues,
           coverage,
           part: splitActive ? { index: part, count: partCount, prevTail: partTails.current[part - 1] } : undefined,
-          concurrency: Math.min(6, getExtraKeys().length + 2),
+          concurrency: Math.min(6, Math.max(getExtraKeys().length + 1, apiChannelManager.getPoolKeys(isAdmin).length) + 1),
           dub,
           getFrames: async (a, b) => {
             const n = 5;
@@ -593,7 +596,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       const voiced: (Blob | undefined)[] = segments.map((_, i) => sceneAudios[i]);
       let finished = voiced.filter(Boolean).length;
       const pending = voiced.map((v, i) => (v ? -1 : i)).filter(i => i >= 0);
-      const nKeys = getExtraKeys().length + 1;
+      const nKeys = Math.max(getExtraKeys().length + 1, apiChannelManager.getPoolKeys(isAdmin).length);
       const CONC = nKeys >= 8 ? 5 : nKeys >= 4 ? 4 : nKeys >= 2 ? 3 : 2;
       let failure: unknown = null;
       const worker = async () => {
@@ -632,6 +635,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             voiced[i] = blob;
             finished++;
             console.info(`[Auto Recap] scene ${i + 1}/${segments.length} voiced in ${Math.round((Date.now() - t0) / 1000)}s`);
+            setStepTimes(t => [...t.filter(x => !x.startsWith(`  scene ${i + 1}:`)), `  scene ${i + 1}: ${Math.round((Date.now() - t0) / 1000)}s`]);
             setProgress(() => ({ text: `${isMm ? '၃/၄ အသံသွင်းနေသည်' : '3/4 Recording the voiceover'} (${finished}/${segments.length})`, percent: 50 + Math.round((finished / segments.length) * 40) }));
             // keep a resumable draft: the finished scenes from the start
             const prefix: Blob[] = [];
@@ -666,6 +670,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       baseVer.current++;
       if (splitActive) { partResults.current[part] = { segments: segments.map(sg => ({ ...sg })), sceneAudios: joined.sceneAudios }; setPartsVer(v => v + 1); }
       draftRef.current = null;
+      lap('done');
       setProgress({ text: isMm ? 'ပြီးပါပြီ ✅' : 'Done ✅', percent: 100 });
       completed = true;
       showToast(isMm ? '🎉 Auto Recap ပြီးပါပြီ — Voiceover နဲ့ SRT ကို ဒေါင်းလို့ရပါပြီ' : '🎉 Recap ready — download the voiceover and SRT', 'success');
@@ -1303,6 +1308,13 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           {isMm ? '✍️ အသံမသွင်းခင် ဇာတ်ညွှန်းကို ပြင်ခွင့်ရအောင် ခဏရပ်ပါ' : '✍️ Pause to let me edit the script before recording'}
         </label>
         </div>
+
+        {stepTimes.length > 0 && (
+          <div className="mt-3 rounded-2xl bg-white/[0.03] border border-white/10 px-4 py-3">
+            <div className="text-[11px] font-bold text-slate-300 mb-1">{isMm ? '⏱ အဆင့်တစ်ခုချင်း ကြာချိန်' : '⏱ Time per step'}</div>
+            <pre className="text-[11px] leading-relaxed font-mono text-slate-400 whitespace-pre-wrap">{stepTimes.join('\n')}</pre>
+          </div>
+        )}
 
         <details className="mt-3 rounded-2xl bg-white/[0.04] border border-white/10">
           <summary className="cursor-pointer list-none px-4 py-3 text-[12.5px] text-slate-200 flex items-center gap-2">
