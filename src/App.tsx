@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, Check, History, Trash2, Music, FileText, RefreshCw, ExternalLink, Clock, Lock, ArrowRight, ChevronRight, Search, FileVideo, Clipboard, Mic2, Play, Info, Sparkles, X, Calendar, Layers, Pause, RotateCcw, BookOpen, Eye, EyeOff, Zap, Crosshair, Clapperboard } from 'lucide-react';
 import { WelcomePage } from './components/WelcomePage';
@@ -9,15 +9,15 @@ import { ApiKeyModal } from './components/ApiKeyModal';
 import { ContentInput } from './components/ContentInput';
 import { VoiceConfig } from './components/VoiceConfig';
 import { OutputPreview } from './components/OutputPreview';
-import { AdminDashboard } from './components/AdminDashboard';
-import { VideoTranscriber } from './components/VideoTranscriber';
-import { AutoRecapStudio } from './components/AutoRecapStudio';
-import { MovieRecapStudio } from './components/MovieRecapStudio';
+const AdminDashboard = lazy(() => import('./components/AdminDashboard').then(m => ({ default: m.AdminDashboard })));
+const VideoTranscriber = lazy(() => import('./components/VideoTranscriber').then(m => ({ default: m.VideoTranscriber })));
+const AutoRecapStudio = lazy(() => import('./components/AutoRecapStudio').then(m => ({ default: m.AutoRecapStudio })));
+const MovieRecapStudio = lazy(() => import('./components/MovieRecapStudio').then(m => ({ default: m.MovieRecapStudio })));
 import { PrivacyPolicy } from './components/PrivacyPolicy';
 import { TermsOfService } from './components/TermsOfService';
 import { AnnouncementPanel } from './components/AnnouncementPanel';
 import { Modal, ModalType } from './components/Modal';
-import { BatchQueueModal } from './components/BatchQueueModal';
+const BatchQueueModal = lazy(() => import('./components/BatchQueueModal').then(m => ({ default: m.BatchQueueModal })));
 import { GeminiTTSService } from './services/geminiService';
 import { apiChannelManager, isPlausibleApiKey } from './services/apiChannelManager';
 import { assemblyAiService } from './services/assemblyAiService';
@@ -35,12 +35,17 @@ import { getCustomPronunciation, setCustomPronunciation } from './utils/pronunci
 import { getServerAuthStatus, serverLogin, serverRegister, hasServerSession, loginErrorText } from './services/serverAuth';
 import { db, storage, auth, signInAnonymously, signOut, onAuthStateChanged, doc, getDocFromServer, setDoc, updateDoc, onSnapshot, handleFirestoreError, OperationType, collection, query, where, orderBy, addDoc, deleteDoc, ref, uploadString, getDownloadURL, serverTimestamp, getCurrentUserId, getDocs } from './firebase';
 
+const LAZY_FALLBACK = <div className="p-10 grid place-items-center"><div className="w-8 h-8 border-2 border-white/15 border-t-amber-400 rounded-full animate-spin" /></div>;
+
 type Tab = 'generate' | 'movie-recap' | 'translator' | 'transcriber' | 'video-editor' | 'thumbnail' | 'history' | 'tools' | 'admin' | 'vbs-admin';
 
 export default function App() {
   const { language, t } = useLanguage();
 
   const [activeTab, setActiveTab] = useState<Tab>('generate');
+  // heavy tool tabs are only downloaded/mounted the first time they are opened (then they stay mounted)
+  const [seenTabs, setSeenTabs] = useState<Set<string>>(() => new Set(['generate']));
+  useEffect(() => { setSeenTabs(prev => (prev.has(activeTab) ? prev : new Set(prev).add(activeTab))); }, [activeTab]);
   const [hasEntered, setHasEntered] = useState(false);
   const [text, setText] = useState('');
   const [customRules, setCustomRules] = useState(() => getCustomPronunciation() || '');
@@ -2228,7 +2233,7 @@ export default function App() {
             </div>
           </div>
         ) : (isAdminRoute || isAdminConfigRoute) ? (
-          <AdminDashboard 
+          <Suspense fallback={LAZY_FALLBACK}><AdminDashboard 
             isAuthReady={isAuthReady} 
             onAdminLogin={(code) => {
               setIsAccessGranted(true);
@@ -2236,7 +2241,7 @@ export default function App() {
             }}
             configOnly={isAdminConfigRoute}
             isSessionSynced={isSessionSynced}
-          />
+          /></Suspense>
         ) : isPrivacyRoute ? (
           <PrivacyPolicy 
             onBack={() => {
@@ -2716,7 +2721,7 @@ export default function App() {
 
                     {/* Content View: Keep both mounted to preserve transcription state and media buffers */}
                     <div className={subtitlesSubTab === 'transcriber' ? 'block max-w-4xl mx-auto lg:mx-0' : 'hidden'}>
-                      <VideoTranscriber 
+                      {seenTabs.has('transcriber') && <Suspense fallback={LAZY_FALLBACK}><VideoTranscriber 
                         onTranscriptionComplete={(transcribedText) => {
                           setText(transcribedText);
                           handleTabSwitch('generate');
@@ -2731,16 +2736,16 @@ export default function App() {
                         userControl={userControl}
                         onNavigateToSettings={() => handleTabSwitch('tools')}
                         onProcessingStateChange={setIsTranscriberProcessing}
-                      />
+                      /></Suspense>}
                     </div>
 
                     <div className={subtitlesSubTab === 'auto-recap' ? 'block w-full' : 'hidden'}>
-                      <AutoRecapStudio
+                      {seenTabs.has('transcriber') && <Suspense fallback={LAZY_FALLBACK}><AutoRecapStudio
                         showToast={showToast}
                         isAdmin={isVbsAdmin}
                         isMm={language === 'mm'}
                         onNavigateToSettings={() => handleTabSwitch('tools')}
-                      />
+                      /></Suspense>}
                     </div>
                   </div>
                 )}
@@ -3238,12 +3243,12 @@ export default function App() {
                 aria-hidden={activeTab !== 'movie-recap'}
                 className={activeTab === 'movie-recap' ? 'block' : 'hidden'}
               >
-                <MovieRecapStudio
+                {seenTabs.has('movie-recap') && <Suspense fallback={LAZY_FALLBACK}><MovieRecapStudio
                   showToast={showToast}
                   isAdmin={isVbsAdmin}
                   isMm={language === 'mm'}
                   onNavigateToSettings={() => handleTabSwitch('tools')}
-                />
+                /></Suspense>}
               </div>
 
               {/* Tab 5: Settings / Tools (Kept alive in background) */}
@@ -3597,13 +3602,13 @@ export default function App() {
         vbsId={profile?.vbsId || userControl?.vbsId || vbsId}
         allowAdminKeys={globalSettings.allow_admin_keys}
       />
-      <BatchQueueModal 
+      {isBatchModalOpen && <Suspense fallback={LAZY_FALLBACK}><BatchQueueModal 
         isOpen={isBatchModalOpen}
         onClose={() => setIsBatchModalOpen(false)}
         onQueueItems={handleQueueBatch}
         currentConfig={config}
         isProcessing={isBatchProcessing}
-      />
+      /></Suspense>}
       <AnimatePresence>
         {toast && (
           <motion.div
