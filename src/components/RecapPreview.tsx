@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Play, Pause } from 'lucide-react';
 import { TITLE_LOOKS, type TitleLook } from '../utils/recapTextLayers';
-import { SUBTITLE_PRESETS, SUBTITLE_FONTS } from '../utils/subtitlePresets';
+import { SUBTITLE_PRESETS, fontFamilyFor } from '../utils/subtitlePresets';
 import type { LogoPosition } from '../utils/recapLogo';
 
 export interface PreviewSegment { start: number; end: number }
@@ -13,10 +13,10 @@ interface Props {
   aspect: string;
   framing: 'blurred-fit' | 'cover' | 'letterbox';
   blurAmount: number;
-  textLayers?: { text: string; start: number; end: number; x: number; y: number; size: number; color: string; stroke: boolean; box: boolean; look?: TitleLook }[];
+  textLayers?: { text: string; start: number; end: number; x: number; y: number; size: number; color: string; stroke: boolean; box: boolean; look?: TitleLook; font?: string }[];
   adjust?: { zoom: number; panX: number; panY: number; brightness: number; contrast: number; saturation: number };
   subPreset: string;
-  subFont?: 'noto' | 'padauk';
+  subFont?: string;
   captionsOn?: boolean;
   subY: number;
   subScale: number;
@@ -186,7 +186,7 @@ export const RecapPreview: React.FC<Props> = p => {
               top: `${p.subY}%`,
               transform: 'translateY(-50%)',
               fontSize: cq(pr.style.fontSize * p.subScale),
-              fontFamily: SUBTITLE_FONTS.find(f => f.id === (p.subFont || 'noto'))?.family,
+              fontFamily: fontFamilyFor(p.subFont || 'noto'),
               color: pr.style.fontColor,
               WebkitTextStroke: pr.style.strokeWidth > 0 ? `${cq(pr.style.strokeWidth)} ${pr.style.strokeColor}` : undefined,
               paintOrder: 'stroke fill',
@@ -211,10 +211,10 @@ export const RecapPreview: React.FC<Props> = p => {
               className="absolute pointer-events-none font-black leading-tight text-center"
               style={lk ? {
                 left: lk.full ? 0 : `${l.x}%`, top: `${l.y}%`, transform: lk.full ? 'translateY(-50%)' : 'translate(-50%, -50%)', width: lk.full ? '100%' : undefined, maxWidth: lk.full ? '100%' : '90%',
-                fontSize: `${l.size}cqw`, color: lk.fg, background: lk.bg, padding: '0.3em 0.45em', borderRadius: `${lk.radius}em`,
+                fontFamily: l.font ? `"${l.font}", "Noto Sans Myanmar", sans-serif` : undefined, fontSize: `${l.size}cqw`, color: lk.fg, background: lk.bg, padding: '0.3em 0.45em', borderRadius: `${lk.radius}em`,
               } : {
                 left: `${l.x}%`, top: `${l.y}%`, transform: 'translate(-50%, -50%)', maxWidth: '90%',
-                fontSize: `${l.size}cqw`, color: l.color,
+                fontFamily: l.font ? `"${l.font}", "Noto Sans Myanmar", sans-serif` : undefined, fontSize: `${l.size}cqw`, color: l.color,
                 WebkitTextStroke: l.stroke ? '0.3cqw #000' : undefined, paintOrder: 'stroke fill',
                 background: l.box ? 'rgba(0,0,0,0.6)' : undefined, padding: l.box ? '0.4cqw 1.2cqw' : undefined, borderRadius: l.box ? '1cqw' : undefined,
               }}

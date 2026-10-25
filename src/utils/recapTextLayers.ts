@@ -18,6 +18,8 @@ export interface TextLayer {
   anim?: 'none' | 'fade' | 'slide';
   /** ready-made title look; 'plain' uses colour / outline / box as set */
   look?: TitleLook;
+  /** CSS family of a font the user added in Settings (default: Noto Sans Myanmar) */
+  font?: string;
 }
 
 export type TitleLook = 'plain' | 'plate' | 'news' | 'banner' | 'sticker';
@@ -43,7 +45,7 @@ export async function renderTextLayerPng(l: TextLayer, W: number, H: number): Pr
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
   const font = Math.max(12, Math.round((W * l.size) / 100));
-  ctx.font = `bold ${font}px "Noto Sans Myanmar", "Padauk", sans-serif`;
+  ctx.font = `bold ${font}px ${l.font ? `"${l.font}", ` : ''}"Noto Sans Myanmar", "Padauk", sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';

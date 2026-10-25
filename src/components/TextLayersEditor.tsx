@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
+import { loadUserFonts, FONTS_EVENT, type UserFont } from '../utils/userFonts';
 import { newTextLayer, TITLE_LOOKS, type TextLayer } from '../utils/recapTextLayers';
 
 interface Props {
@@ -16,6 +17,13 @@ export const TextLayersEditor: React.FC<Props> = ({ layers, onChange, duration, 
     const id = layers.reduce((m, l) => Math.max(m, l.id), 0) + 1;
     onChange([...layers, newTextLayer(id, 0, Math.min(3, Math.max(1, duration)))]);
   };
+  const [fonts, setFonts] = useState<UserFont[]>([]);
+  useEffect(() => {
+    const refresh = () => { void loadUserFonts().then(setFonts); };
+    refresh();
+    window.addEventListener(FONTS_EVENT, refresh);
+    return () => window.removeEventListener(FONTS_EVENT, refresh);
+  }, []);
   const inp = 'w-full bg-slate-900 border border-white/10 rounded-lg px-2 py-1.5 text-[11px] text-white';
   const max = Math.max(1, Math.floor(duration));
   return (
@@ -59,6 +67,14 @@ export const TextLayersEditor: React.FC<Props> = ({ layers, onChange, duration, 
                   <option value="slide">{isMm ? 'အောက်ကနေ တက်လာ' : 'Slide up + fade'}</option>
                 </select>
               </label>
+              {fonts.length > 0 && (
+                <label className="col-span-full text-[10px] text-slate-400">{isMm ? 'ဖောင့်' : 'Font'}
+                  <select className={inp} value={l.font || ''} onChange={e => set(l.id, { font: e.target.value || undefined })}>
+                    <option value="">Noto Sans Myanmar</option>
+                    {fonts.map(f => <option key={f.id} value={f.family}>{f.name}</option>)}
+                  </select>
+                </label>
+              )}
               <div className="col-span-full flex flex-wrap gap-1.5">
                 {(['plain', 'plate', 'news', 'banner', 'sticker'] as const).map(k => (
                   <button key={k} type="button" onClick={() => set(l.id, { look: k })} className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold transition ${(l.look || 'plain') === k ? 'border-emerald-400 bg-emerald-400/10 text-white' : 'border-white/10 bg-white/[0.04] text-slate-300'}`}>

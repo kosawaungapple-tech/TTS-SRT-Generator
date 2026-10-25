@@ -25,6 +25,7 @@ import { getExtraKeys, soonestFreeSeconds } from '../services/geminiKeyPool';
 import { authHeader } from '../services/serverAuth';
 import { loadLogoImage, renderLogoPng, type LogoPosition } from '../utils/recapLogo';
 import { SUBTITLE_PRESETS, SUBTITLE_FONTS, getSubtitleStyle, type SubtitleFontId } from '../utils/subtitlePresets';
+import { loadUserFonts, FONTS_EVENT, type UserFont } from '../utils/userFonts';
 import { VOICE_OPTIONS } from '../constants';
 import type { SRTSubtitle } from '../types';
 
@@ -218,6 +219,17 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [subY, setSubY] = useState(84);
   const [subScale, setSubScale] = useState(1);
   const [subFont, setSubFont] = useState<SubtitleFontId>('noto');
+  const [myFonts, setMyFonts] = useState<UserFont[]>([]);
+  useEffect(() => {
+    const refresh = () => { void loadUserFonts().then(setMyFonts); };
+    refresh();
+    window.addEventListener(FONTS_EVENT, refresh);
+    return () => window.removeEventListener(FONTS_EVENT, refresh);
+  }, []);
+  // a font that was removed in Settings falls back to the default
+  useEffect(() => {
+    if (subFont !== 'noto' && subFont !== 'padauk' && !myFonts.some(f => f.family === subFont)) setSubFont('noto');
+  }, [myFonts, subFont]);
   const [captionsOn, setCaptionsOn] = useState(true);
   const [capTab, setCapTab] = useState<'presets' | 'font' | 'effects'>('presets');
   const [framing, setFraming] = useState<'blurred-fit' | 'cover' | 'letterbox'>('blurred-fit');
@@ -1566,7 +1578,14 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                         <span className="text-[10.5px] text-slate-300">{f.label}</span>
                       </button>
                     ))}
+                    {myFonts.map(f => (
+                      <button key={f.id} type="button" onClick={() => setSubFont(f.family)} className={`rounded-2xl border px-3 py-4 flex flex-col items-center gap-1.5 transition ${subFont === f.family ? 'border-emerald-400 bg-emerald-400/10' : 'border-white/10 bg-white/[0.04]'}`}>
+                        <span className="text-[22px] font-black text-white" style={{ fontFamily: `"${f.family}"` }}>မင်္ဂလာပါ Abc</span>
+                        <span className="text-[10.5px] text-slate-300 truncate max-w-full">{f.name}</span>
+                      </button>
+                    ))}
                   </div>
+                  <p className="mt-2 text-[11px] text-slate-500">{isMm ? 'ကိုယ်ပိုင်ဖောင့် ထပ်ထည့်ချင်ရင် ပြင်ဆင်ချက် (Settings) ထဲက "ကျွန်ုပ်၏ ဖောင့်များ" မှာ ထည့်ပါ။' : 'To add your own font, use "My fonts" in Settings.'}</p>
                 </div>
                 <div className={capTab === 'effects' ? '' : 'hidden'}>
                   <div className="grid grid-cols-2 gap-2">
