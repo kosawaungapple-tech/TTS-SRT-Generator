@@ -59,6 +59,13 @@ export const TextLayersEditor: React.FC<Props> = ({ layers, onChange, duration, 
                   <option value="slide">{isMm ? 'အောက်ကနေ တက်လာ' : 'Slide up + fade'}</option>
                 </select>
               </label>
+              <div className="col-span-full flex flex-wrap gap-1.5">
+                {(['plain', 'plate', 'news', 'banner', 'sticker'] as const).map(k => (
+                  <button key={k} type="button" onClick={() => set(l.id, { look: k })} className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold transition ${(l.look || 'plain') === k ? 'border-emerald-400 bg-emerald-400/10 text-white' : 'border-white/10 bg-white/[0.04] text-slate-300'}`}>
+                    {k === 'plain' ? (isMm ? 'ရိုးရိုး' : 'Plain') : TITLE_LOOKS[k].label[isMm ? 'mm' : 'en']}
+                  </button>
+                ))}
+              </div>
               <div className="flex items-end gap-3 text-[10px] text-slate-300">
                 <input type="color" value={l.color} onChange={e => set(l.id, { color: e.target.value })} className="w-7 h-7 rounded bg-transparent" />
                 <label className="flex items-center gap-1"><input type="checkbox" checked={l.stroke} onChange={e => set(l.id, { stroke: e.target.checked })} />{isMm ? 'အနား' : 'Outline'}</label>

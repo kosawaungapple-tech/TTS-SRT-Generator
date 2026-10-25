@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Play, Pause } from 'lucide-react';
-import { SUBTITLE_PRESETS } from '../utils/subtitlePresets';
+import { TITLE_LOOKS, type TitleLook } from '../utils/recapTextLayers';
+import { SUBTITLE_PRESETS, SUBTITLE_FONTS } from '../utils/subtitlePresets';
 import type { LogoPosition } from '../utils/recapLogo';
 
 export interface PreviewSegment { start: number; end: number }
@@ -12,9 +13,11 @@ interface Props {
   aspect: string;
   framing: 'blurred-fit' | 'cover' | 'letterbox';
   blurAmount: number;
-  textLayers?: { text: string; start: number; end: number; x: number; y: number; size: number; color: string; stroke: boolean; box: boolean }[];
+  textLayers?: { text: string; start: number; end: number; x: number; y: number; size: number; color: string; stroke: boolean; box: boolean; look?: TitleLook }[];
   adjust?: { zoom: number; panX: number; panY: number; brightness: number; contrast: number; saturation: number };
   subPreset: string;
+  subFont?: 'noto' | 'padauk';
+  captionsOn?: boolean;
   subY: number;
   subScale: number;
   /** Band of the source video to blur (fractions of the source height). */
@@ -126,7 +129,7 @@ export const RecapPreview: React.FC<Props> = p => {
   };
 
   const cue = recap ? recap.cues.find(c => time >= c.start && time < c.end) : null;
-  const sample = cue ? cue.text : recap ? '' : (p.isMm ? 'ဥပမာ စာတန်းထိုး' : 'Sample subtitle');
+  const sample = p.captionsOn === false ? '' : cue ? cue.text : recap ? '' : (p.isMm ? 'ဥပမာ စာတန်းထိုး' : 'Sample subtitle');
 
   return (
     <div>
@@ -183,16 +186,20 @@ export const RecapPreview: React.FC<Props> = p => {
               top: `${p.subY}%`,
               transform: 'translateY(-50%)',
               fontSize: cq(pr.style.fontSize * p.subScale),
+              fontFamily: SUBTITLE_FONTS.find(f => f.id === (p.subFont || 'noto'))?.family,
               color: pr.style.fontColor,
               WebkitTextStroke: pr.style.strokeWidth > 0 ? `${cq(pr.style.strokeWidth)} ${pr.style.strokeColor}` : undefined,
               paintOrder: 'stroke fill',
               background: pr.style.bgBoxEnabled ? pr.style.bgBoxColor : undefined,
               width: pr.style.bgBoxEnabled ? 'fit-content' : undefined,
               margin: pr.style.bgBoxEnabled ? '0 auto' : undefined,
-              borderRadius: pr.style.bgBoxEnabled ? '8px' : undefined,
+              borderRadius: pr.style.bgBoxEnabled ? `${pr.style.boxRadius ?? 12}px` : undefined,
+              padding: pr.style.bgBoxEnabled ? '0.3em 0.6em' : undefined,
             }}
           >
-            {sample}
+            {pr.style.accentColor && sample.includes(' ')
+              ? (() => { const w = sample.split(' '); const k = Math.ceil(w.length / 2); return <>{w.slice(0, k).join(' ')} <span style={{ color: pr.style.accentColor }}>{w.slice(k).join(' ')}</span></>; })()
+              : sample}
           </div>
         )}
 
@@ -202,9 +209,11 @@ export const RecapPreview: React.FC<Props> = p => {
             className="absolute pointer-events-none font-black leading-tight text-center"
             style={{
               left: `${l.x}%`, top: `${l.y}%`, transform: 'translate(-50%, -50%)', maxWidth: '90%',
-              fontSize: `${l.size}cqw`, color: l.color,
-              WebkitTextStroke: l.stroke ? '0.3cqw #000' : undefined, paintOrder: 'stroke fill',
-              background: l.box ? 'rgba(0,0,0,0.6)' : undefined, padding: l.box ? '0.4cqw 1.2cqw' : undefined, borderRadius: l.box ? '1cqw' : undefined,
+              fontSize: `${l.size}cqw`, color: l.look && l.look !== 'plain' ? TITLE_LOOKS[l.look].fg : l.color,
+              WebkitTextStroke: l.stroke && !(l.look && l.look !== 'plain') ? '0.3cqw #000' : undefined, paintOrder: 'stroke fill',
+              ...(l.look && l.look !== 'plain'
+                ? { background: TITLE_LOOKS[l.look].bg, padding: '0.5cqw 1.6cqw', borderRadius: `${TITLE_LOOKS[l.look].radius * l.size}cqw`, ...(TITLE_LOOKS[l.look].full ? { width: '100%', maxWidth: '100%' } : {}) }
+                : { background: l.box ? 'rgba(0,0,0,0.6)' : undefined, padding: l.box ? '0.4cqw 1.2cqw' : undefined, borderRadius: l.box ? '1cqw' : undefined }),
             }}
           >{l.text}</div>
         ))}

@@ -21,6 +21,10 @@ export interface SubtitleStyle {
   bgBoxColor: string;
   /** Vertical centre of the subtitle block, in percent of the canvas height. */
   positionY: number;
+  /** Second half of the words in every line is drawn in this colour (two-tone captions). */
+  accentColor?: string;
+  /** Corner radius of the box, px on a 1280px canvas (default 12). */
+  boxRadius?: number;
 }
 
 export function drawSubtitleOverlay(
@@ -71,7 +75,7 @@ export function drawSubtitleOverlay(
     const boxH = totalTextHeight + boxPaddingY * 2;
     const boxX = (canvasW - boxW) / 2;
     const boxY = posY - totalTextHeight / 2 - boxPaddingY;
-    const radius = 12 * scaleMultiplier;
+    const radius = (style.boxRadius ?? 12) * scaleMultiplier;
 
     ctx.save();
     ctx.fillStyle = style.bgBoxColor;
@@ -83,17 +87,29 @@ export function drawSubtitleOverlay(
 
   lines.forEach((line, lIdx) => {
     const lineY = posY - totalTextHeight / 2 + lIdx * lineHeight + lineHeight / 2;
-
-    if (style.strokeWidth > 0) {
-      ctx.strokeStyle = style.strokeColor;
-      ctx.lineWidth = style.strokeWidth * scaleMultiplier;
-      ctx.lineJoin = 'round';
-      ctx.miterLimit = 2;
-      ctx.strokeText(line, canvasW / 2, lineY);
-    }
-
-    ctx.fillStyle = style.fontColor;
-    ctx.fillText(line, canvasW / 2, lineY);
+    const words = line.split(' ');
+    // two-tone: draw the line as two runs, the first half in the main colour, the rest in the accent
+    const runs: { t: string; c: string }[] = style.accentColor && words.length > 1
+      ? (() => {
+          const k = Math.ceil(words.length / 2);
+          return [{ t: words.slice(0, k).join(' ') + ' ', c: style.fontColor }, { t: words.slice(k).join(' '), c: style.accentColor! }];
+        })()
+      : [{ t: line, c: style.fontColor }];
+    const widths = runs.map(r => ctx.measureText(r.t).width);
+    let x = canvasW / 2 - widths.reduce((a, b) => a + b, 0) / 2;
+    ctx.textAlign = 'left';
+    runs.forEach((r, ri) => {
+      if (style.strokeWidth > 0) {
+        ctx.strokeStyle = style.strokeColor;
+        ctx.lineWidth = style.strokeWidth * scaleMultiplier;
+        ctx.lineJoin = 'round';
+        ctx.miterLimit = 2;
+        ctx.strokeText(r.t, x, lineY);
+      }
+      ctx.fillStyle = r.c;
+      ctx.fillText(r.t, x, lineY);
+      x += widths[ri];
+    });
   });
 
   ctx.restore();
