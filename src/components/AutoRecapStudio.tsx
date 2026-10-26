@@ -599,6 +599,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       const nKeys = Math.max(getExtraKeys().length + 1, apiChannelManager.getPoolKeys(isAdmin).length);
       const CONC = nKeys >= 8 ? 5 : nKeys >= 4 ? 4 : nKeys >= 2 ? 3 : 2;
       let failure: unknown = null;
+      let condenseFails = 0;
       const worker = async () => {
         while (pending.length && !failure) {
           if (ctrl.signal.aborted) { failure = new Error('Cancelled'); return; }
@@ -616,10 +617,12 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                 // 1) cheap and instant: speed the voice up locally (pitch-preserving) up to 1.25x — no extra API calls
                 const MAX_FAST = 1.25;
                 setProgress(p => ({ text: `${isMm ? '၃/၄ ဗီဒီယိုအချိန်နဲ့ ကိုက်အောင် ညှိနေသည်' : '3/4 Fitting the narration to the video'} (${i + 1}/${segments.length})`, percent: p?.percent ?? 60 }));
-                if (dur / budget > MAX_FAST && !hasDubTags(segments[i].text)) {
+                if (dur / budget > MAX_FAST && !hasDubTags(segments[i].text) && condenseFails < 2) {
                   // 2) only if it is far too long: shorten the paragraph and voice it again (slow: 2 more API calls)
                   const target = Math.max(20, Math.round(segments[i].text.length * ((budget * MAX_FAST) / dur) * 0.97));
                   const shorter = await g.condenseNarration(segments[i].text, target, lang);
+                  // when the text model is overloaded this keeps failing: after two misses stop trying for this run (speeding the voice up still works)
+                  if (shorter) condenseFails = 0; else condenseFails++;
                   if (shorter) {
                     const b2 = await speakOnce(shorter, i);
                     const d2 = await durOf(b2);

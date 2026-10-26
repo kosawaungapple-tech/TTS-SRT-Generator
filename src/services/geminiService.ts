@@ -415,7 +415,7 @@ Output ONLY the shortened paragraph.
 ${text}`;
     for (const model of [GEMINI_MODELS.SCRIPT, GEMINI_MODELS.REWRITE]) {
       try {
-        const data = await this.geminiRequest(model, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.4 } }, 0, onRetry);
+        const data = await this.geminiRequest(model, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.4 }, maxRetries: 1 }, 0, onRetry); // optional step: fail fast, never hold up the voiceover
         const out = (data.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || '').join('') || '').trim().replace(/^```[a-z]*\n?|```$/g, '').trim();
         if (!out) continue;
         const bad = language === 'mm' ? /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u0e00-\u0e7f]/.test(out) : false;
@@ -436,7 +436,7 @@ Output ONLY the paragraph.
 ${text}`;
     for (const model of [GEMINI_MODELS.SCRIPT, GEMINI_MODELS.REWRITE]) {
       try {
-        const data = await this.geminiRequest(model, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.5 } }, 0, onRetry);
+        const data = await this.geminiRequest(model, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.5 }, maxRetries: 1 }, 0, onRetry);
         const out = (data.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || '').join('') || '').trim().replace(/^```[a-z]*\n?|```$/g, '').trim();
         if (!out) continue;
         const bad = language === 'mm' ? /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u0e00-\u0e7f]/.test(out) : false;
