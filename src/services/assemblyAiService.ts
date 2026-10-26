@@ -51,6 +51,9 @@ export interface AssemblyAITranscribeOptions {
   onProgress?: (step: string, percent?: number) => void;
 }
 
+/** Only the local dev server (server.ts) has /api/assemblyai/upload|transcribe|transcript/*; on Vercel those paths 404/405 and trying them first just wastes a round trip (and the whole file upload) before the direct call. */
+const BACKEND_AAI = typeof location !== 'undefined' && /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+
 class AssemblyAIService {
   private static STORAGE_KEY = 'vbs_assemblyai_api_key';
   private static YOUTUBE_COOKIES_KEY = 'vbs_youtube_cookies';
@@ -187,8 +190,8 @@ class AssemblyAIService {
 
     onProgress?.(10);
 
-    // Strategy 1: Try backend Express/Vercel proxy
-    try {
+    // Strategy 1: the local dev server's backend route (it does not exist on Vercel, where the browser talks to AssemblyAI directly)
+    if (BACKEND_AAI) try {
       const formData = new FormData();
       formData.append('file', file);
 
@@ -285,8 +288,8 @@ class AssemblyAIService {
       payload.language_detection = true;
     }
 
-    // Strategy 1: Try proxy endpoint
-    try {
+    // Strategy 1: the local dev server's backend route (not on Vercel)
+    if (BACKEND_AAI) try {
       const resp = await fetch('/api/assemblyai/transcribe', {
         method: 'POST',
         headers: {
@@ -331,8 +334,8 @@ class AssemblyAIService {
    * Poll transcript status until completed or failed
    */
   async pollTranscript(id: string, apiKey: string): Promise<AssemblyAITranscriptResponse> {
-    // Try proxy
-    try {
+    // Try the local dev server's route (not on Vercel)
+    if (BACKEND_AAI) try {
       const resp = await fetch(`/api/assemblyai/transcript/${id}`, {
         headers: { 'x-assemblyai-key': apiKey.trim() }
       });
@@ -364,8 +367,8 @@ class AssemblyAIService {
    */
   async getSrtContent(id: string, apiKey: string, charsPerCaption = 36): Promise<string> {
     const query = charsPerCaption ? `?chars_per_caption=${charsPerCaption}` : '';
-    // Try proxy
-    try {
+    // Try the local dev server's route (not on Vercel)
+    if (BACKEND_AAI) try {
       const resp = await fetch(`/api/assemblyai/transcript/${id}/srt${query}`, {
         headers: { 'x-assemblyai-key': apiKey.trim() }
       });
