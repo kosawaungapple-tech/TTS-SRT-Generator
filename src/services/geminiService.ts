@@ -75,11 +75,15 @@ export class GeminiTTSService {
         }
 
         let response: Response;
+        // A call that hangs (Gemini overloaded) would otherwise sit until the server gives up after minutes (504). Give up earlier and retry.
+        const timeoutCtrl = new AbortController();
+        const timeoutId = setTimeout(() => timeoutCtrl.abort(), body.isTts ? 120000 : 75000);
         try {
           response = await fetch('/api/gemini/proxy', {
             method: 'POST',
             headers,
             credentials: 'include',
+            signal: timeoutCtrl.signal,
             body: JSON.stringify({
               model: modelName,
               selectedModel: body.selectedModel || modelName,
@@ -90,7 +94,8 @@ export class GeminiTTSService {
             })
           });
         } catch (fetchErr) {
-          // Network error (Failed to fetch)
+          clearTimeout(timeoutId);
+          // Network error (Failed to fetch) or our own timeout
           if (retryCount < MAX_RETRIES) {
             const delay = Math.pow(2, retryCount) * 2000 + Math.random() * 1000;
             console.warn(`Gemini Proxy: Network error for ${modelName}. Retrying in ${Math.round(delay)}ms... (${retryCount + 1}/${MAX_RETRIES})`, fetchErr);
@@ -100,6 +105,7 @@ export class GeminiTTSService {
           }
           throw fetchErr;
         }
+        clearTimeout(timeoutId);
 
         const contentType = response.headers.get("content-type");
         let data: GeminiResponse & { error?: string; message?: string };
