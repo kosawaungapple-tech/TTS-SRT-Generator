@@ -6,7 +6,7 @@ import { GeminiTTSService, type RecapPlanScene } from '../services/geminiService
 import { assemblyAiService } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
 import { renderSceneRecap } from '../services/recapRenderService';
-import { isLongVideo, uploadVideoToWorker, fetchWorkerSpeech } from '../services/workerSession';
+import { isLongVideo, uploadVideoToWorker, fetchWorkerSpeech, transcribeWithWhisper } from '../services/workerSession';
 import { captureVideoFrames } from '../utils/videoFrames';
 import { applyLoudnessGain, audioBufferToWav, normalizeLoudness, renderProcessedAudio } from '../utils/audioUtils';
 import { generateSRT, downloadSrtFile, splitSentenceIntoCueBlocks } from '../utils/subtitleUtils';
@@ -182,6 +182,9 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   /** Talking videos: write the story from what is said only (no frame-by-frame looking): much faster */
   const [talkOnly, setTalkOnly] = useState(true);
   const [spokenLang, setSpokenLang] = useState('auto');
+  const [sttEngine, setSttEngine] = useState<'assembly' | 'whisper'>(() => { try { return localStorage.getItem('VBS_STT_ENGINE') === 'whisper' ? 'whisper' : 'assembly'; } catch { return 'assembly'; } });
+  const [whisperModel, setWhisperModel] = useState(() => { try { return localStorage.getItem('VBS_WHISPER_MODEL') || 'small'; } catch { return 'small'; } });
+  useEffect(() => { try { localStorage.setItem('VBS_STT_ENGINE', sttEngine); localStorage.setItem('VBS_WHISPER_MODEL', whisperModel); } catch { /* storage unavailable */ } }, [sttEngine, whisperModel]);
   const [style, setStyle] = useState('cinematic');
   const [length, setLength] = useState<'short' | 'medium' | 'full'>('medium');
   const [language, setLanguage] = useState<'mm' | 'en'>('mm');
@@ -437,21 +440,31 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       } else {
       // ---- 1. Listen (only for talking videos) ----------------------------------------------
       let cues: { start: number; end: number; text: string }[] = [];
-      const cueKey = `${file.name}|${file.size}|${spokenLang}`;
+      const cueKey = `${file.name}|${file.size}|${spokenLang}|${sttEngine}|${whisperModel}`;
       if (mode === 'speech' && splitActive && cuesRef.current && cuesRef.current.key === cueKey) {
         cues = cuesRef.current.cues; // an earlier part already listened to the whole film
       } else if (mode === 'speech') {
-        const key = assemblyAiService.getStoredApiKey();
+        const key = sttEngine === 'whisper' ? 'whisper' : assemblyAiService.getStoredApiKey();
         if (!key) {
           showToast(isMm ? 'Settings ထဲမှာ AssemblyAI API Key အရင်ထည့်ပါ' : 'Add your AssemblyAI API key in Settings first', 'error');
           onNavigateToSettings?.();
           return false;
         }
-        stageRef.current = '1 listen (AssemblyAI)'; lap('1 listen (AssemblyAI)');
+        stageRef.current = sttEngine === 'whisper' ? '1 listen (Whisper PC)' : '1 listen (AssemblyAI)'; lap(stageRef.current);
         setProgress({ text: isMm ? '၁/၄ စကားပြောကို နားထောင်နေသည်…' : '1/4 Listening to the speech…', percent: 3 });
         // Upload only the sound (small WAV) instead of the whole video: big uploads from a phone often die with "Load failed".
         // A long film is sent to the PC worker once, which extracts the speech (the browser cannot hold a whole movie in memory).
-        let speech: Blob;
+        let speech: Blob | null = null;
+        let whisperVid = '';
+        if (sttEngine === 'whisper') {
+          setProgress({ text: isMm ? '၁/၄ Whisper (PC) နဲ့ နားထောင်နေသည်… (မိနစ်အနည်းငယ်ကြာနိုင်သည်)' : '1/4 Listening with Whisper on your PC… (can take a few minutes)', percent: 8 });
+          if (longFilm) whisperVid = await ensureSession(ctrl.signal);
+          else speech = (await extractSpeechWav(file)) || file;
+          const w = await transcribeWithWhisper(longFilm ? { videoId: whisperVid } : { audio: speech as Blob }, spokenLang, whisperModel, ctrl.signal);
+          cues = w.cues;
+          if (!cues.length) throw new Error(isMm ? 'Whisper က စကားပြောကို မတွေ့ပါ' : 'Whisper found no speech');
+          cuesRef.current = { key: cueKey, cues };
+        } else {
         if (longFilm) {
           const vid = await ensureSession(ctrl.signal);
           setProgress({ text: isMm ? '၁/၄ စကားပြောကို ထုတ်ယူနေသည်…' : '1/4 Extracting the speech…', percent: 13 });
@@ -461,7 +474,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         }
         const tr = await assemblyAiService.processToSrt({
           apiKey: key,
-          file: speech,
+          file: speech as Blob,
           languageCode: spokenLang,
           autoLanguage: spokenLang === 'auto',
           speakerLabels: false,
@@ -470,6 +483,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         });
         cues = parseSrtCues(tr.srt);
         cuesRef.current = { key: cueKey, cues };
+        }
       }
 
       // Which stretch of the film this run covers (the whole film unless it is split into parts).
@@ -1201,12 +1215,34 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           </div>
           {mode === 'speech' && (
             <div>
+              <Label>{isMm ? 'စကားနားထောင်တဲ့ engine' : 'Speech-to-text engine'}</Label>
+              <Select icon={sttEngine === 'whisper' ? '🖥️' : '☁️'} value={sttEngine} onChange={v => setSttEngine(v as 'assembly' | 'whisper')}>
+                <option value="assembly">AssemblyAI (cloud)</option>
+                <option value="whisper">Whisper (PC worker · free)</option>
+              </Select>
+              {sttEngine === 'whisper' && (
+                <div className="mt-2">
+                  <Select icon="🧠" value={whisperModel} onChange={setWhisperModel}>
+                    <option value="small">small · {isMm ? 'မြန်' : 'fast'}</option>
+                    <option value="medium">medium</option>
+                    <option value="large-v3">large-v3 · {isMm ? 'အတိကျဆုံး' : 'most accurate'}</option>
+                  </Select>
+                  <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
+                    {isMm ? 'PC မှာ worker run ထားရမယ်၊ ပထမဆုံးအကြိမ် `pip install faster-whisper` လုပ်ပြီး model ကို အလိုလို ဒေါင်းပါမယ်။' : 'Needs the PC worker running and `pip install faster-whisper` once; the model downloads automatically on first use.'}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+          {mode === 'speech' && (
+            <div>
               <Label>{isMm ? 'စကားပြော ဘာသာစကား' : 'Spoken language'}</Label>
               <Select icon="✨" value={spokenLang} onChange={setSpokenLang}>
                 <option value="auto">Auto detect</option>
                 <option value="en">English</option><option value="th">Thai</option><option value="ja">Japanese</option>
                 <option value="ko">Korean</option><option value="zh">Chinese</option><option value="es">Spanish</option>
                 <option value="fr">French</option><option value="de">German</option>
+                {sttEngine === 'whisper' && <option value="my">Burmese · မြန်မာ</option>}
               </Select>
             </div>
           )}

@@ -154,6 +154,58 @@ console.log(`[Health Endpoint] http://localhost:${PORT}/health`);
 console.log('========================================================');
 console.log('Ready to process video rendering jobs from VlogsBySaw App!');
 
+
+// ---------------------------------------------------------------------------
+// Whisper speech-to-text (optional, free, runs on this PC). Needs Python + `pip install faster-whisper`.
+// The Python helper is embedded here and written next to the worker on first use.
+// ---------------------------------------------------------------------------
+const WHISPER_PY = `import sys, json
+from faster_whisper import WhisperModel
+audio, lang, model, device = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+def load(dev):
+    return WhisperModel(model, device=dev, compute_type=('float16' if dev == 'cuda' else 'int8'))
+try:
+    m = load('cuda' if device in ('auto', 'cuda') else 'cpu')
+    segs, info = m.transcribe(audio, language=None if lang in ('', 'auto') else lang, vad_filter=True, beam_size=5)
+    out = [{'start': round(s.start, 2), 'end': round(s.end, 2), 'text': s.text.strip()} for s in segs]
+except Exception:
+    if device == 'cpu':
+        raise
+    m = load('cpu')
+    segs, info = m.transcribe(audio, language=None if lang in ('', 'auto') else lang, vad_filter=True, beam_size=5)
+    out = [{'start': round(s.start, 2), 'end': round(s.end, 2), 'text': s.text.strip()} for s in segs]
+print('@@VBS@@' + json.dumps({'language': info.language, 'segments': out}, ensure_ascii=False))
+`;
+let pythonCmd = null;
+function findPython() {
+  if (pythonCmd !== null) return pythonCmd || null;
+  for (const c of process.platform === 'win32' ? ['python', 'py', 'python3'] : ['python3', 'python']) {
+    try {
+      const r = spawnSync(c, ['-c', 'import faster_whisper'], { stdio: 'ignore', timeout: 20000 });
+      if (r.status === 0) { pythonCmd = c; return c; }
+    } catch {}
+  }
+  pythonCmd = '';
+  return null;
+}
+let whisperAvailable = false;
+try { whisperAvailable = !!findPython(); } catch {}
+console.log(`[Whisper] ${whisperAvailable ? '🟢 faster-whisper ready' : '⚪ not installed (optional: pip install faster-whisper)'}`);
+
+function runWhisper(audioFile, lang, model) {
+  const py = findPython() || (pythonCmd = null, findPython());
+  if (!py) return Promise.reject(new Error('Whisper is not installed on this PC. Run: pip install faster-whisper (Whisper မထည့်ရသေးပါ)'));
+  const script = path.join(UPLOADS_DIR, 'vbs_whisper.py');
+  fs.writeFileSync(script, WHISPER_PY);
+  const safeModel = /^[A-Za-z0-9_.\/-]{1,60}$/.test(model || '') ? model : 'small';
+  const safeLang = /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(lang || '') ? lang.slice(0, 2) : 'auto';
+  return runCmd(py, [script, audioFile, safeLang, safeModel, process.env.WHISPER_DEVICE || 'auto']).then(out => {
+    const i = out.lastIndexOf('@@VBS@@');
+    if (i < 0) throw new Error('Whisper returned no result');
+    return JSON.parse(out.slice(i + 7));
+  });
+}
+
 function setCorsHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', HOSTED ? (process.env.ALLOWED_ORIGIN || '*') : '*');
   res.setHeader('Access-Control-Allow-Private-Network', 'true');
@@ -188,9 +240,10 @@ const server = http.createServer((req, res) => {
       status: 'online',
       engine: 'vbs-ffmpeg-worker',
       hosted: HOSTED,
-      version: '1.12.0',
+      version: '1.13.0',
       protected: !!WORKER_KEY,
       ffmpegAvailable: isFfmpegInstalled,
+      whisperAvailable,
       ffmpegVersion: ffmpegVersionStr,
       platform: os.platform(),
       hostname: os.hostname(),
@@ -572,6 +625,43 @@ const server = http.createServer((req, res) => {
         rs.on('close', () => { try { fs.rmSync(mp3, { force: true }); } catch {} });
       } catch (e) { json(500, { success: false, error: String(e.message || e).slice(0, 300) }); }
     });
+    return;
+  }
+
+  // 3c. Whisper speech-to-text on this PC: JSON {videoId} (long film already uploaded) or a raw audio body.
+  if (req.method === 'POST' && pathname === '/api/transcribe') {
+    const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+    if (HOSTED) { req.resume(); return json(403, { success: false, error: 'Whisper is only available on your own PC worker.' }); }
+    const lang = urlObj.searchParams.get('lang') || 'auto';
+    const model = urlObj.searchParams.get('model') || 'small';
+    const finish = async (file, cleanup) => {
+      try {
+        const r = await runWhisper(file, lang, model);
+        json(200, { success: true, ...r });
+      } catch (e) { json(500, { success: false, error: String(e.message || e).slice(0, 400) }); }
+      finally { if (cleanup) try { fs.rmSync(cleanup, { force: true }); } catch {} }
+    };
+    if ((req.headers['content-type'] || '').includes('application/json')) {
+      let body = '';
+      req.on('data', c => { body += c; if (body.length > 10000) req.destroy(); });
+      req.on('end', async () => {
+        let videoId = '';
+        try { videoId = JSON.parse(body || '{}').videoId; } catch {}
+        const src = sessionVideo(videoId);
+        if (!src) return json(404, { success: false, error: 'The uploaded video is no longer on the worker. Upload it again.' });
+        const wav = path.join(UPLOADS_DIR, `sess_${videoId}_whisper.wav`);
+        try { await runCmd('ffmpeg', ['-y', '-v', 'error', '-i', src, '-vn', '-ac', '1', '-ar', '16000', wav]); }
+        catch (e) { return json(500, { success: false, error: String(e.message || e).slice(0, 300) }); }
+        finish(wav, wav);
+      });
+      return;
+    }
+    const raw = path.join(UPLOADS_DIR, `tr_${crypto.randomBytes(6).toString('hex')}.bin`);
+    const out = fs.createWriteStream(raw);
+    req.pipe(out);
+    out.on('error', e => json(500, { success: false, error: 'Could not save the audio: ' + e.message }));
+    req.on('aborted', () => { out.destroy(); try { fs.rmSync(raw, { force: true }); } catch {} });
+    out.on('finish', () => finish(raw, raw));
     return;
   }
 

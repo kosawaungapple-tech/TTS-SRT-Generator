@@ -9,6 +9,7 @@ export interface WorkerHealthInfo {
   engine?: string;
   version?: string;
   ffmpegAvailable?: boolean;
+  whisperAvailable?: boolean;
   ffmpegVersion?: string;
   platform?: string;
   hostname?: string;
@@ -119,6 +120,7 @@ export class WorkerEngineService {
           engine: data.engine || 'vbs-ffmpeg-worker',
           version: data.version,
           ffmpegAvailable: data.ffmpegAvailable,
+          whisperAvailable: data.whisperAvailable,
           ffmpegVersion: data.ffmpegVersion,
           platform: data.platform,
           hostname: data.hostname,
@@ -146,6 +148,7 @@ export class WorkerEngineService {
             engine: data.engine || 'vbs-ffmpeg-worker',
             version: data.version,
             ffmpegAvailable: data.ffmpegAvailable,
+            whisperAvailable: data.whisperAvailable,
             ffmpegVersion: data.ffmpegVersion,
             platform: data.platform,
             hostname: data.hostname,
