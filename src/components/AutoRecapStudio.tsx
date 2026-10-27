@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Clapperboard, Upload, Download, Sparkles, Mic, FileText, Film, Loader2, CheckCircle2, ChevronDown, RefreshCw, Smartphone, Globe2, Gauge, Layers, ShieldAlert } from 'lucide-react';
 import { CopyrightModal } from './CopyrightModal';
 import { useActivity } from '../services/activity';
-import { GeminiTTSService, type RecapPlanScene } from '../services/geminiService';
+import { GeminiTTSService, cancelGeminiRequests, type RecapPlanScene } from '../services/geminiService';
 import { assemblyAiService } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
 import { renderSceneRecap } from '../services/recapRenderService';
@@ -218,6 +218,15 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const draftRef = useRef<{ segments: Segment[]; hasVideoTimes: boolean; audios?: Blob[] } | null>(null);
   const [canResume, setCanResume] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const renderAbortRef = useRef<AbortController | null>(null);
+  /** Stop button: cancels the running recap (every Gemini call, the PC worker call) or the video render. */
+  const stopAll = () => {
+    autoAbort.current = true;
+    abortRef.current?.abort();
+    renderAbortRef.current?.abort();
+    cancelGeminiRequests();
+    setProgress(null);
+  };
   const [errorInfo, setErrorInfo] = useState<string | null>(null);
   useActivity(busy, isMm ? 'Auto Recap လုပ်နေသည်' : 'Auto Recap running', { detail: progress?.text, percent: progress?.percent, failed: errorInfo });
   const stageRef = useRef('start');
@@ -486,6 +495,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         }
       }
 
+      if (ctrl.signal.aborted) throw new Error('Cancelled');
       // Which stretch of the film this run covers (the whole film unless it is split into parts).
       const bounds = splitActive ? await ensureBounds(cues, cueKey) : null;
       const pr = bounds ? { from: bounds[part], to: bounds[part + 1] } : { from: 0, to: duration };
@@ -529,6 +539,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
         }
       );
 
+      if (ctrl.signal.aborted) throw new Error('Cancelled');
       if (recap.segments?.length) {
         segments = pr.from > 0 ? recap.segments.map(sg => ({ ...sg, start: sg.start + pr.from, end: sg.end + pr.from })) : recap.segments;
       } else {
@@ -695,6 +706,12 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       completed = true;
       showToast(isMm ? '🎉 Auto Recap ပြီးပါပြီ — Voiceover နဲ့ SRT ကို ဒေါင်းလို့ရပါပြီ' : '🎉 Recap ready — download the voiceover and SRT', 'success');
     } catch (e) {
+      if (ctrl.signal.aborted || (e instanceof Error && e.message === 'Cancelled')) {
+        showToast(isMm ? '⏹ ရပ်လိုက်ပါပြီ' : '⏹ Stopped', 'success');
+        setProgress(null);
+        if (draftRef.current) setCanResume(true);
+        return false;
+      }
       console.error('[AutoRecap]', e);
       let msg = e instanceof Error ? e.message : String(e);
       if (/api key not valid|invalid api key|API_KEY_INVALID/i.test(msg)) {
@@ -904,6 +921,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       return;
     }
     setRendering(isMm ? 'စတင်နေသည်…' : 'Starting…');
+    const rctrl = new AbortController();
+    renderAbortRef.current = rctrl;
     try {
       const probe = document.createElement('video');
       const probeUrl = URL.createObjectURL(file);
@@ -942,10 +961,11 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       let videoId: string | undefined;
       if (longFilm) {
         setRendering(isMm ? 'PC Worker ဆီ ဗီဒီယို ပို့နေသည်…' : 'Sending the video to your PC worker…');
-        videoId = await ensureSession();
+        videoId = await ensureSession(rctrl.signal);
       }
       const scenes: RecapPlanScene[] = result.segments.map((s, i) => ({ fromCue: i, toCue: i, start: s.start, end: s.end, narration: stripDubTags(s.text), speed: s.speed || 0 }));
       const r = await renderSceneRecap({
+        signal: rctrl.signal,
         serverUrl,
         authToken,
         videoId,
@@ -979,7 +999,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       setVideoUrl(r.downloadUrl);
       showToast(isMm ? 'Recap ဗီဒီယို ပြီးပါပြီ' : 'Recap video ready', 'success');
     } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Render failed', 'error');
+      if (rctrl.signal.aborted || (e instanceof Error && (e.message === 'Cancelled' || e.name === 'AbortError'))) showToast(isMm ? '⏹ ရပ်လိုက်ပါပြီ' : '⏹ Stopped', 'success');
+      else showToast(e instanceof Error ? e.message : 'Render failed', 'error');
     } finally {
       setRendering(null);
     }
@@ -1353,6 +1374,15 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           {busy ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
           {busy ? (isMm ? 'လုပ်ဆောင်နေသည်…' : 'Working…') : splitActive ? (isMm ? `အပိုင်း ${curPart + 1}/${partCount} စတင်မည်` : `Start part ${curPart + 1} of ${partCount}`) : isMm ? 'Auto Recap စတင်မည်' : 'Start Auto Recap'}
         </button>
+        {busy && (
+          <button
+            type="button"
+            onClick={stopAll}
+            className="mt-2 w-full h-11 rounded-2xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/40 text-red-200 text-[13px] font-bold flex items-center justify-center gap-2 transition active:scale-[0.99]"
+          >
+            ⏹ {isMm ? 'ရပ်မည်' : 'Stop'}
+          </button>
+        )}
 
         <label className="mt-2 flex items-center gap-2.5 rounded-2xl bg-white/[0.04] border border-white/10 px-4 py-3 text-[12.5px] text-slate-200 cursor-pointer">
           <input type="checkbox" checked={reviewScript} onChange={e => setReviewScript(e.target.checked)} className="accent-amber-400 w-4 h-4" />
@@ -1870,6 +1900,11 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
               {rendering ? <Loader2 size={16} className="animate-spin" /> : <Film size={16} />}
               {rendering || (isMm ? 'Recap ဗီဒီယို ထုတ်မည်' : 'Render recap video')}
             </button>
+            {rendering && (
+              <button type="button" onClick={stopAll} className="mt-2 w-full h-10 rounded-2xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/40 text-red-200 text-[12.5px] font-bold transition">
+                ⏹ {isMm ? 'ရပ်မည်' : 'Stop'}
+              </button>
+            )}
             {videoUrl && (
               <button type="button" onClick={downloadVideo} disabled={dlBusy} className="mt-3 w-full flex items-center justify-center gap-2 h-12 rounded-2xl bg-emerald-400 text-black text-[13px] font-extrabold disabled:opacity-60">
                 {dlBusy ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}{isMm ? 'Recap ဗီဒီယို ဒေါင်းမည် (.mp4)' : 'Download recap video (.mp4)'}

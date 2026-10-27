@@ -44,6 +44,16 @@ export interface RecapPlanScene {
   speed?: number;
 }
 
+// "Stop" button: cancelGeminiRequests() aborts every call in flight and makes any call that was already started
+// (including ones waiting to retry) fail with 'Cancelled' instead of carrying on.
+let geminiEpoch = 0;
+const liveGeminiCalls = new Set<AbortController>();
+export function cancelGeminiRequests(): void {
+  geminiEpoch++;
+  for (const c of liveGeminiCalls) c.abort();
+  liveGeminiCalls.clear();
+}
+
 export class GeminiTTSService {
   private apiKey: string;
   private isAdmin: boolean;
@@ -55,11 +65,13 @@ export class GeminiTTSService {
 
   private async geminiRequest(
     modelName: string, 
-    body: { contents: unknown[]; generationConfig?: unknown; selectedModel?: string; isTts?: boolean; maxRetries?: number }, 
+    body: { contents: unknown[]; generationConfig?: unknown; selectedModel?: string; isTts?: boolean; maxRetries?: number; _epoch?: number }, 
     retryCount: number = 0,
     onRetry?: (seconds: number, message: string) => void
   ): Promise<GeminiResponse> {
     const executeRequest = async (key: string) => {
+      if (body._epoch === undefined) body._epoch = geminiEpoch;
+      if (body._epoch !== geminiEpoch) throw new Error('Cancelled');
       console.log(`Gemini Proxy Request [${modelName}]. Key:`, key ? `${key.substring(0, 4)}...${key.substring(key.length - 4)}` : "ADMIN_POOL (Server-side)");
       
       const MAX_RETRIES = body.maxRetries ?? 5; // Increased retries for better stability
@@ -78,6 +90,7 @@ export class GeminiTTSService {
         // A call that hangs (Gemini overloaded) would otherwise sit until the server gives up after minutes (504). Give up earlier and retry.
         const timeoutCtrl = new AbortController();
         const timeoutId = setTimeout(() => timeoutCtrl.abort(), body.isTts ? 120000 : 75000);
+        liveGeminiCalls.add(timeoutCtrl);
         try {
           response = await fetch('/api/gemini/proxy', {
             method: 'POST',
@@ -95,6 +108,8 @@ export class GeminiTTSService {
           });
         } catch (fetchErr) {
           clearTimeout(timeoutId);
+          liveGeminiCalls.delete(timeoutCtrl);
+          if (body._epoch !== geminiEpoch) throw new Error('Cancelled');
           // Network error (Failed to fetch) or our own timeout
           if (retryCount < MAX_RETRIES) {
             const delay = Math.pow(2, retryCount) * 2000 + Math.random() * 1000;
@@ -106,6 +121,7 @@ export class GeminiTTSService {
           throw fetchErr;
         }
         clearTimeout(timeoutId);
+        liveGeminiCalls.delete(timeoutCtrl);
 
         const contentType = response.headers.get("content-type");
         let data: GeminiResponse & { error?: string; message?: string };
