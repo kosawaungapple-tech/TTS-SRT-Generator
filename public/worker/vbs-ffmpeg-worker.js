@@ -162,18 +162,25 @@ console.log('Ready to process video rendering jobs from VlogsBySaw App!');
 const WHISPER_PY = `import sys, json
 from faster_whisper import WhisperModel
 audio, lang, model, device = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-def load(dev):
-    return WhisperModel(model, device=dev, compute_type=('float16' if dev == 'cuda' else 'int8'))
-try:
-    m = load('cuda' if device in ('auto', 'cuda') else 'cpu')
+def log(m):
+    sys.stderr.write('[Whisper] ' + m + '\\n'); sys.stderr.flush()
+def run(dev):
+    log('loading model ' + model + ' on ' + dev + ' (first time = download, please wait)')
+    m = WhisperModel(model, device=dev, compute_type=('float16' if dev == 'cuda' else 'int8'))
+    log('model ready, listening...')
     segs, info = m.transcribe(audio, language=None if lang in ('', 'auto') else lang, vad_filter=True, beam_size=5)
-    out = [{'start': round(s.start, 2), 'end': round(s.end, 2), 'text': s.text.strip()} for s in segs]
-except Exception:
+    out = []
+    for s in segs:
+        out.append({'start': round(s.start, 2), 'end': round(s.end, 2), 'text': s.text.strip()})
+        log('%.0fs / %.0fs' % (s.end, info.duration))
+    return out, info
+try:
+    out, info = run('cuda' if device in ('auto', 'cuda') else 'cpu')
+except Exception as e:
     if device == 'cpu':
         raise
-    m = load('cpu')
-    segs, info = m.transcribe(audio, language=None if lang in ('', 'auto') else lang, vad_filter=True, beam_size=5)
-    out = [{'start': round(s.start, 2), 'end': round(s.end, 2), 'text': s.text.strip()} for s in segs]
+    log('GPU not usable (' + str(e)[:80] + '), using CPU')
+    out, info = run('cpu')
 print('@@VBS@@' + json.dumps({'language': info.language, 'segments': out}, ensure_ascii=False))
 `;
 let pythonCmd = null;
@@ -199,10 +206,23 @@ function runWhisper(audioFile, lang, model) {
   fs.writeFileSync(script, WHISPER_PY);
   const safeModel = /^[A-Za-z0-9_.\/-]{1,60}$/.test(model || '') ? model : 'small';
   const safeLang = /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(lang || '') ? lang.slice(0, 2) : 'auto';
-  return runCmd(py, [script, audioFile, safeLang, safeModel, process.env.WHISPER_DEVICE || 'auto']).then(out => {
-    const i = out.lastIndexOf('@@VBS@@');
-    if (i < 0) throw new Error('Whisper returned no result');
-    return JSON.parse(out.slice(i + 7));
+  console.log(`[Whisper] job started (model ${safeModel}, language ${safeLang})`);
+  const t0 = Date.now();
+  return new Promise((resolve, reject) => {
+    const p = spawn(py, ['-u', script, audioFile, safeLang, safeModel, process.env.WHISPER_DEVICE || 'auto'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '', err = '';
+    const beat = setInterval(() => console.log(`[Whisper] still working... ${Math.round((Date.now() - t0) / 1000)}s`), 20000);
+    p.stdout.on('data', d => { out += d.toString(); });
+    p.stderr.on('data', d => { const t = d.toString(); err += t; process.stdout.write(t.endsWith('\n') ? t : t + '\n'); });
+    p.on('error', e => { clearInterval(beat); reject(new Error(`Python could not start (${e.message})`)); });
+    p.on('close', code => {
+      clearInterval(beat);
+      if (code !== 0) return reject(new Error(`Whisper exited with ${code}: ${err.slice(-600)}`));
+      const i = out.lastIndexOf('@@VBS@@');
+      if (i < 0) return reject(new Error('Whisper returned no result'));
+      console.log(`[Whisper] done in ${Math.round((Date.now() - t0) / 1000)}s`);
+      try { resolve(JSON.parse(out.slice(i + 7))); } catch (e) { reject(e); }
+    });
   });
 }
 
@@ -240,7 +260,7 @@ const server = http.createServer((req, res) => {
       status: 'online',
       engine: 'vbs-ffmpeg-worker',
       hosted: HOSTED,
-      version: '1.13.0',
+      version: '1.13.1',
       protected: !!WORKER_KEY,
       ffmpegAvailable: isFfmpegInstalled,
       whisperAvailable,
