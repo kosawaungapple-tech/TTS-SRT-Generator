@@ -179,6 +179,8 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [file, setFile] = useState<File | null>(null);
   const [duration, setDuration] = useState(0);
   const [mode, setMode] = useState<SourceMode>('speech');
+  /** Talking videos: write the story from what is said only (no frame-by-frame looking): much faster */
+  const [talkOnly, setTalkOnly] = useState(true);
   const [spokenLang, setSpokenLang] = useState('auto');
   const [style, setStyle] = useState('cinematic');
   const [length, setLength] = useState<'short' | 'medium' | 'full'>('medium');
@@ -493,6 +495,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           part: splitActive ? { index: part, count: partCount, prevTail: partTails.current[part - 1] } : undefined,
           concurrency: Math.min(6, Math.max(getExtraKeys().length + 1, apiChannelManager.getPoolKeys(isAdmin).length) + 1),
           dub,
+          talkOnly: mode === 'speech' && talkOnly && partCues.length >= 3,
           getFrames: async (a, b) => {
             const n = 5;
             return captureVideoFrames(file, Array.from({ length: n }, (_, i) => pr.from + a + ((b - a) * (i + 0.5)) / n), 448, 0.6);
@@ -1040,6 +1043,15 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
               ? isMm ? 'အသံထဲက စကားကို အရင်နားထောင် (AssemblyAI) ပြီး ပုံနဲ့တွဲကြည့်ကာ Recap လုပ်မည်။' : 'Listens to the speech first, then reads it together with the picture.'
               : isMm ? 'Recap ထားပြီးသား / အသံမပါ ဗီဒီယိုအတွက် — စကားမနားထောင်ဘဲ ပုံကိုပဲကြည့်ပြီး Recap အသစ် ပြန်လုပ်မည်။' : 'For already-recapped or silent videos — skips the speech, works from the picture only.'}
           </p>
+          {mode === 'speech' && (
+            <label className="mt-3 flex items-start gap-2.5 rounded-2xl bg-white/[0.04] border border-white/10 px-4 py-3 text-[12.5px] text-slate-200 cursor-pointer">
+              <input type="checkbox" checked={talkOnly} onChange={e => setTalkOnly(e.target.checked)} className="accent-amber-400 w-4 h-4 mt-0.5" />
+              <span>
+                {isMm ? '⚡ စကားပြောကိုပဲ အခြေခံပြီး ဇာတ်လမ်းဖွဲ့မည် (ပိုမြန်)' : '⚡ Tell the story from the dialogue only (faster)'}
+                <span className="block text-[11px] text-slate-500 mt-0.5">{isMm ? 'ပုံကို တစ်ဖရိန်ချင်း မကြည့်တော့ဘဲ စကားပြောကနေ ဇာတ်လမ်းကို လှအောင်ဖွဲ့ပါတယ်။ ပုံထဲက အလုပ်တွေပါ ထည့်ချင်ရင် ပိတ်ပါ။' : 'Skips looking at the frames and retells what is said as a story. Turn off to include what is only visible on screen.'}</span>
+              </span>
+            </label>
+          )}
         </div>
 
         {/* Coverage */}
