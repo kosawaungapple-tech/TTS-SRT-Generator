@@ -49,6 +49,8 @@ export interface RecapScriptOptions {
   flow?: boolean;
   /** Faster run: longer watch windows, fewer sections/calls and one polish pass instead of two (a little less detail). */
   fast?: boolean;
+  /** Talking videos: build the story from what is SAID only (no frames, no looking at the picture): much faster, and the retelling follows the dialogue. */
+  talkOnly?: boolean;
   /** Dub style: key lines are spoken by the characters (tagged `[Name|♂] line` / `[Name|♀] line`), the rest is narration */
   dub?: boolean;
   onStage?: (s: RecapStage) => void;
@@ -192,7 +194,7 @@ async function watchVideo(
   const dur = opts.sourceSeconds as number;
   // Talky videos: the dialogue already carries the story, so look at fewer, longer windows (half the calls).
   const spoken = (opts.cues || []).reduce((n, c) => n + c.text.replace(/\s+/g, '').length, 0);
-  const winSec = opts.fast ? (spoken / Math.max(1, dur) >= 4 ? 60 : 30) : (spoken / Math.max(1, dur) >= 4 ? 40 : 20);
+  const winSec = opts.talkOnly ? 90 : opts.fast ? (spoken / Math.max(1, dur) >= 4 ? 60 : 30) : (spoken / Math.max(1, dur) >= 4 ? 40 : 20);
   // a feature film gets more (and longer) windows than a short clip
   const count = Math.max(1, Math.min(dur > 1800 ? 60 : 30, Math.ceil(dur / winSec)));
   const len = dur / count;
@@ -208,12 +210,18 @@ async function watchVideo(
   const runWindow = async (i: number) => {
     const a = i * len;
     const b = (i + 1) * len;
-    const frames = (await opts.getFrames!(a, b).catch(() => [])).slice(0, len > 30 ? 8 : 6);
+    const frames = opts.talkOnly ? [] : (await opts.getFrames!(a, b).catch(() => [])).slice(0, len > 30 ? 8 : 6);
     const dialogue = (opts.cues || [])
       .filter(c => c.start < b && c.end > a)
       .map(c => `[${fmtT(c.start)}] ${c.text.trim().replace(/\s+/g, ' ')}`)
       .join('\n');
-    const prompt = `You are a film editor WATCHING a video before writing its recap. This is the part from ${fmtT(a)} to ${fmtT(b)} (${frames.length} frames attached in time order).
+    const prompt = opts.talkOnly ? `You are a story editor READING the dialogue of a video (from ${fmtT(a)} to ${fmtT(b)}) before writing its recap. There is no picture: rely only on what is said.
+From the dialogue work out who is speaking about what, what happens, what changes and what the feelings are. Do not invent places or actions that the words do not imply; if something is unclear say so.
+Return JSON: {"setting":"place/time/kind of story if the words show it","characters":[{"name":"name as spoken, or a short description like 'the old man'","who":"role, short"}],"events":[{"t":<seconds from the start of the video, taken from the dialogue timestamps below>,"text":"what happens or is revealed, in one or two sentences"}]}
+${len > 30 ? "8-14" : "4-8"} events, chronological; do not skip turning points. ${LANG_RULE(language)}
+
+DIALOGUE IN THIS PART:
+${dialogue || '(none)'}` : `You are a film editor WATCHING a video before writing its recap. This is the part from ${fmtT(a)} to ${fmtT(b)} (${frames.length} frames attached in time order).
 Describe what really happens: who is on screen and what they do, where, what changes, and what is said (dialogue below). Use only what the frames and dialogue show; if something is unclear say so instead of guessing.
 Return JSON: {"setting":"place/time/kind of story if visible","characters":[{"name":"name as spoken/shown, or a short visual description like 'the man in the red jacket'","who":"role, short"}],"events":[{"t":<seconds from video start>,"text":"one concrete sentence: who does what, the visible cause/result, and the visible emotion or tension (expression, tone of voice, danger, relief)"}]}
 ${len > 30 ? "8-14" : "4-8"} events, chronological; do not skip small turning points. ${LANG_RULE(language)}
@@ -583,7 +591,7 @@ export async function generateGroundedRecap(
   const style = opts.style || 'Cinematic movie recap';
   const tone = opts.tone || 'Engaging, dramatic';
   const minutes = opts.targetMinutes ?? 4;
-  const rules = voiceRules(language, style, tone) + partRule(opts.part, language) + dubRule(opts.dub) + flowRule(opts.flow, language);
+  const rules = voiceRules(language, style, tone) + partRule(opts.part, language) + dubRule(opts.dub) + flowRule(opts.flow, language) + (opts.talkOnly ? '\nThe story comes from the dialogue only: retell it as a flowing, vivid story (who wants what, the conflict, the turns, the feelings) in your own beautiful storytelling words. Do not write it as a transcript or as a list of who said what.' : '');
   const partCtx = opts.part && opts.part.count > 1 ? { first: opts.part.index === 0, last: opts.part.index >= opts.part.count - 1 } : undefined;
 
   if (opts.mode === 'quick') {
@@ -606,7 +614,7 @@ ${source.slice(0, 24000)}`,
   const bible = watching
     ? await watchVideo(llm, opts, language)
     : await buildBible(llm, source, language, opts.frames, opts.onStage);
-  if (watching) await unifyCharacters(llm, bible, language);
+  if (watching && !opts.talkOnly) await unifyCharacters(llm, bible, language);
   const totalChars = computeTargetChars(
     language,
     minutes,

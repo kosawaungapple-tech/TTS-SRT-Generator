@@ -1277,6 +1277,7 @@ ${list.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.te
       dub?: boolean;
       flow?: boolean;
       fast?: boolean;
+      talkOnly?: boolean;
       onStage?: (s: RecapStage) => void;
     }
   ): Promise<{ text: string; segments?: RecapSegment[] }> {
@@ -1346,6 +1347,7 @@ ${list.map(cue => `[${cue.id}] ${cue.speaker ? `(${cue.speaker}) ` : ''}${cue.te
       dub: options?.dub,
       flow: options?.flow,
       fast: options?.fast,
+      talkOnly: options?.talkOnly,
       onStage: options?.onStage,
     });
   }
