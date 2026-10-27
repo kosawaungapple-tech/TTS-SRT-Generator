@@ -574,9 +574,11 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       const totalTarget = duration > 0 ? ((prRef.current ? prRef.current.to - prRef.current.from : duration)) * coverageFactor : 0;
       const totalChars = segments.reduce((n, sg) => n + sg.text.length, 0) || 1;
       const lang: 'mm' | 'en' = language === 'en' ? 'en' : 'mm';
+      // One shared AudioContext for measuring clip lengths (creating and closing a new one per clip, several at a time, can hit the browser's limit).
+      let durCtx: AudioContext | null = null;
       const durOf = async (blob: Blob) => {
-        const c = new Ctx0();
-        try { return (await c.decodeAudioData(await blob.arrayBuffer())).duration; } finally { void c.close(); }
+        if (!durCtx) durCtx = new Ctx0();
+        return (await durCtx.decodeAudioData(await blob.arrayBuffer())).duration;
       };
       const speakWith = async (text: string, i: number, voiceId: string, style: string) => {
         const r = await g.generateTTS(text, { voiceId, speed, pitch: 0, volume: 100, vocalStyle: 'Expressive', styleInstruction: style }, undefined, undefined, (s, msg) =>
@@ -675,7 +677,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
           } catch (e) { failure = failure || e; }
         }
       };
-      await Promise.all(Array.from({ length: CONC }, () => worker()));
+      try { await Promise.all(Array.from({ length: CONC }, () => worker())); } finally { const c = durCtx as AudioContext | null; if (c) void c.close().catch(() => undefined); }
       if (failure) throw failure;
       sceneAudios.length = 0;
       voiced.forEach(v => { if (v) sceneAudios.push(v); });
