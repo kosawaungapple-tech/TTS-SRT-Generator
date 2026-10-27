@@ -23,6 +23,15 @@ export class ErrorBoundary extends (Component as any) {
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('Uncaught error:', error, errorInfo);
+    if (/dynamically imported module|importing a module script failed|loading chunk|expected a javascript.*module script/i.test(String(error?.message || error))) {
+      try {
+        const last = Number(sessionStorage.getItem('vbs_chunk_reload') || 0);
+        if (Date.now() - last > 30000) {
+          sessionStorage.setItem('vbs_chunk_reload', String(Date.now()));
+          window.location.reload();
+        }
+      } catch { window.location.reload(); }
+    }
   }
 
   handleReset = () => {
