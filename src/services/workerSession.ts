@@ -49,3 +49,24 @@ export async function fetchWorkerSpeech(videoId: string): Promise<Blob> {
   }
   return await r.blob();
 }
+
+export interface WhisperCue { start: number; end: number; text: string }
+
+/** Whisper on the PC worker. Pass an uploaded long film (videoId) or the speech audio itself. Returns timed cues. */
+export async function transcribeWithWhisper(src: { videoId: string } | { audio: Blob }, lang: string, model = 'small', signal?: AbortSignal): Promise<{ cues: WhisperCue[]; language: string }> {
+  const url = `${base()}/api/transcribe?lang=${encodeURIComponent(lang)}&model=${encodeURIComponent(model)}`;
+  let r: Response;
+  try {
+    r = 'videoId' in src
+      ? await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ videoId: src.videoId }), signal })
+      : await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', ...authHeaders() }, body: src.audio, signal });
+  } catch (e) {
+    if ((e as Error)?.name === 'AbortError') throw e;
+    throw new Error(`Cannot reach the PC worker (${base()}). Start it first. (PC Worker ကို မချိတ်နိုင်ပါ)`);
+  }
+  const d = await r.json().catch(() => ({} as { error?: string }));
+  if (r.status === 404 && !('segments' in d)) throw new Error('Your PC worker is too old for Whisper. Download the latest vbs-ffmpeg-worker.js (v1.13.0) and restart it. (Worker အဟောင်းဖြစ်နေသည်)');
+  if (!r.ok || !d.success) throw new Error(d.error || `Whisper failed (HTTP ${r.status})`);
+  const cues = (d.segments as WhisperCue[]).filter(c => c.text && c.end > c.start);
+  return { cues, language: d.language || '' };
+}
