@@ -5,6 +5,8 @@ import { WelcomePage } from './components/WelcomePage';
 import { Header } from './components/Header';
 import { MyFontsCard } from './components/MyFontsCard';
 import { TelegramLinkCard } from './components/TelegramLinkCard';
+import { SoundSettingsCard } from './components/SoundSettingsCard';
+import { playUiSound, installClickSounds } from './utils/uiSound';
 import { loadUserFonts } from './utils/userFonts';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { ContentInput } from './components/ContentInput';
@@ -305,8 +307,10 @@ export default function App() {
 
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
     setToast({ message, type });
+    playUiSound(type === 'error' ? 'error' : /ပြီးပါပြီ|ပြီးပြီ|ready|done|✅|🎉/i.test(message) ? 'done' : type === 'success' ? 'success' : 'notify');
     setTimeout(() => setToast(null), 3500);
   }, []);
+  useEffect(() => installClickSounds(), []);
 
   const isUsingAdminKey = useMemo(() => {
     // 0. Priority bypass for Admins
@@ -3404,6 +3408,7 @@ export default function App() {
                   </div>
 
                   {/* My fonts (captions / titles) */}
+                  <SoundSettingsCard isMm={language === 'mm'} />
                   <TelegramLinkCard isMm={language === 'mm'} showToast={showToast} />
                   <MyFontsCard isMm={language === 'mm'} showToast={showToast} />
 
