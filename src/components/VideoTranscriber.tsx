@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { useActivity } from '../services/activity';
 import { GeminiTTSService } from '../services/geminiService';
+import { ThumbnailPromptsCard } from './ThumbnailPromptsCard';
 import { assemblyAiService, AssemblyAITranscriptResponse } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
 import { logActivity } from '../services/activityService';
@@ -811,6 +812,13 @@ export const VideoTranscriber: React.FC<VideoTranscriberProps> = ({
             animate={{ opacity: 1, y: 0 }}
             className="space-y-6"
           >
+            <ThumbnailPromptsCard
+              getText={() => assemblyResult.transcript?.text || assemblyResult.srt}
+              getService={() => new GeminiTTSService((isAdmin || apiChannelManager.getSettings().useAdminKeys) ? '' : (getApiKey() || '').trim(), isAdmin)}
+              isMm={isMm}
+              titleLanguage={isMm ? 'mm' : 'en'}
+              showToast={showToast}
+            />
             {/* Pro Burmese Translation Panel Card */}
             <div className="bg-gradient-to-br from-emerald-950/30 via-[#0a1512] to-black rounded-[28px] p-6 sm:p-7 border border-emerald-500/30 shadow-2xl relative overflow-hidden">
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
