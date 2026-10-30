@@ -70,3 +70,20 @@ export async function transcribeWithWhisper(src: { videoId: string } | { audio: 
   const cues = (d.segments as WhisperCue[]).filter(c => c.text && c.end > c.start);
   return { cues, language: d.language || '' };
 }
+
+/** Sends a finished recap video (by the file name the worker gave it) to Telegram, from the PC worker. */
+export async function sendVideoToTelegram(downloadUrl: string, caption: string): Promise<{ sent: boolean; tooBig?: boolean }> {
+  let filename = '';
+  try { filename = decodeURIComponent(new URL(downloadUrl).pathname.split('/').pop() || ''); } catch { /* not a URL */ }
+  if (!filename) throw new Error('No video to send');
+  let r: Response;
+  try {
+    r = await fetch(`${base()}/api/telegram/send`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ filename, caption }) });
+  } catch {
+    throw new Error(`Cannot reach the PC worker (${base()}). (PC Worker ကို မချိတ်နိုင်ပါ)`);
+  }
+  const d = await r.json().catch(() => ({} as { error?: string }));
+  if (r.status === 404 && !d.error) throw new Error('Your PC worker is too old for Telegram. Download the latest vbs-ffmpeg-worker.js (v1.14.0) and restart it. (Worker အဟောင်းဖြစ်နေသည်)');
+  if (!r.ok || !d.success) throw new Error(d.error || `Telegram failed (HTTP ${r.status})`);
+  return { sent: !!d.sent, tooBig: !!d.tooBig };
+}

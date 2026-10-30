@@ -7,7 +7,7 @@ import { GeminiTTSService, cancelGeminiRequests, type RecapPlanScene } from '../
 import { assemblyAiService } from '../services/assemblyAiService';
 import { apiChannelManager } from '../services/apiChannelManager';
 import { renderSceneRecap } from '../services/recapRenderService';
-import { isLongVideo, uploadVideoToWorker, fetchWorkerSpeech, transcribeWithWhisper } from '../services/workerSession';
+import { isLongVideo, uploadVideoToWorker, fetchWorkerSpeech, transcribeWithWhisper, sendVideoToTelegram } from '../services/workerSession';
 import { captureVideoFrames } from '../utils/videoFrames';
 import { applyLoudnessGain, audioBufferToWav, normalizeLoudness, renderProcessedAudio } from '../utils/audioUtils';
 import { generateSRT, downloadSrtFile, splitSentenceIntoCueBlocks } from '../utils/subtitleUtils';
@@ -216,6 +216,20 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
   const [result, setResult] = useState<Result | null>(null);
   const [rendering, setRendering] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [tgAuto, setTgAuto] = useState(() => { try { return localStorage.getItem('VBS_TG_AUTO') === '1'; } catch { return false; } });
+  const [tgBusy, setTgBusy] = useState(false);
+  useEffect(() => { try { localStorage.setItem('VBS_TG_AUTO', tgAuto ? '1' : '0'); } catch { /* storage unavailable */ } }, [tgAuto]);
+  const sendToTelegram = async (url: string, quiet = false) => {
+    setTgBusy(true);
+    try {
+      const r = await sendVideoToTelegram(url, `🎬 ${file?.name ? file.name.replace(/\.[^.]+$/, '') : 'Recap'} — recap ready`);
+      if (r.tooBig) showToast(isMm ? 'ဗီဒီယိုက 50MB ထက်ကြီးလို့ Telegram ကို မတင်နိုင်ပါ — အကြောင်းကြားစာပဲ ပို့ပြီးပါပြီ' : 'Video is over 50 MB, so only a note was sent to Telegram', 'error');
+      else showToast(isMm ? '📨 Telegram ကို ပို့ပြီးပါပြီ' : '📨 Sent to Telegram', 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Telegram failed', 'error');
+      if (quiet) console.warn('[Telegram]', e);
+    } finally { setTgBusy(false); }
+  };
   const draftRef = useRef<{ segments: Segment[]; hasVideoTimes: boolean; audios?: Blob[] } | null>(null);
   const [canResume, setCanResume] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -1001,6 +1015,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
       });
       setVideoUrl(r.downloadUrl);
       showToast(isMm ? 'Recap ဗီဒီယို ပြီးပါပြီ' : 'Recap video ready', 'success');
+      if (tgAuto) void sendToTelegram(r.downloadUrl, true);
     } catch (e) {
       if (rctrl.signal.aborted || (e instanceof Error && (e.message === 'Cancelled' || e.name === 'AbortError'))) showToast(isMm ? '⏹ ရပ်လိုက်ပါပြီ' : '⏹ Stopped', 'success');
       else showToast(e instanceof Error ? e.message : 'Render failed', 'error');
@@ -1899,6 +1914,10 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
                 <div className="mt-3"><FfmpegWorkerManager /></div>
               </details>
             )}
+            <label className="flex items-center gap-2.5 rounded-2xl bg-white/[0.04] border border-white/10 px-4 py-2.5 text-[12px] text-slate-200 cursor-pointer">
+              <input type="checkbox" checked={tgAuto} onChange={e => setTgAuto(e.target.checked)} className="accent-sky-400 w-4 h-4" />
+              {isMm ? '📨 ပြီးရင် Telegram ကို အလိုအလျောက် ပို့မည် (PC Worker မှာ Telegram သတ်မှတ်ထားရမယ်)' : '📨 Send to Telegram automatically when ready (set up on the PC worker)'}
+            </label>
             <button type="button" onClick={buildVideo} disabled={!!rendering || !result.hasVideoTimes} className="w-full h-12 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 text-white text-[13px] font-bold flex items-center justify-center gap-2 disabled:opacity-50 transition">
               {rendering ? <Loader2 size={16} className="animate-spin" /> : <Film size={16} />}
               {rendering || (isMm ? 'Recap ဗီဒီယို ထုတ်မည်' : 'Render recap video')}
@@ -1911,6 +1930,11 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             {videoUrl && (
               <button type="button" onClick={downloadVideo} disabled={dlBusy} className="mt-3 w-full flex items-center justify-center gap-2 h-12 rounded-2xl bg-emerald-400 text-black text-[13px] font-extrabold disabled:opacity-60">
                 {dlBusy ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}{isMm ? 'Recap ဗီဒီယို ဒေါင်းမည် (.mp4)' : 'Download recap video (.mp4)'}
+              </button>
+            )}
+            {videoUrl && (
+              <button type="button" onClick={() => void sendToTelegram(videoUrl)} disabled={tgBusy} className="mt-2 w-full flex items-center justify-center gap-2 h-11 rounded-2xl bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/40 text-sky-100 text-[13px] font-bold disabled:opacity-60">
+                {tgBusy ? <Loader2 size={16} className="animate-spin" /> : <span>📨</span>}{isMm ? 'Telegram ကို ပို့မည်' : 'Send to Telegram'}
               </button>
             )}
             {videoUrl && <RecapShare videoUrl={videoUrl} fileName={`${baseName}_recap.mp4`} defaultTitle={baseName} isMm={isMm} />}
