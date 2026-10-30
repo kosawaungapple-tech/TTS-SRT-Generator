@@ -4,6 +4,7 @@ import { AlertCircle, Wand2, Key, Settings, LogOut, ShieldCheck, CheckCircle2, C
 import { WelcomePage } from './components/WelcomePage';
 import { Header } from './components/Header';
 import { MyFontsCard } from './components/MyFontsCard';
+import { TelegramLinkCard } from './components/TelegramLinkCard';
 import { loadUserFonts } from './utils/userFonts';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { ContentInput } from './components/ContentInput';
@@ -3403,6 +3404,7 @@ export default function App() {
                   </div>
 
                   {/* My fonts (captions / titles) */}
+                  <TelegramLinkCard isMm={language === 'mm'} showToast={showToast} />
                   <MyFontsCard isMm={language === 'mm'} showToast={showToast} />
 
                   {/* Gemini API Key Section */}

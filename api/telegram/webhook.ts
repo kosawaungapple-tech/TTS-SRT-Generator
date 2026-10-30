@@ -22,7 +22,9 @@ async function activate(id: string, credits = 0): Promise<string> {
   if (!validId(id)) return '❌ Invalid user id';
   const ref = getAdmin().db.collection('user_controls').doc(id);
   if (!(await ref.get()).exists) return `❌ <code>${esc(id)}</code> not found`;
+  const before = (await ref.get()).data() as Doc | undefined;
   await ref.set({ isActive: true, status: 'active', isBlocked: false, ...stamp(), ...(credits ? { credits: FieldValue.increment(credits) } : {}) }, { merge: true });
+  if (before?.telegramChatId && !before.isActive) await send(String(before.telegramChatId), '🎉 Your account is now <b>activated</b>. You can use the app!');
   return `✅ <code>${esc(id)}</code> activated${credits ? ` (+${credits} credits)` : ''}`;
 }
 async function setFlags(id: string, patch: Doc, okText: string): Promise<string> {
@@ -96,7 +98,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (msg?.text) {
       const chat = msg.chat.id;
-      if (/^\/start/i.test(msg.text) && String(msg.from?.id) !== admin) {
+      const link = /^\/start(?:@\w+)?\s+([a-f0-9]{10})\s*$/i.exec(msg.text);
+      if (link && msg.chat.type === 'private') {
+        // A user pressed the "Connect Telegram" link from the website's Settings.
+        const { db } = getAdmin();
+        const lref = db.collection('telegram_links').doc(link[1].toLowerCase());
+        const snap = await lref.get();
+        const data = snap.exists ? (snap.data() as { vbsId?: string; expiresAt?: number }) : null;
+        if (!data?.vbsId || !data.expiresAt || data.expiresAt < Date.now()) {
+          await send(chat, '⚠️ This link has expired. Open the website → Settings → Telegram and press Connect again.');
+        } else {
+          await db.collection('user_controls').doc(data.vbsId).set({
+            telegramChatId: String(chat), telegramUsername: msg.from?.username ? `@${msg.from.username}` : String(msg.from?.first_name || ''), telegramLinkedAt: new Date(), updatedAt: new Date(),
+          }, { merge: true });
+          await lref.delete();
+          await send(chat, `✅ Connected to account <b>${esc(data.vbsId)}</b>.\nYou will get account notices here (for example when your account is activated).`);
+        }
+      } else if (/^\/start/i.test(msg.text) && String(msg.from?.id) !== admin) {
         await send(chat, `Your Telegram ID: <code>${esc(msg.from?.id)}</code>\nPut it in the website's Vercel setting <code>TELEGRAM_ADMIN_CHAT_ID</code> to make this bot yours.`);
       } else if (String(msg.from?.id) !== admin || String(chat) !== admin) {
         await send(chat, '⛔ Not authorized.');
