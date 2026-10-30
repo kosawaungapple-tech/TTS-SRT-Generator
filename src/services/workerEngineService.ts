@@ -10,6 +10,7 @@ export interface WorkerHealthInfo {
   version?: string;
   ffmpegAvailable?: boolean;
   whisperAvailable?: boolean;
+  telegramConfigured?: boolean;
   ffmpegVersion?: string;
   platform?: string;
   hostname?: string;
@@ -121,6 +122,7 @@ export class WorkerEngineService {
           version: data.version,
           ffmpegAvailable: data.ffmpegAvailable,
           whisperAvailable: data.whisperAvailable,
+          telegramConfigured: data.telegramConfigured,
           ffmpegVersion: data.ffmpegVersion,
           platform: data.platform,
           hostname: data.hostname,
@@ -149,6 +151,7 @@ export class WorkerEngineService {
             version: data.version,
             ffmpegAvailable: data.ffmpegAvailable,
             whisperAvailable: data.whisperAvailable,
+            telegramConfigured: data.telegramConfigured,
             ffmpegVersion: data.ffmpegVersion,
             platform: data.platform,
             hostname: data.hostname,

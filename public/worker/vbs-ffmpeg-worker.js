@@ -260,10 +260,11 @@ const server = http.createServer((req, res) => {
       status: 'online',
       engine: 'vbs-ffmpeg-worker',
       hosted: HOSTED,
-      version: '1.13.1',
+      version: '1.14.0',
       protected: !!WORKER_KEY,
       ffmpegAvailable: isFfmpegInstalled,
       whisperAvailable,
+      telegramConfigured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
       ffmpegVersion: ffmpegVersionStr,
       platform: os.platform(),
       hostname: os.hostname(),
@@ -682,6 +683,43 @@ const server = http.createServer((req, res) => {
     out.on('error', e => json(500, { success: false, error: 'Could not save the audio: ' + e.message }));
     req.on('aborted', () => { out.destroy(); try { fs.rmSync(raw, { force: true }); } catch {} });
     out.on('finish', () => finish(raw, raw));
+    return;
+  }
+
+  // 3d. Send a finished recap video to Telegram (the bot token / chat id are set on this PC only: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID).
+  if (req.method === 'POST' && pathname === '/api/telegram/send') {
+    const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+    if (HOSTED) { req.resume(); return json(403, { success: false, error: 'Only on your own PC worker.' }); }
+    let body = '';
+    req.on('data', c => { body += c; if (body.length > 10000) req.destroy(); });
+    req.on('end', async () => {
+      const token = process.env.TELEGRAM_BOT_TOKEN, chat = process.env.TELEGRAM_CHAT_ID;
+      if (!token || !chat) return json(400, { success: false, error: 'Telegram is not set on the PC worker. Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to worker.env.cmd and restart it. (PC Worker မှာ Telegram မသတ်မှတ်ရသေးပါ)' });
+      try {
+        const { filename, caption } = JSON.parse(body || '{}');
+        const name = path.basename(String(filename || ''));
+        const file = path.join(OUTPUT_DIR, name);
+        if (!name || !fs.existsSync(file)) return json(404, { success: false, error: 'The video is no longer on the worker.' });
+        const size = fs.statSync(file).size;
+        const cap = String(caption || '').slice(0, 900);
+        const api = m => `https://api.telegram.org/bot${token}/${m}`;
+        if (size > 49 * 1024 * 1024) {
+          const r = await fetch(api('sendMessage'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chat, text: `${cap}\n\n⚠️ Video is ${(size / 1048576).toFixed(0)} MB - over the 50 MB Telegram bot limit, so it was not uploaded.\nIt is on your PC: worker_output\\${name}` }) });
+          const d = await r.json().catch(() => ({}));
+          return json(200, { success: !!d.ok, sent: false, tooBig: true, error: d.ok ? undefined : d.description });
+        }
+        const form = new FormData();
+        form.append('chat_id', String(chat));
+        form.append('caption', cap);
+        form.append('supports_streaming', 'true');
+        form.append('video', new Blob([fs.readFileSync(file)], { type: 'video/mp4' }), name);
+        const r = await fetch(api('sendVideo'), { method: 'POST', body: form });
+        const d = await r.json().catch(() => ({}));
+        if (!d.ok) return json(502, { success: false, error: 'Telegram: ' + String(d.description || r.status).slice(0, 200) });
+        console.log(`[VBS Worker] Sent ${name} to Telegram`);
+        json(200, { success: true, sent: true });
+      } catch (e) { json(500, { success: false, error: String(e.message || e).slice(0, 300) }); }
+    });
     return;
   }
 
