@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminReady, getAdmin, OWNER_ID } from '../_lib/fb.js';
 import { hashPassword } from '../_lib/pass.js';
 import { clientIp, tooMany } from '../_lib/rate.js';
+import { notifyNewUser } from '../_lib/telegram.js';
 
 /** Self sign-up: always creates a *pending* account (the admin activates it). The browser cannot set any other field. */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -30,6 +31,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       passwordHash: hashPassword(password), password: null,
       isActive: false, status: 'pending', selfRegistered: true, createdAt: new Date(), updatedAt: new Date(),
     });
+    // Tell the admin on Telegram (never blocks or fails the sign-up).
+    await notifyNewUser(id, note, ip).catch(() => undefined);
     return res.status(200).json({ ok: true });
   } catch (e) {
     console.error('[auth/register]', e);
