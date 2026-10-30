@@ -448,6 +448,44 @@ ${text}`;
     return null;
   }
 
+  /** Thumbnail ideas for a video, written from its story/subtitles: ready-to-paste image-generator prompts plus a short title text. */
+  async generateThumbnailPrompts(
+    storyText: string,
+    titleLanguage: 'mm' | 'en' = 'mm',
+    onRetry?: (seconds: number, message: string) => void
+  ): Promise<{ concept: string; imagePrompt: string; titleText: string }[]> {
+    // Subtitle timings and numbers are noise here: keep the words only, and cap the length.
+    const clean = storyText
+      .replace(/^\d+\s*$/gm, '')
+      .replace(/^\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->.*$/gm, '')
+      .replace(/\[\d+\]\s*/g, '')
+      .replace(/\n{2,}/g, '\n')
+      .trim();
+    const sample = clean.length > 7000 ? `${clean.slice(0, 4500)}\n...\n${clean.slice(-2500)}` : clean;
+    const prompt = `You design YouTube / TikTok / Facebook thumbnails for a movie-recap channel. Read the story below and propose 4 DIFFERENT thumbnail ideas.
+For each idea give:
+- "concept": one short line (in ${titleLanguage === 'mm' ? 'Burmese' : 'English'}) saying what the thumbnail shows and why people will click.
+- "imagePrompt": a detailed ENGLISH prompt to paste into an AI image generator (Gemini / Midjourney / Flux): the main subject and their expression, action, setting, composition (rule of thirds, close-up or wide), lighting, colour palette, mood, 16:9 landscape, ultra detailed, cinematic, high contrast, and "no text, no watermark, no logo". Describe original characters by look and emotion; do not name real actors or copyrighted characters.
+- "titleText": a very short punchy headline (max 6 words) to put on the thumbnail, written in ${titleLanguage === 'mm' ? 'spoken Burmese (မြန်မာ) only' : 'English'}.
+Make the 4 ideas different (e.g. emotional close-up, mystery/suspense, big-moment action, before-vs-after).
+Return ONLY a JSON array of 4 objects with the keys concept, imagePrompt, titleText.
+
+STORY:
+${sample}`;
+    for (const model of [GEMINI_MODELS.SCRIPT, GEMINI_MODELS.REWRITE]) {
+      try {
+        const data = await this.geminiRequest(model, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.9, responseMimeType: 'application/json' }, maxRetries: 2 }, 0, onRetry);
+        const raw = (data.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || '').join('') || '').trim().replace(/^```[a-z]*\n?|```$/g, '').trim();
+        const arr = JSON.parse(raw) as { concept?: unknown; imagePrompt?: unknown; titleText?: unknown }[];
+        const out = (Array.isArray(arr) ? arr : [])
+          .map(x => ({ concept: String(x.concept ?? '').trim(), imagePrompt: String(x.imagePrompt ?? '').trim(), titleText: String(x.titleText ?? '').trim() }))
+          .filter(x => x.imagePrompt.length > 30);
+        if (out.length) return out.slice(0, 6);
+      } catch (e) { if (e instanceof Error && e.message === 'Cancelled') throw e; /* try next model */ }
+    }
+    throw new Error('Could not write the thumbnail prompts. Try again in a moment.');
+  }
+
   /** Makes a too-short recap paragraph fuller (about `targetChars`) without adding facts. */
   async expandNarration(text: string, targetChars: number, language: 'mm' | 'en' = 'mm', onRetry?: (seconds: number, message: string) => void): Promise<string | null> {
     const prompt = `Make this recap narration paragraph fuller: about ${targetChars} characters (currently ${text.length}).

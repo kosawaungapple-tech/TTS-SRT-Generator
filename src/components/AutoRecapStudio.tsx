@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Clapperboard, Upload, Download, Sparkles, Mic, FileText, Film, Loader2, CheckCircle2, ChevronDown, RefreshCw, Smartphone, Globe2, Gauge, Layers, ShieldAlert } from 'lucide-react';
 import { CopyrightModal } from './CopyrightModal';
+import { ThumbnailPromptsCard } from './ThumbnailPromptsCard';
 import { useActivity } from '../services/activity';
 import { GeminiTTSService, cancelGeminiRequests, type RecapPlanScene } from '../services/geminiService';
 import { assemblyAiService } from '../services/assemblyAiService';
@@ -1931,6 +1932,7 @@ export const AutoRecapStudio: React.FC<Props> = ({ showToast, isAdmin, isMm, onN
             <Download size={17} />
             {isMm ? 'အားလုံး တစ်ခါတည်း ဒေါင်းမည်' : 'Download all'}
           </button>
+          <ThumbnailPromptsCard getText={() => result.script} getService={gemini} isMm={isMm} titleLanguage={language} showToast={showToast} />
           <p className="mt-3 text-[11.5px] leading-relaxed text-slate-500">
             {isMm ? 'Voiceover နဲ့ SRT က အချိန်တူညီပါတယ် — CapCut Desktop/Web မှာ နှစ်ခုစလုံးကို 0:00 မှာ တင်လိုက်ရုံပါ။' : 'Voiceover and SRT share one timeline — drop both at 0:00 in CapCut Desktop / Web.'}
           </p>
