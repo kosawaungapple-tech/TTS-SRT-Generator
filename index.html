@@ -30,7 +30,8 @@
   </head>
   <body>
     <div id="root"><div style="min-height:100vh;display:grid;place-items:center;background:#000"><div style="width:34px;height:34px;border:3px solid rgba(255,255,255,.15);border-top-color:#fbbf24;border-radius:50%;animation:vbsspin .8s linear infinite"></div></div></div>
-    <style>html,body{background:#000;margin:0}@keyframes vbsspin{to{transform:rotate(360deg)}}</style>
+    <script>try{var t=localStorage.getItem('VBS_THEME')||'dark';if(t==='system')t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';var e=document.documentElement;e.classList.add(t);e.style.colorScheme=t;if(t==='light')e.style.background='#f6f7fb'}catch(x){}</script>
+    <style>html,body{background:#000;margin:0}html.light,html.light body{background:#f6f7fb}@keyframes vbsspin{to{transform:rotate(360deg)}}</style>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
