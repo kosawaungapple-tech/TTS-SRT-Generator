@@ -896,7 +896,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     try {
       const accessCode = newId.trim();
-      
+      if (vbsUsers.some(u => String(u.vbsId || '').toLowerCase() === accessCode.toLowerCase())) {
+        setToast({ message: `"${accessCode}" သုံးပြီးသားပါ (အကြီးအသေး ကွာရုံနဲ့ အတူတူပါပဲ) — တခြားနာမည် ရွေးပါ`, type: 'error', isVisible: true });
+        setIsSubmitting(false);
+        return;
+      }
+
       const newUserData = {
         vbsId: accessCode,
         dailyUsage: 0,

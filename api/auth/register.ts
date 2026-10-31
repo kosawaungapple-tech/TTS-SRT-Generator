@@ -25,6 +25,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { db } = getAdmin();
     const ref = db.collection('user_controls').doc(id);
     if ((await ref.get()).exists) return res.status(409).json({ error: 'id_taken' });
+    // Names that differ only by upper/lower case (Recapai / RecapAi) count as the same name.
+    const lower = id.toLowerCase();
+    const all = await db.collection('user_controls').select().get();
+    if (all.docs.some(d => d.id.toLowerCase() === lower)) return res.status(409).json({ error: 'id_taken' });
     await ref.set({
       vbsId: id, dailyUsage: 0, credits: 0, lastUsedDate: new Date().toDateString(), isUnlimited: false,
       membershipStatus: 'standard', isBlocked: false, expiryDate: null, role: 'user', note,
