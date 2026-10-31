@@ -173,3 +173,55 @@
   50% { background-position: 100% 50%; }
 }
 
+
+/* ======================================================================================
+   Light theme. The app is written for a dark background with Tailwind's white / black / slate
+   colours, so the light theme swaps those palette entries (white <-> ink, black <-> paper,
+   slate-100 <-> slate-900 ...). Accent colours (amber, violet, emerald ...) stay as they are.
+   ====================================================================================== */
+html.light {
+  --color-white: #0f172a;
+  --color-black: #f6f7fb;
+  /* dark surfaces become light; light surfaces (50-300) keep their own light colour. Text colours are fixed below. */
+  --color-slate-800: #e2e8f0; --color-slate-900: #f1f5f9; --color-slate-950: #ffffff;
+  --color-gray-800: #e5e7eb;  --color-gray-900: #f3f4f6;  --color-gray-950: #ffffff;
+  --color-zinc-800: #e4e4e7;  --color-zinc-900: #f4f4f5;  --color-zinc-950: #ffffff;
+  --color-neutral-800: #e5e5e5; --color-neutral-900: #f5f5f5; --color-neutral-950: #ffffff;
+}
+/* text that was light-on-dark becomes dark-on-light; text that was written as dark-on-light stays dark */
+html.light .text-slate-50, html.light .text-slate-100, html.light .text-slate-200 { color: #1e293b; }
+html.light .text-slate-300 { color: #334155; }
+html.light .text-slate-400 { color: #475569; }
+html.light [class*="text-slate-8"], html.light [class*="text-slate-9"] { color: #0f172a; }
+html.light .text-gray-100, html.light .text-gray-200 { color: #1f2937; }
+html.light .text-gray-300, html.light .text-gray-400 { color: #374151; }
+html.light .text-zinc-300, html.light .text-zinc-400 { color: #3f3f46; }
+/* white glass written for light mode */
+html.light .glass-card { background: rgba(255, 255, 255, 0.82); border-color: rgba(15, 23, 42, 0.08); }
+html.light .bg-white\/40 { background-color: rgb(255 255 255 / .4); }
+html.light .bg-white\/50 { background-color: rgb(255 255 255 / .5); }
+html.light .bg-white\/60 { background-color: rgb(255 255 255 / .6); }
+html.light .bg-white\/70 { background-color: rgb(255 255 255 / .7); }
+html.light .bg-white\/80 { background-color: rgb(255 255 255 / .8); }
+html.light .bg-white\/90 { background-color: rgb(255 255 255 / .9); }
+html.light .border-white\/40 { border-color: rgb(255 255 255 / .4); }
+html.light body { background: #f6f7fb; color: #0f172a; }
+/* things that must keep their own colour in the light theme */
+html.light .text-black { color: #111827; }
+html.light .bg-white { background-color: #ffffff; }
+html.light .bg-black\/80, html.light .bg-black\/90 { background-color: rgba(246, 247, 251, 0.9); }
+/* white text on saturated buttons / chips stays white */
+html.light :is(
+  [class*="bg-violet-5"], [class*="bg-violet-6"], [class*="bg-violet-7"], [class*="from-violet-"], [class*="from-purple-"], [class*="to-purple-"],
+  [class*="bg-purple-5"], [class*="bg-purple-6"], [class*="bg-indigo-5"], [class*="bg-indigo-6"], [class*="from-indigo-"],
+  [class*="bg-sky-5"], [class*="bg-sky-6"], [class*="bg-blue-5"], [class*="bg-blue-6"], [class*="from-blue-"], [class*="from-sky-"],
+  [class*="bg-rose-5"], [class*="bg-rose-6"], [class*="bg-red-5"], [class*="bg-red-6"], [class*="from-red-"], [class*="from-rose-"],
+  [class*="bg-emerald-5"], [class*="bg-emerald-6"], [class*="bg-green-5"], [class*="bg-green-6"], [class*="from-emerald-"], [class*="from-green-"],
+  [class*="bg-pink-5"], [class*="bg-pink-6"], [class*="bg-fuchsia-5"], [class*="bg-fuchsia-6"], [class*="from-pink-"], [class*="from-fuchsia-"],
+  [class*="bg-orange-5"], [class*="bg-orange-6"], [class*="bg-brand-"]
+):not([class*="/"]) :is(.text-white, svg) , html.light :is([class*="bg-violet-6"], [class*="bg-sky-5"], [class*="bg-rose-5"], [class*="bg-red-5"], [class*="bg-emerald-6"]):not([class*="/"]).text-white,
+html.light :is([class*="from-violet-"], [class*="from-purple-"], [class*="from-slate-6"], [class*="from-slate-7"]):is(.text-white) { color: #ffffff; }
+html.light ::selection { background: rgba(251, 191, 36, 0.35); }
+/* panels that were written with a fixed dark colour */
+html.light [class*="bg-[#0"] { background-color: #ffffff; }
+html.light [class*="via-[#0a1512]"] { --tw-gradient-via: #f0fdf4; }
